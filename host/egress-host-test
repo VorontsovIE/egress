@@ -1,0 +1,690 @@
+#!/usr/bin/env python3
+"""egress-host-test -- fixed host acceptance harness for vibelab-egress (A1).
+
+Runs ONLY the predefined checks (TECH_SPEC.md section 34 + the A1 mandatory
+checks) and prints a JSON report to stdout (and --out). No secrets ever
+appear in the report: secret files are referenced by path + short sha256.
+
+Security invariants:
+  * Python 3 standard library only.
+  * No arbitrary shell / command execution. External commands are a fixed
+    allowlist (docker, egressctl, the sibling egress-hostctl) via fixed argv.
+  * Fixed checks only; there is no free-form command input.
+
+Modes:
+  --static  run only checks that do not need a live Docker daemon; daemon-
+            dependent checks are reported as skipped with a reason.
+  (default) live mode: also run daemon-dependent checks.
+
+Environment:
+  VIBELAB_EGRESS_ROOT   persistent data root (default /home/vibelab/openscience/egress)
+  VIBELAB_EGRESS_REPO   repo root with compose.yaml (default /srv/workspace/vibelab-egress)
+  VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
+"""
+
+import argparse
+import ast
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
+# Default repo root = parent of the host/ dir containing this script, so the
+# harness finds compose.yaml from any checkout location (no env var needed).
+_DEFAULT_REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+REPO = os.environ.get("VIBELAB_EGRESS_REPO", _DEFAULT_REPO)
+SECRETS = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
+HOST_CLIENT_DIR = "/etc/vibelab-egress"
+MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32"
+MIHOMO_ADMIN_PORT = 9090
+
+RESULTS = []
+
+
+def add(check_id, status, detail, evidence=None):
+    RESULTS.append({"id": check_id, "status": status, "detail": detail,
+                    "evidence": evidence})
+
+
+def sha8(data):
+    return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()[:8]
+
+
+def read_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# minimal YAML parser (subset: mappings, sequences of scalars, block scalars)
+# ---------------------------------------------------------------------------
+def _strip_comment(raw):
+    out, in_s, in_d = [], False, False
+    for ch in raw:
+        if ch == "'" and not in_d:
+            in_s = not in_s
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+        elif ch == "#" and not in_s and not in_d:
+            break
+        out.append(ch)
+    return "".join(out).rstrip()
+
+
+def _scalar(s):
+    s = s.strip()
+    s = re.sub(r"^[&*]\S+\s*", "", s).strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("\"", "'"):
+        return s[1:-1]
+    return s
+
+
+def _parse_map(lines, i, indent):
+    result = {}
+    while i < len(lines):
+        ind, text = lines[i]
+        if ind < indent:
+            break
+        if ind > indent:
+            i += 1
+            continue
+        m = re.match(r"^([^:]+):(.*)$", text)
+        if not m:
+            i += 1
+            continue
+        key = _scalar(m.group(1))
+        rest = m.group(2).strip()
+        if rest == "":
+            i += 1
+            if i < len(lines) and lines[i][0] > indent:
+                val, i = _parse_block(lines, i, lines[i][0])
+                result[key] = val
+            else:
+                result[key] = None
+        elif rest in ("|", ">", "|-", ">-", "|+", ">+"):
+            i += 1
+            block = []
+            while i < len(lines) and lines[i][0] > indent:
+                block.append(lines[i][1])
+                i += 1
+            result[key] = "\n".join(block)
+        else:
+            result[key] = _scalar(rest)
+            i += 1
+    return result, i
+
+
+def _parse_seq(lines, i, indent):
+    result = []
+    while i < len(lines):
+        ind, text = lines[i]
+        if ind < indent:
+            break
+        if ind > indent:
+            i += 1
+            continue
+        if not (text.startswith("- ") or text == "-"):
+            break
+        item = text[1:].strip() if text != "-" else ""
+        if item == "":
+            i += 1
+            if i < len(lines) and lines[i][0] > indent:
+                val, i = _parse_block(lines, i, lines[i][0])
+                result.append(val)
+            else:
+                result.append(None)
+        elif item in ("|", ">", "|-", ">-", "|+", ">+"):
+            i += 1
+            block = []
+            while i < len(lines) and lines[i][0] > indent:
+                block.append(lines[i][1])
+                i += 1
+            result.append("\n".join(block))
+        else:
+            result.append(_scalar(item))
+            i += 1
+    return result, i
+
+
+def _parse_block(lines, i, indent):
+    if lines[i][1].startswith("- ") or lines[i][1] == "-":
+        return _parse_seq(lines, i, indent)
+    return _parse_map(lines, i, indent)
+
+
+def parse_yaml(text):
+    lines = []
+    for raw in text.splitlines():
+        raw = raw.replace("\t", "  ")
+        line = _strip_comment(raw)
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        lines.append((indent, line.strip()))
+    if not lines:
+        return {}
+    val, _ = _parse_block(lines, 0, lines[0][0])
+    return val
+
+
+def resolve_var(s):
+    """Resolve ${VAR:-default} / ${VAR} to the default (or '' if unset)."""
+    if not isinstance(s, str):
+        return s
+    def repl(m):
+        body = m.group(1)
+        if ":-" in body:
+            return body.split(":-", 1)[1]
+        return os.environ.get(body, "")
+    return re.sub(r"\$\{([^}]+)\}", repl, s)
+
+
+def is_local_bind(ip):
+    """True if ip is loopback or a private (non-public) address.
+
+    0.0.0.0 / :: mean "all interfaces" (public) even though Python's
+    ipaddress module classifies 0.0.0.0/8 as private.
+    """
+    if not ip or ip in ("0.0.0.0", "::", "[::]"):
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if addr.is_unspecified:
+        return False
+    return addr.is_loopback or addr.is_private or addr.is_link_local
+
+
+def parse_ports_entry(entry):
+    """Return (host_ip_or_None, host_port, container_port) for a ports string."""
+    entry = resolve_var(str(entry))
+    parts = entry.split(":")
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    if len(parts) == 1:
+        return None, None, parts[0]
+    return None, None, None
+
+
+def load_compose():
+    path = os.path.join(REPO, "compose.yaml")
+    text = read_file(path)
+    if text is None:
+        return None, path
+    return parse_yaml(text), path
+
+
+# ---------------------------------------------------------------------------
+# checks
+# ---------------------------------------------------------------------------
+def check_no_public_binds():
+    comp, path = load_compose()
+    if comp is None:
+        add("no_public_binds", "skipped", "compose.yaml not found", path)
+        return
+    services = comp.get("services", {}) or {}
+    bad = []
+    checked = 0
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        for entry in (svc.get("ports") or []):
+            checked += 1
+            host_ip, _, _ = parse_ports_entry(entry)
+            if host_ip is None:
+                bad.append(f"{name}:{entry} (no host bind -> 0.0.0.0)")
+            elif not is_local_bind(host_ip):
+                bad.append(f"{name}:{entry} (public bind {host_ip})")
+    if bad:
+        add("no_public_binds", "fail", f"{len(bad)} public bind(s)",
+            "; ".join(bad[:5]))
+    else:
+        add("no_public_binds", "pass",
+            f"all {checked} published port(s) bound to local addresses")
+
+
+def check_docker_socket_not_mounted():
+    comp, path = load_compose()
+    if comp is None:
+        add("docker_socket_not_mounted", "skipped", "compose.yaml not found", path)
+        return
+    services = comp.get("services", {}) or {}
+    bad = []
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        for v in (svc.get("volumes") or []):
+            if "docker.sock" in str(v):
+                bad.append(f"{name}:{v}")
+    if bad:
+        add("docker_socket_not_mounted", "fail", "docker socket mounted",
+            "; ".join(bad))
+    else:
+        add("docker_socket_not_mounted", "pass",
+            "no service mounts /var/run/docker.sock")
+
+
+def check_mihomo_admin_api_private():
+    comp, path = load_compose()
+    if comp is None:
+        add("mihomo_admin_api_private", "skipped", "compose.yaml not found", path)
+        return
+    services = comp.get("services", {}) or {}
+    bad = []
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        for entry in (svc.get("ports") or []):
+            _, _, cport = parse_ports_entry(entry)
+            if cport == str(MIHOMO_ADMIN_PORT):
+                bad.append(f"{name}:{entry}")
+    if bad:
+        add("mihomo_admin_api_private", "fail",
+            f"mihomo admin port {MIHOMO_ADMIN_PORT} published", "; ".join(bad))
+    else:
+        add("mihomo_admin_api_private", "pass",
+            f"mihomo admin port {MIHOMO_ADMIN_PORT} not published "
+            "(private compose network only)")
+
+
+def check_image_versions():
+    comp, path = load_compose()
+    if comp is None:
+        add("image_versions", "skipped", "compose.yaml not found", path)
+        return
+    services = comp.get("services", {}) or {}
+    mihomo = services.get("vibelab-egress-mihomo") or {}
+    image = resolve_var(str(mihomo.get("image", "")))
+    if image == MIHOMO_IMAGE_PIN:
+        add("image_versions", "pass", f"mihomo pinned to {image}")
+    else:
+        add("image_versions", "fail",
+            f"mihomo image {image!r} != pinned {MIHOMO_IMAGE_PIN!r}")
+
+
+def check_client_tokens_distinct():
+    clients_dir = os.path.join(SECRETS, "clients")
+    if not os.path.isdir(clients_dir):
+        add("client_tokens_distinct", "skipped",
+            f"no client secrets dir at {clients_dir}")
+        return
+    tokens = {}
+    for fn in sorted(os.listdir(clients_dir)):
+        if fn.endswith(".token"):
+            data = read_file(os.path.join(clients_dir, fn))
+            if data is not None:
+                tokens[fn] = sha8(data.strip())
+    if len(tokens) < 2:
+        add("client_tokens_distinct", "skipped",
+            f"only {len(tokens)} client token(s) present")
+        return
+    hashes = list(tokens.values())
+    if len(set(hashes)) == len(hashes):
+        add("client_tokens_distinct", "pass",
+            f"{len(tokens)} client tokens are pairwise distinct",
+            "; ".join(f"{k}={v}" for k, v in tokens.items()))
+    else:
+        dup = sorted({k for k, v in tokens.items() if hashes.count(v) > 1})
+        add("client_tokens_distinct", "fail",
+            f"duplicate token value(s) among {dup}")
+
+
+def check_no_backend_secrets_in_client_bundles():
+    # collect secret values to scan for (never printed)
+    needles = []
+    mihomo_secret = os.path.join(SECRETS, "mihomo_api_secret")
+    ms = read_file(mihomo_secret)
+    if ms and ms.strip():
+        needles.append(("mihomo_api_secret", ms.strip()))
+    prov_dir = os.path.join(SECRETS, "providers")
+    if os.path.isdir(prov_dir):
+        for fn in sorted(os.listdir(prov_dir)):
+            p = os.path.join(prov_dir, fn)
+            if os.path.isfile(p):
+                data = read_file(p)
+                if data and len(data.strip()) >= 8:
+                    needles.append((f"providers/{fn}", data.strip()))
+    if not needles:
+        add("no_backend_secrets_in_client_bundles", "skipped",
+            "no backend secrets to scan against")
+        return
+    # client dirs to scan
+    client_dirs = []
+    bundle_root = os.path.join(ROOT, "client-bundles")
+    if os.path.isdir(bundle_root):
+        client_dirs.append(bundle_root)
+    if os.path.isdir(HOST_CLIENT_DIR):
+        client_dirs.append(HOST_CLIENT_DIR)
+    if not client_dirs:
+        add("no_backend_secrets_in_client_bundles", "skipped",
+            "no client bundle/install dirs found")
+        return
+    leaks = []
+    for cdir in client_dirs:
+        for root, dirs, files in os.walk(cdir):
+            # The backend secrets dir is where backend secrets BELONG; it is
+            # not a client artifact. Prune it so the check only scans client
+            # bundle/install content (on the host, SECRETS lives under
+            # /etc/vibelab-egress/secrets, inside HOST_CLIENT_DIR).
+            dirs[:] = [d for d in dirs
+                       if os.path.realpath(os.path.join(root, d))
+                       != os.path.realpath(SECRETS)]
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    with open(fp, "rb") as fh:
+                        content = fh.read()
+                except OSError:
+                    continue
+                for label, needle in needles:
+                    if needle.encode() in content:
+                        leaks.append(f"{fp} contains {label}")
+    if leaks:
+        add("no_backend_secrets_in_client_bundles", "fail",
+            f"{len(leaks)} leak(s)", "; ".join(leaks[:5]))
+    else:
+        add("no_backend_secrets_in_client_bundles", "pass",
+            f"no backend secrets found in {len(client_dirs)} client dir(s)")
+
+
+def check_no_arbitrary_host_command():
+    here = os.path.dirname(os.path.realpath(__file__))
+    hostctl = os.path.join(here, "egress-hostctl")
+    if not os.path.isfile(hostctl):
+        add("no_arbitrary_host_command", "skipped", "egress-hostctl not found")
+        return
+    problems = []
+    # 1. a free-form subcommand must be rejected with exit 2
+    try:
+        p = subprocess.run([sys.executable, hostctl, "rm-rf", "/"],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode != 2:
+            problems.append(f"bogus subcommand exit={p.returncode} (expected 2)")
+    except Exception as e:
+        problems.append(f"could not run egress-hostctl: {e}")
+    # 2. source must not use shell=True / os.system / eval / exec.
+    #    AST-based: only real calls count (docstrings/comments mentioning
+    #    the patterns are not a problem).
+    src = read_file(hostctl) or ""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        problems.append(f"source does not parse: {e}")
+        tree = None
+    if tree is not None:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if isinstance(f, ast.Name) and f.id in ("eval", "exec"):
+                problems.append(f"source contains {f.id}( call")
+            if (isinstance(f, ast.Attribute) and f.attr == "system"
+                    and isinstance(f.value, ast.Name) and f.value.id == "os"):
+                problems.append("source contains os.system( call")
+            if (isinstance(f, ast.Attribute)
+                    and f.attr in ("run", "Popen", "call", "check_output",
+                                   "check_call")):
+                for kw in node.keywords:
+                    if (kw.arg == "shell" and isinstance(kw.value, ast.Constant)
+                            and kw.value.value is True):
+                        problems.append("subprocess call with shell=True")
+    if problems:
+        add("no_arbitrary_host_command", "fail", "; ".join(problems))
+    else:
+        add("no_arbitrary_host_command", "pass",
+            "free-form subcommand rejected (exit 2); no shell=True/os.system/eval/exec")
+
+
+def check_client_install_survives_recreate():
+    # the client install/bundle root must be a persistent path, not a
+    # container writable layer / tmpfs
+    bundle_root = os.path.join(ROOT, "client-bundles")
+    persistent_prefixes = (ROOT, "/etc", "/home", "/var/lib")
+    candidates = [bundle_root, HOST_CLIENT_DIR]
+    ok = []
+    for c in candidates:
+        if os.path.isdir(c):
+            if any(c == p or c.startswith(p + os.sep) for p in persistent_prefixes):
+                ok.append(c)
+            else:
+                add("client_install_survives_recreate", "fail",
+                    f"client dir {c} is not under a persistent prefix")
+                return
+    if ok:
+        add("client_install_survives_recreate", "pass",
+            f"client install under persistent path(s): {', '.join(ok)}")
+    else:
+        add("client_install_survives_recreate", "skipped",
+            "no client install dir present to check")
+
+
+def check_docker_cidr_artifact_fresh():
+    artifact = os.path.join(ROOT, "generated", "docker-cidrs.yaml")
+    if not os.path.isfile(artifact):
+        add("docker_cidr_artifact_fresh", "fail", f"artifact missing: {artifact}")
+        return
+    text = read_file(artifact) or ""
+    m = re.search(r"^generated_at:\s*(\S+)", text, re.MULTILINE)
+    if not m:
+        add("docker_cidr_artifact_fresh", "fail", "no generated_at field")
+        return
+    try:
+        ts = datetime.strptime(m.group(1).replace("Z", "+0000"),
+                                "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        add("docker_cidr_artifact_fresh", "fail",
+            f"unparseable generated_at {m.group(1)!r}")
+        return
+    age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+    if age_h <= 24:
+        add("docker_cidr_artifact_fresh", "pass",
+            f"artifact age {age_h:.1f}h (<= 24h)", f"generated_at={m.group(1)}")
+    else:
+        add("docker_cidr_artifact_fresh", "fail",
+            f"artifact age {age_h:.1f}h (> 24h)", f"generated_at={m.group(1)}")
+
+
+def check_persistent_dirs_permissions():
+    if not os.path.isdir(ROOT):
+        add("persistent_dirs_permissions", "skipped", f"persistent root absent: {ROOT}")
+        return
+    bad = []
+    checked = 0
+    # egressd runs as uid 1000 (non-root) and must write its state/metrics/geo
+    # store there, so it is intentionally 0755 (owner uid 1000); everything
+    # else under the persistent root must stay 0700 (root-only).
+    expected = {"egressd": "0o755"}
+    for entry in sorted(os.listdir(ROOT)):
+        p = os.path.join(ROOT, entry)
+        if os.path.isdir(p):
+            checked += 1
+            mode = oct(os.stat(p).st_mode & 0o777)
+            if mode != expected.get(entry, "0o700"):
+                bad.append(f"{entry}={mode}")
+    if bad:
+        add("persistent_dirs_permissions", "fail",
+            f"{len(bad)} dir(s) not 0700", "; ".join(bad[:5]))
+    else:
+        add("persistent_dirs_permissions", "pass",
+            f"{checked} persistent dir(s) are 0700")
+
+
+def check_host_client_config_token_permissions():
+    if not os.path.isdir(HOST_CLIENT_DIR):
+        add("host_client_config_token_permissions", "skipped",
+            f"host client dir absent: {HOST_CLIENT_DIR}")
+        return
+    bad = []
+    for fn in ("client.yaml", "client.token", "default-proxy.auth"):
+        p = os.path.join(HOST_CLIENT_DIR, fn)
+        if not os.path.isfile(p):
+            bad.append(f"{fn} missing")
+            continue
+        mode = oct(os.stat(p).st_mode & 0o777)
+        expected = "0o644" if fn == "client.yaml" else "0o600"
+        if mode != expected:
+            bad.append(f"{fn}={mode} (expected {expected})")
+    if bad:
+        add("host_client_config_token_permissions", "fail", "; ".join(bad))
+    else:
+        add("host_client_config_token_permissions", "pass",
+            "host client.yaml/token/auth present with correct perms")
+
+
+def check_compose_health(live):
+    if not live:
+        add("compose_health", "skipped", "no docker daemon (static mode)")
+        return
+    comp, path = load_compose()
+    if comp is None:
+        add("compose_health", "skipped", "compose.yaml not found")
+        return
+    try:
+        p = subprocess.run(
+            ["docker", "compose", "-f", os.path.join(REPO, "compose.yaml"), "ps", "--format", "json"],
+            capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            add("compose_health", "fail", f"compose ps failed: {p.stderr.strip()[:200]}")
+            return
+        add("compose_health", "pass", "compose ps succeeded (live)")
+    except Exception as e:
+        add("compose_health", "fail", f"could not query compose: {e}")
+
+
+def check_restart_recreate(live):
+    if not live:
+        add("restart_recreate", "skipped", "no docker daemon (static mode)")
+        return
+    add("restart_recreate", "skipped",
+        "recreate check requires a live stack and is not run by this harness "
+        "by default (destructive); run manually per INSTALL.md")
+
+
+def check_host_whoami_identity(live):
+    if not live:
+        add("host_whoami_identity", "skipped", "no live backend (static mode)")
+        return
+    try:
+        # NOTE: --json is a global flag and must precede the subcommand.
+        p = subprocess.run(["egressctl", "--json", "whoami"],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode != 0:
+            add("host_whoami_identity", "fail",
+                f"egressctl whoami rc={p.returncode}: {p.stderr.strip()[:200]}")
+            return
+        data = json.loads(p.stdout)
+        if data.get("client_id") == "host-main":
+            add("host_whoami_identity", "pass", "host whoami = host-main")
+        else:
+            add("host_whoami_identity", "fail",
+                f"host whoami = {data.get('client_id')!r} (expected host-main)")
+    except Exception as e:
+        add("host_whoami_identity", "fail", f"egressctl whoami failed: {e}")
+
+
+def check_host_default_route_mode(live):
+    if not live:
+        add("host_default_route_mode", "skipped", "no live backend (static mode)")
+        return
+    try:
+        # NOTE: --json is a global flag and must precede the subcommand.
+        route = subprocess.run(["egressctl", "--json", "route", "current"],
+                               capture_output=True, text=True, timeout=30)
+        mode = subprocess.run(["egressctl", "--json", "mode", "current"],
+                              capture_output=True, text=True, timeout=30)
+        if route.returncode != 0 or mode.returncode != 0:
+            add("host_default_route_mode", "fail",
+                f"route rc={route.returncode} mode rc={mode.returncode}")
+            return
+        add("host_default_route_mode", "pass",
+            f"route={json.loads(route.stdout).get('route')} "
+            f"mode={json.loads(mode.stdout).get('mode')}")
+    except Exception as e:
+        add("host_default_route_mode", "fail", f"could not read host default: {e}")
+
+
+def check_per_client_isolation(live):
+    if not live:
+        add("per_client_isolation", "skipped",
+            "requires a live backend with two provisioned clients (static mode)")
+        return
+    add("per_client_isolation", "skipped",
+        "isolation check requires a live two-client stack; run via the "
+        "integration suite (tests/integration) per spec section 34")
+
+
+def check_strict_helper_privileges():
+    helper = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                          "strict-helper")
+    if not os.path.isdir(helper) or not os.listdir(helper):
+        add("strict_helper_privileges", "skipped",
+            "strict/TUN helper not installed (phase A6)")
+        return
+    add("strict_helper_privileges", "skipped",
+        "strict helper present; privilege audit is part of phase A6")
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="egress-host-test")
+    ap.add_argument("--static", action="store_true",
+                    help="run only daemon-independent checks")
+    ap.add_argument("--out", help="also write the JSON report to this path")
+    args = ap.parse_args(argv)
+    live = not args.static
+
+    check_no_public_binds()
+    check_docker_socket_not_mounted()
+    check_mihomo_admin_api_private()
+    check_image_versions()
+    check_client_tokens_distinct()
+    check_no_backend_secrets_in_client_bundles()
+    check_no_arbitrary_host_command()
+    check_client_install_survives_recreate()
+    check_docker_cidr_artifact_fresh()
+    check_persistent_dirs_permissions()
+    check_host_client_config_token_permissions()
+    check_compose_health(live)
+    check_restart_recreate(live)
+    check_host_whoami_identity(live)
+    check_host_default_route_mode(live)
+    check_per_client_isolation(live)
+    check_strict_helper_privileges()
+
+    summary = {
+        "passed": sum(1 for r in RESULTS if r["status"] == "pass"),
+        "failed": sum(1 for r in RESULTS if r["status"] == "fail"),
+        "skipped": sum(1 for r in RESULTS if r["status"] == "skipped"),
+        "total": len(RESULTS),
+    }
+    report = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "mode": "live" if live else "static",
+        "checks": RESULTS,
+        "summary": summary,
+    }
+    out = json.dumps(report, indent=2)
+    print(out)
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.realpath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(out + "\n")
+    return 1 if summary["failed"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

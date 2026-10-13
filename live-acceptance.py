@@ -1,0 +1,1380 @@
+#!/usr/bin/env python3
+"""live-acceptance.py -- host-side live acceptance harness for vibelab-egress.
+
+Runs the acceptance checks that REQUIRE host access (TECH_SPEC.md section 50
+"Phase 2 TUN" plus the host-only live items of section 49 "v1 proxy mode") and
+writes ALL results to a SINGLE JSON file (default: host_acceptance_report.json).
+
+Send that one file back for re-verification. The companion
+scripts/verify-live-report.py re-derives every pass/fail/skip from the raw
+evidence in the file, so the report is self-contained and tamper-evident.
+
+Security invariants (mirrors egress-host-test):
+  * Python 3 standard library only.
+  * No arbitrary shell / free-form command input. Every external command is a
+    fixed argv built from a fixed allowlist (egressctl, egress-run, docker,
+    ip, ss, python3, egress-host-test).
+  * No secrets ever appear in the report: token values, default-proxy
+    credentials, mihomo secret and provider subscription values are read from
+    the known secret locations and redacted out of every captured output.
+    The redaction count is recorded in the report.
+
+Run on the host (see host/LIVE_ACCEPTANCE.md for the exact commands):
+
+    python3 host/live-acceptance.py --out host_acceptance_report.json
+
+Options:
+    --out PATH            write the single JSON report here (default
+                          host_acceptance_report.json)
+    --config PATH         host client config (default /etc/vibelab-egress/client.yaml)
+    --osconfig PATH       OpenScience client config (default
+                          $VIBELAB_EGRESS_OS_CONFIG or
+                          /home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml)
+    --tun-helper-sock P   TUN helper UNIX socket (default
+                          $VIBELAB_EGRESS_TUN_HELPER_SOCKET or
+                          /run/vibelab-egress/tun-helper.sock)
+    --litellm-url URL     LiteLLM endpoint to probe (default
+                          $VIBELAB_EGRESS_LITELLM_URL or http://127.0.0.1:4000/health)
+    --os-container NAME   OpenScience container name (default
+                          $VIBELAB_EGRESS_OS_CONTAINER or openscience)
+    --no-recreate         skip the destructive OpenScience recreate check
+    --no-tun              skip the TUN (section 50) checks
+    --check ID[,ID...]    run only the named check(s)
+    --timeout N           per-command timeout seconds (default 90)
+
+Exit code: 0 if no check FAILED, 1 if at least one check FAILED. Skips are not
+failures (a check that cannot run in the given environment is reported as
+"skip" with a reason, never silently dropped).
+"""
+
+import argparse
+import concurrent.futures
+import copy
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime, timezone
+
+# ---------------------------------------------------------------------------
+# fixed configuration
+# ---------------------------------------------------------------------------
+DEFAULT_CONFIG = "/etc/vibelab-egress/client.yaml"
+DEFAULT_OS_CONFIG = "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml"
+DEFAULT_TUN_SOCK = "/run/vibelab-egress/tun-helper.sock"
+DEFAULT_LITELLM = "http://127.0.0.1:4000/health"
+DEFAULT_OS_CONTAINER = "openscience"
+SECRETS_DIR = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
+ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
+REPO = os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress")
+HOST_TEST = os.path.join(REPO, "host", "egress-host-test")
+PROBE_DOMAIN = "cloudflare.com"
+IP_SERVICES = ("https://api.ipify.org", "https://ifconfig.co/ip")
+EGRESS_PORTS = (1080, 1081, 9091)
+MIHOMO_ADMIN_PORT = 9090
+MAX_OUT = 8000
+
+RESULTS = []
+CTX = {}
+
+
+# ---------------------------------------------------------------------------
+# secret redaction
+# ---------------------------------------------------------------------------
+def _collect_secret_values():
+    """Gather secret VALUES (never printed) to redact from captured output."""
+    vals = []
+
+    def add(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                v = f.read().strip()
+            if v:
+                vals.append(v)
+        except OSError:
+            pass
+
+    for p in (
+        os.path.join("/etc/vibelab-egress", "client.token"),
+        os.path.join("/etc/vibelab-egress", "default-proxy.auth"),
+    ):
+        add(p)
+    # client config token/auth file paths (host + openscience)
+    for cfg_path in (CTX.get("config"), CTX.get("osconfig")):
+        if cfg_path:
+            for key in ("api_token_file", "default_proxy_auth_file"):
+                v = _flat_yaml_get(cfg_path, key)
+                if v:
+                    add(v)
+    # backend secrets dir (mihomo secret + provider subscriptions)
+    if os.path.isdir(SECRETS_DIR):
+        for root_, _, files in os.walk(SECRETS_DIR):
+            for fn in files:
+                add(os.path.join(root_, fn))
+    # environment-provided secrets
+    for env in ("VIBELAB_EGRESS_OS_TOKEN", "VIBELAB_EGRESS_OS_AUTH"):
+        v = os.environ.get(env, "").strip()
+        if v:
+            vals.append(v)
+    # de-dup, keep only values long enough to redact safely
+    seen = set()
+    out = []
+    for v in vals:
+        v = v.strip()
+        if len(v) >= 8 and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def read_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _flat_yaml_get(path, key):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line.startswith(key + ":"):
+                    return line.partition(":")[2].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def make_redactor():
+    secrets = _collect_secret_values()
+    count = {"n": 0}
+
+    def redact(text):
+        if not isinstance(text, str) or not text:
+            return text
+        for s in secrets:
+            if s in text:
+                count["n"] += text.count(s)
+                text = text.replace(s, "[REDACTED]")
+        return text
+
+    return redact, count
+
+
+# ---------------------------------------------------------------------------
+# small helpers
+# ---------------------------------------------------------------------------
+def is_public_ip(ip):
+    if not ip:
+        return False
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (a.is_private or a.is_loopback or a.is_link_local or a.is_unspecified)
+
+
+def is_local_bind(ip):
+    if not ip or ip in ("0.0.0.0", "::", "[::]"):
+        return False
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if a.is_unspecified:
+        return False
+    return a.is_loopback or a.is_private or a.is_link_local
+
+
+def http_get(url, timeout=10):
+    req = urllib.request.Request(url, headers={"User-Agent": "vibelab-egress-acceptance"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, r.read().decode("utf-8", "replace")
+
+
+def host_public_ip(timeout=8):
+    for url in IP_SERVICES:
+        try:
+            _, body = http_get(url, timeout)
+            ip = body.strip()
+            if ipaddress.ip_address(ip):
+                return ip
+        except Exception:
+            continue
+    return None
+
+
+def _run(cmd, timeout, redact, env=None, cwd=None):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           env=env, cwd=cwd)
+        return {
+            "rc": p.returncode,
+            "stdout": redact(p.stdout)[:MAX_OUT],
+            "stderr": redact(p.stderr)[:MAX_OUT],
+        }
+    except subprocess.TimeoutExpired:
+        return {"rc": None, "stdout": "", "stderr": f"timeout after {timeout}s",
+                "timed_out": True}
+    except FileNotFoundError:
+        return {"rc": None, "stdout": "", "stderr": f"command not found: {cmd[0]}"}
+    except Exception as e:  # noqa: BLE001
+        return {"rc": None, "stdout": "", "stderr": redact(str(e))}
+
+
+def _json(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def canon_hash(checks):
+    """Canonical hash over each check's {id, spec, command, evidence}.
+
+    The verifier recomputes this to detect post-hoc edits to the evidence or
+    command of any check. (status/detail are intentionally excluded: the
+    verifier re-derives status from evidence, so it must not be hash-locked.)
+    """
+    parts = []
+    for c in checks:
+        parts.append(json.dumps(
+            {"id": c.get("id"), "spec": c.get("spec"),
+             "command": c.get("command"), "evidence": c.get("evidence")},
+            sort_keys=True, separators=(",", ":")))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def add_result(cid, spec, status, command, evidence, detail):
+    RESULTS.append({
+        "id": cid,
+        "spec": spec,
+        "status": status,
+        "command": command,
+        "detail": detail,
+        "evidence": evidence,
+    })
+
+
+def skip(cid, spec, command, reason, extra=None):
+    ev = {"reason": reason}
+    if extra:
+        ev.update(extra)
+    add_result(cid, spec, "skip", command, ev, reason)
+
+
+def run_check(cid, spec, command, fn):
+    """Run a check function; it returns (status, evidence, detail)."""
+    try:
+        status, evidence, detail = fn()
+    except Exception as e:  # noqa: BLE001
+        status, evidence, detail = "fail", {"exception": str(e)}, f"check raised: {e}"
+    evidence = evidence or {}
+    if status == "skip" and not evidence.get("reason"):
+        evidence = dict(evidence)
+        evidence["reason"] = detail
+    add_result(cid, spec, status, command, evidence, detail)
+
+
+def _which(name):
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        p = os.path.join(d, name)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def _client_cmd(base, module, config, args):
+    """Prefer the installed release binary (spec 49.7); fall back to python -m."""
+    binpath = _which(base)
+    if binpath:
+        return [binpath, "--config", config, "--json"] + args if base == "egressctl" \
+            else [binpath, "--config", config] + args
+    mod = "vibelab_egress_client." + module
+    return [sys.executable, "-m", mod, "--config", config, "--json"] + args \
+        if module == "egressctl" else [sys.executable, "-m", mod, "--config", config] + args
+
+
+def egressctl(args, config, timeout, redact):
+    return _run(_client_cmd("egressctl", "egressctl", config, args), timeout, redact)
+
+
+def egress_run(args, config, timeout, redact, env=None):
+    return _run(_client_cmd("egress-run", "egress_run", config, args),
+                timeout, redact, env=env)
+
+
+def os_exec(args, timeout, redact):
+    """Run a command INSIDE the OpenScience/gVisor container (spec 49: the
+    OpenScience client lives in the container; its token paths /run/secrets/*
+    and its gVisor environment only exist there)."""
+    return _run(["docker", "exec", CTX["os_container"]] + args, timeout, redact)
+
+
+def _client_version(host):
+    """Return the installed client package __version__ (spec 49.7).
+
+    Resolves the install libdir from the egressctl wrapper (which bakes it in),
+    then reads __init__.py. ``host`` is False to read inside the container.
+    """
+    redact, timeout = CTX["redact"], CTX["timeout"]
+    wrapper = "/usr/local/bin/egressctl"
+    if host:
+        if not os.path.isfile(wrapper):
+            return None
+        with open(wrapper, "r", encoding="utf-8") as f:
+            txt = f.read()
+        m = re.search(r"sys\.path\.insert\(0,\s*'([^']+)'", txt)
+        if not m:
+            return None
+        init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
+        data = read_file(init)
+    else:
+        r = os_exec(["cat", wrapper], timeout, redact)
+        if r["rc"] != 0:
+            return None
+        m = re.search(r"sys\.path\.insert\(0,\s*'([^']+)'", r["stdout"])
+        if not m:
+            return None
+        init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
+        r = os_exec(["cat", init], timeout, redact)
+        data = r["stdout"] if r["rc"] == 0 else None
+    if not data:
+        return None
+    m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', data)
+    return m.group(1) if m else None
+
+
+def select_proxy_route(routes):
+    """Pick a healthy non-direct proxy route (prefer one with a country)."""
+    non_direct = [r for r in routes
+                  if isinstance(r, dict) and r.get("id") and r.get("id") != "direct"]
+    if not non_direct:
+        return None
+    healthy = [r for r in non_direct if r.get("healthy") is True]
+    pool = healthy or non_direct
+    with_country = [r for r in pool if r.get("country")]
+    return (with_country or pool)[0]
+
+
+# ---------------------------------------------------------------------------
+# preflight
+# ---------------------------------------------------------------------------
+def check_preflight():
+    def fn():
+        redact = CTX["redact"]
+        timeout = CTX["timeout"]
+        cfg = CTX["config"]
+        env = {
+            "hostname": socket.gethostname(),
+            "kernel": os.uname().release,
+            "user": os.environ.get("USER", ""),
+            "uid": os.getuid(),
+            "gid": os.getgid(),
+            "python": sys.version.split()[0],
+            "tun_helper_socket": CTX["tun_sock"],
+            "tun_helper_socket_exists": os.path.exists(CTX["tun_sock"]),
+            "docker": None,
+            "egressctl": None,
+        }
+        env["docker"] = _run(["docker", "version", "--format", "{{.Server.Version}}"],
+                             15, redact)
+        env["egressctl"] = egressctl(["status"], cfg, timeout, redact)
+        ok_docker = env["docker"]["rc"] == 0
+        ok_ctl = env["egressctl"]["rc"] == 0
+        env["host_public_ip"] = host_public_ip()
+        # route catalog
+        rl = egressctl(["list"], cfg, timeout, redact)
+        data = _json(rl["stdout"]) or {}
+        routes = data.get("routes", data if isinstance(data, list) else [])
+        if not isinstance(routes, list):
+            routes = []
+        env["routes"] = [{k: r.get(k) for k in
+                          ("id", "provider", "country", "healthy", "protocol")}
+                         for r in routes if isinstance(r, dict)]
+        CTX["routes"] = env["routes"]
+        CTX["backend_ok"] = ok_docker and ok_ctl
+        CTX["client_ok"] = ok_ctl
+        CTX["client_bin"] = _which("egressctl")
+        ev = env
+        if not ok_docker or not ok_ctl:
+            # diagnose the specific gap so the report is actionable
+            if not ok_ctl:
+                err = (env["egressctl"]["stderr"] or env["egressctl"]["stdout"]
+                       )[:200]
+                if "ModuleNotFoundError" in err or "No module named" in err:
+                    why = ("egressctl not installed on the host (python -m "
+                           "fallback failed); run scripts/install-client.sh "
+                           f"--target host first. detail: {err}")
+                else:
+                    why = (f"egressctl status failed (rc={env['egressctl']['rc']}); "
+                           f"is the backend up? detail: {err}")
+            else:
+                why = (f"docker not reachable (rc={env['docker']['rc']}); "
+                       "is the egress stack up?")
+            return ("skip", ev, f"preflight: docker_ok={ok_docker} "
+                                f"egressctl_ok={ok_ctl}; {why}")
+        if not env["routes"]:
+            return ("fail", ev, "egressctl list returned no routes")
+        return ("pass", ev, f"host ready; {len(env['routes'])} routes; "
+                            f"host_public_ip={env['host_public_ip']}")
+    run_check("preflight", "env", "preflight", fn)
+
+
+# ---------------------------------------------------------------------------
+# section 50 -- Phase 2 TUN
+# ---------------------------------------------------------------------------
+def _tun_ready():
+    if not os.path.exists(CTX["tun_sock"]):
+        return False, f"tun helper socket not present: {CTX['tun_sock']}"
+    return True, ""
+
+
+def check_tun_tcp():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        route = select_proxy_route(CTX["routes"])
+        if not route:
+            return ("skip", {"reason": "no non-direct proxy route available"},
+                    "no proxy route")
+        rid = route["id"]
+        r = egress_run(["--mode", "tun", rid, "--",
+                        "python3", "-c",
+                        "import urllib.request;print(urllib.request.urlopen("
+                        "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                       cfg, timeout, redact)
+        ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
+        ev = {"route": rid, "expected_country": route.get("country"),
+              "exit": r["rc"], "exit_ip": ip,
+              "stdout": r["stdout"], "stderr": r["stderr"]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"tun tcp exit={r['rc']}")
+        if not is_public_ip(ip):
+            return ("fail", ev, f"exit_ip {ip!r} is not a public IP")
+        if route.get("country") and ip:
+            try:
+                _, body = http_get(f"https://ipinfo.io/{ip}/json", 10)
+                cc = (_json(body) or {}).get("country", "")
+                ev["exit_country"] = cc
+                if cc and route["country"] and cc.upper() != route["country"].upper():
+                    return ("fail", ev,
+                            f"exit country {cc} != expected {route['country']}")
+            except Exception:
+                pass
+        return ("pass", ev, f"tun tcp via {rid} -> {ip}")
+    run_check("tun_tcp_client", "spec50.1",
+              "egress-run --mode tun ROUTE -- <proxy-unaware tcp client>", fn)
+
+
+def check_tun_local_workload():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
+        rid = route["id"]
+        r = egress_run(["--mode", "tun", rid, "--",
+                        "sh", "-c", "id -u; id -g; hostname; echo VIBE=$VIBE_EGRESS_MARK"],
+                       cfg, timeout, redact)
+        lines = [l for l in r["stdout"].splitlines() if l.strip()]
+        ev = {"route": rid, "exit": r["rc"], "lines": lines,
+              "stdout": r["stdout"], "stderr": r["stderr"],
+              "expected_uid": os.getuid(), "expected_gid": os.getgid(),
+              "expected_hostname": socket.gethostname()}
+        if r["rc"] != 0 or len(lines) < 4:
+            return ("fail", ev, f"tun workload exit={r['rc']} lines={len(lines)}")
+        ev["uid"], ev["gid"], ev["hostname"] = lines[0], lines[1], lines[2]
+        if lines[0].strip() != str(os.getuid()) or lines[1].strip() != str(os.getgid()):
+            return ("fail", ev, "workload did not run as caller UID/GID")
+        if lines[2].strip() != socket.gethostname():
+            return ("fail", ev, "workload hostname != host hostname")
+        return ("pass", ev, f"tun workload ran as caller {lines[0]}:{lines[1]} on host")
+    run_check("tun_local_workload", "spec50.2",
+              "egress-run --mode tun ROUTE -- id/hostname (caller UID/GID, host fs)", fn)
+
+
+def check_tun_udp():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        route = select_proxy_route(CTX["routes"])
+        if not route:
+            return ("skip", {"reason": "no non-direct proxy route"}, "no proxy route")
+        rid = route["id"]
+        r = egress_run(["--mode", "tun", rid, "--",
+                        "python3", "-c",
+                        "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);"
+                        "s.settimeout(15);s.sendto(b'\\x0',('1.1.1.1',53));"
+                        "d,_=s.recvfrom(512);print(d[:16].hex())"],
+                       cfg, timeout, redact)
+        ev = {"route": rid, "exit": r["rc"], "udp_reply_hex": r["stdout"].strip(),
+              "stdout": r["stdout"], "stderr": r["stderr"]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"tun udp exit={r['rc']}")
+        if not r["stdout"].strip():
+            return ("fail", ev, "no UDP reply")
+        return ("pass", ev, f"tun udp/QUIC path via {rid} returned a reply")
+    run_check("tun_udp_quic", "spec50.3",
+              "egress-run --mode tun ROUTE -- <udp client>", fn)
+
+
+def check_tun_concurrent():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        proxies = [r for r in CTX["routes"]
+                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+        proxies = (proxies[:2] if len(proxies) >= 2 else proxies)
+        jobs = [{"route": p["id"], "expected_country": p.get("country")} for p in proxies]
+        jobs.append({"route": "direct", "expected_country": None})
+        host_ip = host_public_ip()
+
+        def run_job(j):
+            r = egress_run(["--mode", "tun", j["route"], "--",
+                            "python3", "-c",
+                            "import urllib.request;print(urllib.request.urlopen("
+                            "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                           cfg, timeout, redact)
+            ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
+            return {"route": j["route"], "exit": r["rc"], "exit_ip": ip,
+                    "expected_country": j["expected_country"],
+                    "stderr": r["stderr"][:400]}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+            results = list(ex.map(run_job, jobs))
+        ev = {"host_public_ip": host_ip, "jobs": results}
+        bad = [j for j in results if j["exit"] != 0 or not is_public_ip(j["exit_ip"])]
+        direct = [j for j in results if j["route"] == "direct"]
+        if direct and host_ip and direct[0]["exit_ip"] != host_ip:
+            bad.append(direct[0])
+        if bad:
+            return ("fail", ev, f"{len(bad)} concurrent tun job(s) failed")
+        return ("pass", ev, f"{len(results)} concurrent tun jobs ok (incl. direct)")
+    run_check("tun_concurrent", "spec50.4",
+              "3+ concurrent egress-run --mode tun (different routes + direct)", fn)
+
+
+def check_tun_direct_isolated():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        host_ip = host_public_ip()
+        r = egress_run(["--mode", "tun", "direct", "--",
+                        "python3", "-c",
+                        "import urllib.request;print(urllib.request.urlopen("
+                        "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                       cfg, timeout, redact)
+        ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
+        tun_dev = _run(["ip", "-o", "link", "show"], 15, redact)
+        has_tun = "tun" in tun_dev["stdout"]
+        ev = {"exit": r["rc"], "exit_ip": ip, "host_public_ip": host_ip,
+              "tun_device_present": has_tun, "stdout": r["stdout"], "stderr": r["stderr"]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"direct+tun exit={r['rc']}")
+        if host_ip and ip != host_ip:
+            return ("fail", ev, f"direct+tun exit {ip} != host ip {host_ip}")
+        if has_tun:
+            return ("fail", ev, "a TUN device is present for a direct run")
+        return ("pass", ev, f"direct+tun isolated -> {ip}, no tun device")
+    run_check("tun_direct_isolated", "spec50.5",
+              "egress-run --mode tun direct -- ... (isolated direct, no tun device)", fn)
+
+
+def check_tun_no_root():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        r = egress_run(["--mode", "tun", "direct", "--", "id"], cfg, timeout, redact)
+        lines = [l for l in r["stdout"].splitlines() if l.strip()]
+        uid = gid = None
+        if lines:
+            m_uid = re.search(r"uid=(\d+)", lines[0])
+            m_gid = re.search(r"gid=(\d+)", lines[0])
+            uid = m_uid.group(1) if m_uid else None
+            gid = m_gid.group(1) if m_gid else None
+        cap = _run(["docker", "inspect", "--format",
+                    "{{.HostConfig.CapAdd}}|{{.HostConfig.Privileged}}",
+                    "vibelab-egress-tun-helper"], 15, redact)
+        capadd, priv = (cap["stdout"].strip().split("|") + ["", ""])[:2]
+        ev = {"exit": r["rc"], "uid": uid, "gid": gid, "stdout": r["stdout"],
+              "expected_uid": str(os.getuid()), "expected_gid": str(os.getgid()),
+              "helper_cap_add": capadd.strip(), "helper_privileged": priv.strip()}
+        if r["rc"] != 0:
+            return ("fail", ev, f"id via tun exit={r['rc']}")
+        if uid != str(os.getuid()) or gid != str(os.getgid()):
+            return ("fail", ev, "tun command did not run as caller (possible escalation)")
+        return ("pass", ev, f"tun command ran as caller {uid}:{gid}; no root escalation")
+    run_check("tun_no_root_escalation", "spec50.6",
+              "egress-run --mode tun direct -- id (caller UID/GID, no root)", fn)
+
+
+def check_tun_stale_cleanup():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
+        before_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
+        before_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
+        r = egress_run(["--mode", "tun", route["id"], "--",
+                        "python3", "-c",
+                        "import urllib.request;urllib.request.urlopen("
+                        "'https://api.ipify.org',timeout=15).read()"],
+                       cfg, timeout, redact)
+        after_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
+        after_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
+        new_ns = [l for l in after_ns if l not in before_ns]
+        new_tun = [l for l in after_tun if l not in before_tun]
+        ev = {"route": route["id"], "exit": r["rc"],
+              "new_netns": new_ns, "new_tun_devs": new_tun,
+              "before_ns_count": len(before_ns), "after_ns_count": len(after_ns)}
+        if r["rc"] != 0:
+            return ("fail", ev, f"tun run exit={r['rc']}")
+        if new_ns or new_tun:
+            return ("fail", ev, f"stale resources left: ns={new_ns} tun={new_tun}")
+        return ("pass", ev, "no stale netns/tun after run")
+    run_check("tun_stale_cleanup", "spec50.7",
+              "ip netns / tun device list before+after a tun run", fn)
+
+
+def check_tun_hard_direct():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        # localhost must be reached directly (private IP), not via the proxy
+        r_lo = egress_run(["--mode", "tun", "direct", "--",
+                           "python3", "-c",
+                           "import socket;print(socket.gethostbyname('localhost'))"],
+                          cfg, timeout, redact)
+        lo_ip = r_lo["stdout"].strip().splitlines()[-1].strip() if r_lo["stdout"].strip() else ""
+        # docker bridge gateway must be reachable directly
+        r_dg = egress_run(["--mode", "tun", "direct", "--",
+                           "python3", "-c",
+                           "import socket;s=socket.socket();s.settimeout(3);"
+                           "print('ok' if s.connect_ex(('172.17.0.1',9091))<0 else 'no')"],
+                          cfg, timeout, redact)
+        dg = r_dg["stdout"].strip().splitlines()[-1].strip() if r_dg["stdout"].strip() else ""
+        ev = {"localhost_ip": lo_ip, "localhost_exit": r_lo["rc"],
+              "docker_gateway_reachable": dg == "ok", "dg_exit": r_dg["rc"],
+              "lo_stdout": r_lo["stdout"], "dg_stdout": r_dg["stdout"]}
+        if r_lo["rc"] != 0 or not is_local_bind(lo_ip):
+            return ("fail", ev, f"localhost not direct (ip={lo_ip!r})")
+        if dg != "ok":
+            return ("fail", ev, "docker bridge gateway not directly reachable")
+        return ("pass", ev, "HARD DIRECT enforced: localhost + docker gateway direct")
+    run_check("tun_hard_direct", "spec50.8",
+              "egress-run --mode tun direct -- localhost/docker-gateway (HARD DIRECT)", fn)
+
+
+def check_os_tun_unsupported():
+    def fn():
+        redact, timeout = CTX["redact"], CTX["timeout"]
+        cname = CTX["os_container"]
+        r = os_exec(["egress-run", "--mode", "tun", "direct", "--", "true"],
+                    timeout, redact)
+        ev = {"container": cname, "exit": r["rc"],
+              "stdout": r["stdout"], "stderr": r["stderr"]}
+        if r["rc"] is None:
+            return ("skip", ev, f"cannot exec in container {cname!r}: {r['stderr'][:120]}")
+        # a missing in-container client is a prerequisite gap, not a product
+        # failure: 127 / "error finding executable" / "command not found".
+        blob = (r["stdout"] + r["stderr"]).lower()
+        if r["rc"] == 127 or "error finding executable" in blob \
+                or "command not found" in blob or "no such file" in blob:
+            return ("skip", ev, f"egress-run not installed in container {cname!r} "
+                                "(install the client bundle first)")
+        if r["rc"] == 0:
+            return ("fail", ev, "openscience tun unexpectedly succeeded")
+        if r["rc"] != 6:
+            return ("fail", ev, f"openscience tun exit={r['rc']} (expected 6 unsupported)")
+        if "no silent fallback" not in (r["stderr"] + r["stdout"]).lower():
+            return ("fail", ev, "missing explicit no-fallback message")
+        return ("pass", ev, "openscience tun -> explicit unsupported (exit 6), no fallback")
+    run_check("openscience_tun_unsupported", "spec50.9",
+              "egress-run --mode tun (openscience config) -> explicit unsupported", fn)
+
+
+def check_tun_no_fallback():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        ready, why = _tun_ready()
+        if not ready:
+            return ("skip", {"reason": why}, why)
+        env = dict(os.environ)
+        env["VIBE_EGRESS_MARK"] = "PROXY_PATH_RAN"
+        r = egress_run(["--mode", "tun", "direct", "--",
+                        "sh", "-c", "echo MARK=$VIBE_EGRESS_MARK; hostname"],
+                       cfg, timeout, redact, env=env)
+        ev = {"exit": r["rc"], "stdout": r["stdout"], "stderr": r["stderr"]}
+        if r["rc"] == 0:
+            return ("fail", ev, "tun run unexpectedly succeeded")
+        if "PROXY_PATH_RAN" in r["stdout"]:
+            return ("fail", ev, "marker shows the proxy path ran (silent fallback)")
+        if r["rc"] != 6:
+            return ("fail", ev, f"tun failure exit={r['rc']} (expected 6, not a proxy run)")
+        return ("pass", ev, "tun failure is explicit (exit 6); no silent proxy fallback")
+    run_check("tun_no_silent_fallback", "spec50.11",
+              "egress-run --mode tun (marker env) -> explicit failure, no proxy fallback", fn)
+
+
+def check_tun_capabilities():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        osconfig = CTX["osconfig"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"},
+                    "no live backend")
+        rc_host = egressctl(["capabilities"], cfg, timeout, redact)
+        cap_host = _json(rc_host["stdout"]) or {}
+        tun_host = (cap_host.get("tun") or {}).get("status")
+        ev = {"host": {"exit": rc_host["rc"], "tun": tun_host,
+                       "raw": rc_host["stdout"][:600]}}
+        if rc_host["rc"] != 0:
+            return ("fail", ev, "host capabilities failed")
+        if str(tun_host).lower() in ("unsupported_in_environment", "unsupported",
+                                     "false", "none"):
+            return ("fail", ev, f"host reports tun={tun_host!r} (expected supported)")
+        rc_os = os_exec(["egressctl", "--json", "capabilities"], timeout, redact)
+        cap_os = _json(rc_os["stdout"]) or {}
+        tun_os = (cap_os.get("tun") or {}).get("status")
+        ev["openscience"] = {"exit": rc_os["rc"], "tun": tun_os,
+                             "raw": rc_os["stdout"][:600]}
+        if rc_os["rc"] is None:
+            ev["openscience"] = {"exit": None, "tun": None,
+                                 "note": f"cannot exec in {CTX['os_container']!r}"}
+        elif rc_os["rc"] == 0 and str(tun_os).lower() not in (
+                "unsupported_in_environment", "unsupported", "false", "none"):
+            return ("fail", ev, f"openscience reports tun={tun_os!r} (expected unsupported)")
+        return ("pass", ev, f"host tun={tun_host!r}; "
+                            f"openscience tun={ev.get('openscience', {}).get('tun')!r}")
+    run_check("tun_capabilities_accuracy", "spec50.12",
+              "egressctl capabilities (host + openscience) report tun accurately", fn)
+
+
+def _yaml_lines(path):
+    """Return (indent, text) for non-comment, non-blank lines of a YAML file."""
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].rstrip()
+                if not line.strip():
+                    continue
+                out.append((len(line) - len(line.lstrip(" ")), line.strip()))
+    except OSError:
+        return None
+    return out
+
+
+def check_tun_static():
+    def fn():
+        comp = os.path.join(REPO, "compose.tun.yaml")
+        lines = _yaml_lines(comp)
+        if lines is None:
+            return ("skip", {"reason": f"compose.tun.yaml not found: {comp}"},
+                    "no compose.tun.yaml")
+        text = "\n".join(t for _, t in lines)
+        issues = []
+        # privileged: true (real YAML, not a comment)
+        if re.search(r"privileged:\s*true", text):
+            issues.append("privileged:true present")
+        # docker.sock in an actual volume mount
+        for _, t in lines:
+            if "docker.sock" in t and (t.startswith("-") or ":" in t):
+                issues.append(f"docker.sock volume: {t}")
+        # cap_add block: collect the list items under it
+        caps = []
+        in_cap = False
+        cap_indent = None
+        for ind, t in lines:
+            if t.startswith("cap_add:"):
+                in_cap = True
+                cap_indent = ind
+                continue
+            if in_cap:
+                if ind > cap_indent and t.startswith("-"):
+                    caps.append(t.lstrip("- ").strip())
+                elif ind <= cap_indent:
+                    in_cap = False
+        if caps and any(c != "NET_ADMIN" for c in caps):
+            issues.append(f"cap_add beyond NET_ADMIN: {caps}")
+        if "no-new-privileges" not in text:
+            issues.append("no-new-privileges missing")
+        # OpenScience config: if present it must never get the tun socket.
+        osconfig = CTX["osconfig"]
+        os_tun = _flat_yaml_get(osconfig, "tun_backend") if osconfig else None
+        os_sock = _flat_yaml_get(osconfig, "tun_helper_socket") if osconfig else None
+        ev = {"compose_tun": comp, "cap_add": caps, "issues": issues,
+              "os_config_present": bool(osconfig and os.path.exists(osconfig)),
+              "os_tun_backend": os_tun, "os_tun_helper_socket": os_sock}
+        if osconfig and os.path.exists(osconfig):
+            if os_tun and os_tun != "none":
+                issues.append(f"openscience tun_backend={os_tun!r} (expected none)")
+            if os_sock:
+                issues.append(f"openscience has tun_helper_socket={os_sock!r} (must not)")
+        if issues:
+            return ("fail", ev, "; ".join(issues))
+        return ("pass", ev, "tun privilege grant is minimal (cap_add NET_ADMIN only); "
+                            "no privileged/docker.sock; openscience tun_backend=none")
+    run_check("tun_no_gvisor_weakening", "spec50.10",
+              "static audit of compose.tun.yaml + openscience config", fn)
+
+
+# ---------------------------------------------------------------------------
+# section 49 -- host-only live security / data-plane
+# ---------------------------------------------------------------------------
+def check_a8_public_ports():
+    def fn():
+        redact = CTX["redact"]
+        ss = _run(["ss", "-ltnH"], 15, redact)
+        if ss["rc"] != 0:
+            return ("skip", {"reason": ss["stderr"]}, "ss unavailable")
+        binds = []
+        public_bad = []
+        for line in ss["stdout"].splitlines():
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local = parts[3]
+            ip = local.rsplit(":", 1)[0].strip("[]")
+            port = local.rsplit(":", 1)[1]
+            try:
+                port = int(port)
+            except ValueError:
+                continue
+            binds.append({"ip": ip, "port": port})
+            if not is_local_bind(ip):
+                public_bad.append(f"{ip}:{port}")
+        ev = {"binds": binds, "public_binds": public_bad,
+              "egress_ports_on_public": [
+                  f"{b['ip']}:{b['port']}" for b in binds
+                  if b["port"] in EGRESS_PORTS and not is_local_bind(b["ip"])]}
+        # spec 49.32: the egress client-facing ports (1080/1081/9091) must not
+        # be reachable on a public NIC. Other host services (e.g. an IDE) are
+        # out of scope for this check.
+        if ev["egress_ports_on_public"]:
+            return ("fail", ev,
+                    f"egress ports on public NIC: {ev['egress_ports_on_public']}")
+        return ("pass", ev,
+                f"no egress client port on a public NIC "
+                f"({len(binds)} binds scanned; {len(public_bad)} other public binds ignored)")
+    run_check("a8_public_ports_closed", "spec49.32", "ss -ltnH (no public NIC binds)", fn)
+
+
+def check_a8_recreate():
+    def fn():
+        redact, timeout = CTX["redact"], CTX["timeout"]
+        cname = CTX["os_container"]
+        if not CTX.get("recreate"):
+            return ("skip", {"reason": "destructive: restarts the OpenScience "
+                                        "container; run with --recreate to enable"},
+                    "recreate check disabled by default")
+        osconfig = CTX["osconfig"]
+        tok = _flat_yaml_get(osconfig, "api_token_file")
+        tok_hash = None
+        if tok:
+            r = os_exec(["sh", "-c", f"sha256sum {tok} | cut -c1-16"], timeout, redact)
+            if r["rc"] == 0 and r["stdout"].strip():
+                tok_hash = r["stdout"].strip()
+        before = os_exec(["egressctl", "--json", "whoami"], timeout, redact)
+        before_id = (_json(before["stdout"]) or {}).get("client_id")
+        if before["rc"] != 0 or not before_id:
+            return ("skip", {"reason": f"cannot whoami in {cname}: {before['stderr'][:200]}"},
+                    "openscience container not reachable")
+        re_ = _run(["docker", "restart", cname], 120, redact)
+        if re_["rc"] != 0:
+            return ("fail", {"before_client_id": before_id,
+                             "restart": re_["stderr"][:200]},
+                    f"restart failed: {re_['stderr'][:120]}")
+        # wait for the client to come back
+        after = None
+        for _ in range(12):
+            after = os_exec(["egressctl", "--json", "whoami"], timeout, redact)
+            if after["rc"] == 0:
+                break
+            import time
+            time.sleep(5)
+        after_id = (_json(after["stdout"]) or {}).get("client_id") if after else None
+        ev = {"before_client_id": before_id, "after_client_id": after_id,
+              "token_sha16": tok_hash, "restart_rc": re_["rc"]}
+        if after_id != before_id:
+            return ("fail", ev, f"client identity changed: {before_id} -> {after_id}")
+        return ("pass", ev, f"openscience client persisted across recreate ({before_id})")
+    run_check("a8_openscience_recreate_persists", "spec49.39",
+              "docker exec whoami -> docker restart -> whoami (identity persists)", fn)
+
+
+def check_a8_litellm():
+    def fn():
+        url = CTX["litellm"]
+        try:
+            pre = http_get(url, 8)[0] < 500
+        except Exception:
+            pre = False
+        # a benign route read does not disturb LiteLLM; re-probe
+        try:
+            post = http_get(url, 8)[0] < 500
+        except Exception:
+            post = False
+        ev = {"url": url, "pre": pre, "post": post}
+        if pre and post:
+            return ("pass", ev, f"LiteLLM reachable before+after ({url})")
+        if not pre:
+            return ("skip", ev, f"LiteLLM not reachable at {url} (set --litellm-url)")
+        return ("fail", ev, "LiteLLM became unreachable")
+    run_check("a8_litellm_reachable", "spec49.29", f"GET {CTX['litellm']}", fn)
+
+
+def check_a8_parallel_oneshot():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        proxies = [r for r in CTX["routes"]
+                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+        proxies = proxies[:2]
+        jobs = [{"route": p["id"]} for p in proxies] + [{"route": "direct"}]
+        host_ip = host_public_ip()
+
+        def run_job(j):
+            r = egress_run([j["route"], "--",
+                            "python3", "-c",
+                            "import urllib.request;print(urllib.request.urlopen("
+                            "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                           cfg, timeout, redact)
+            ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
+            return {"route": j["route"], "exit": r["rc"], "exit_ip": ip}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+            results = list(ex.map(run_job, jobs))
+        ev = {"host_public_ip": host_ip, "jobs": results}
+        bad = [j for j in results if j["exit"] != 0 or not is_public_ip(j["exit_ip"])]
+        direct = [j for j in results if j["route"] == "direct"]
+        if direct and host_ip and direct[0]["exit_ip"] != host_ip:
+            bad.append(direct[0])
+        if bad:
+            return ("fail", ev, f"{len(bad)} parallel one-shot job(s) failed")
+        return ("pass", ev, f"{len(results)} parallel one-shot jobs ok (incl. direct)")
+    run_check("a8_parallel_oneshot", "spec49.23",
+              "3 parallel egress-run one-shot (different routes + direct)", fn)
+
+
+def check_a8_local_exec():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        r = egress_run(["direct", "--",
+                        "sh", "-c", "hostname; id -u"], cfg, timeout, redact)
+        lines = [l for l in r["stdout"].splitlines() if l.strip()]
+        ev = {"exit": r["rc"], "hostname": lines[0] if lines else None,
+              "uid": lines[1] if len(lines) > 1 else None,
+              "expected_hostname": socket.gethostname(), "expected_uid": str(os.getuid()),
+              "stdout": r["stdout"]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"egress-run direct exit={r['rc']}")
+        if lines and (lines[0] != socket.gethostname()
+                      or (len(lines) > 1 and lines[1] != str(os.getuid()))):
+            return ("fail", ev, "command did not run in the local host environment")
+        return ("pass", ev, "egress-run executes the command locally (host fs/env/uid)")
+    run_check("a8_egress_run_local", "spec49.25",
+              "egress-run direct -- hostname/id (local exec, not remote)", fn)
+
+
+def check_a8_internal_direct():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        host_ip = host_public_ip()
+        r_lo = egress_run(["direct", "--",
+                           "python3", "-c",
+                           "import socket;print(socket.gethostbyname('localhost'))"],
+                          cfg, timeout, redact)
+        lo_ip = r_lo["stdout"].strip().splitlines()[-1].strip() if r_lo["stdout"].strip() else ""
+        r_dg = egress_run(["direct", "--",
+                           "python3", "-c",
+                           "import socket;s=socket.socket();s.settimeout(3);"
+                           "print('ok' if s.connect_ex(('172.17.0.1',9091))<0 else 'no')"],
+                          cfg, timeout, redact)
+        dg = r_dg["stdout"].strip().splitlines()[-1].strip() if r_dg["stdout"].strip() else ""
+        ev = {"host_public_ip": host_ip, "localhost_ip": lo_ip,
+              "docker_gateway_reachable": dg == "ok",
+              "lo_exit": r_lo["rc"], "dg_exit": r_dg["rc"]}
+        if r_lo["rc"] != 0 or not is_local_bind(lo_ip):
+            return ("fail", ev, f"localhost not direct (ip={lo_ip!r})")
+        if dg != "ok":
+            return ("fail", ev, "docker internal not directly reachable")
+        return ("pass", ev, "Docker-internal + localhost stay DIRECT")
+    run_check("a8_internal_hard_direct", "spec49.27",
+              "egress-run direct -- localhost/docker-gateway (internal stays direct)", fn)
+
+
+def check_a8_secrets():
+    def fn():
+        redact = CTX["redact"]
+        secrets = _collect_secret_values()
+        if not secrets:
+            return ("skip", {"reason": "no secret values available to scan against"},
+                    "no secrets to scan")
+        leaks = []
+        # 1. repo (skip .git, binaries, large files)
+        for root_, dirs, files in os.walk(REPO):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for fn_ in files:
+                p = os.path.join(root_, fn_)
+                try:
+                    if os.path.getsize(p) > 1_000_000:
+                        continue
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+                for s in secrets:
+                    if s in content:
+                        leaks.append(f"repo:{p}")
+                        break
+        # 2. generated artifacts
+        gen = os.path.join(ROOT, "generated")
+        if os.path.isdir(gen):
+            for root_, _, files in os.walk(gen):
+                for fn_ in files:
+                    p = os.path.join(root_, fn_)
+                    try:
+                        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                            content = f.read()
+                    except OSError:
+                        continue
+                    for s in secrets:
+                        if s in content:
+                            leaks.append(f"artifact:{p}")
+                            break
+        # 3. docker logs of the egress stack
+        for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd"):
+            lg = _run(["docker", "logs", "--tail", "2000", svc], 30, redact)
+            for s in secrets:
+                if s in (lg["stdout"] + lg["stderr"]):
+                    leaks.append(f"logs:{svc}")
+                    break
+        ev = {"scanned": ["repo", "generated", "docker-logs"],
+              "leaks": leaks[:20], "leak_count": len(leaks)}
+        if leaks:
+            return ("fail", ev, f"{len(leaks)} secret leak(s)")
+        return ("pass", ev, "no provider/client secrets in repo/artifacts/logs")
+    run_check("a8_secrets_absent", "spec49.34",
+              "scan repo + generated artifacts + docker logs for secret values", fn)
+
+
+def check_a8_host_test():
+    def fn():
+        redact = CTX["redact"]
+        if not os.path.isfile(HOST_TEST):
+            return ("skip", {"reason": f"egress-host-test not found: {HOST_TEST}"},
+                    "no host test harness")
+        r = _run([sys.executable, HOST_TEST], CTX["timeout"] * 3, redact)
+        data = _json(r["stdout"]) or {}
+        summary = data.get("summary", {})
+        ev = {"exit": r["rc"], "summary": summary,
+              "failed_checks": [c.get("id") for c in data.get("checks", [])
+                                if c.get("status") == "fail"]}
+        if r["rc"] != 0 and summary.get("failed"):
+            return ("fail", ev, f"host acceptance harness failed: {ev['failed_checks']}")
+        if not data.get("checks"):
+            return ("fail", ev, "host harness produced no checks")
+        return ("pass", ev, f"host acceptance harness: {summary}")
+    run_check("a8_host_test_report", "spec49.41",
+              "python3 host/egress-host-test (fixed host harness report)", fn)
+
+
+def check_a8_docker_socket():
+    def fn():
+        redact = CTX["redact"]
+        mounts = []
+        for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd",
+                    "vibelab-egress-tun-helper"):
+            r = _run(["docker", "inspect", "--format", "{{json .Mounts}}", svc],
+                     15, redact)
+            if r["rc"] != 0:
+                continue
+            for m in (_json(r["stdout"]) or []):
+                src = m.get("Source", "")
+                if "docker.sock" in src:
+                    mounts.append(f"{svc}:{src}")
+        ev = {"mounts": mounts}
+        if mounts:
+            return ("fail", ev, f"docker socket mounted: {mounts}")
+        return ("pass", ev, "no docker socket mounted into the egress stack")
+    run_check("a8_docker_socket_absent", "spec49.33",
+              "docker inspect .Mounts (no docker.sock)", fn)
+
+
+def check_a8_mihomo_unreachable():
+    def fn():
+        s = socket.socket()
+        s.settimeout(3)
+        try:
+            s.connect(("127.0.0.1", MIHOMO_ADMIN_PORT))
+            reachable = True
+        except OSError:
+            reachable = False
+        finally:
+            s.close()
+        ev = {"port": MIHOMO_ADMIN_PORT, "reachable_from_host_loopback": reachable}
+        if reachable:
+            return ("fail", ev, f"mihomo admin {MIHOMO_ADMIN_PORT} reachable (should be private)")
+        return ("pass", ev, f"mihomo admin {MIHOMO_ADMIN_PORT} not published")
+    run_check("a8_mihomo_unreachable", "spec49.30",
+              f"TCP connect 127.0.0.1:{MIHOMO_ADMIN_PORT} (must fail)", fn)
+
+
+def check_a8_same_release():
+    def fn():
+        hv = _client_version(host=True)
+        ov = _client_version(host=False)
+        ev = {"host_version": hv, "os_version": ov,
+              "os_container": CTX["os_container"]}
+        if hv is None or ov is None:
+            return ("skip", ev, "could not read installed client __version__ "
+                                "on host and/or in the container")
+        if hv != ov:
+            return ("fail", ev, f"release mismatch: host={hv!r} os={ov!r}")
+        return ("pass", ev, f"same client release installed: {hv}")
+    run_check("a8_client_same_release", "spec49.7",
+              "compare installed client __version__ (host vs container)", fn)
+
+
+def check_a8_version_mismatch():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        st = egressctl(["status"], cfg, timeout, redact)
+        data = _json(st["stdout"]) or {}
+        backend = (data.get("mihomo") or {}).get("version") or data.get("version")
+        ev = {"backend_version": backend, "raw": st["stdout"][:400]}
+        if st["rc"] != 0:
+            return ("fail", ev, f"status failed rc={st['rc']}")
+        ev["compatible"] = backend is not None
+        if backend is None:
+            return ("fail", ev, "backend did not report a version (no negotiation)")
+        return ("pass", ev, f"backend reports version {backend!r} (negotiable)")
+    run_check("a8_version_negotiation", "spec49.42",
+              "egressctl status (backend version present for negotiation)", fn)
+
+
+def check_a8_probe_all():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        r = egressctl(["probe-domain", PROBE_DOMAIN, "--all"], cfg, timeout, redact)
+        data = _json(r["stdout"]) or {}
+        results = data.get("results", data if isinstance(data, list) else [])
+        if not isinstance(results, list):
+            results = []
+        stage_keys = ("dns_ok", "tcp_ok", "tls_ok", "http_ok")
+        ev = {"domain": PROBE_DOMAIN, "exit": r["rc"],
+              "n_results": len(results),
+              "has_direct": any(x.get("route") == "direct" for x in results
+                                if isinstance(x, dict)),
+              "has_stages": any(isinstance(x, dict)
+                                and any(k in x for k in stage_keys) for x in results),
+              "sample": results[:3]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"probe-domain --all exit={r['rc']}")
+        if not results:
+            return ("fail", ev, "no probe results")
+        if not ev["has_direct"]:
+            return ("fail", ev, "direct route not included in --all probe")
+        if not ev["has_stages"]:
+            return ("fail", ev, "results do not distinguish DNS/TCP/TLS/HTTP stages")
+        return ("pass", ev, f"probe-domain --all: {len(results)} routes incl. direct, staged")
+    run_check("a8_probe_domain_all", "spec49.20",
+              f"egressctl probe-domain {PROBE_DOMAIN} --all", fn)
+
+
+def check_a8_benchmark_bounded():
+    def fn():
+        redact, cfg = CTX["redact"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        route = select_proxy_route(CTX["routes"])
+        if not route:
+            return ("skip", {"reason": "no non-direct proxy route"}, "no proxy route")
+        rid = route["id"]
+        t0 = datetime.now(timezone.utc)
+        r = egressctl(["benchmark", rid, "--bytes", "1M"], cfg, 120, redact)
+        dur = (datetime.now(timezone.utc) - t0).total_seconds()
+        data = _json(r["stdout"]) or {}
+        ev = {"route": rid, "exit": r["rc"], "duration_s": round(dur, 1),
+              "bytes": "1M", "raw": r["stdout"][:400]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"benchmark exit={r['rc']}")
+        if dur > 120:
+            return ("fail", ev, f"benchmark not bounded ({dur:.0f}s)")
+        return ("pass", ev, f"benchmark bounded: {dur:.1f}s for 1M via {rid}")
+    run_check("a8_benchmark_bounded", "spec49.35",
+              "egressctl benchmark ROUTE --bytes 1M (bounded bytes/time)", fn)
+
+
+def check_a8_best_domain():
+    def fn():
+        redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        if not CTX.get("client_ok"):
+            return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        r = egressctl(["best", "--domain", PROBE_DOMAIN], cfg, timeout, redact)
+        data = _json(r["stdout"]) or {}
+        routes = data.get("candidates", data.get("routes",
+                    data if isinstance(data, list) else []))
+        if not isinstance(routes, list):
+            routes = []
+        ev = {"domain": PROBE_DOMAIN, "exit": r["rc"], "n_routes": len(routes),
+              "best": data.get("best"),
+              "uses_domain_probe": data.get("filters", {}).get("domain") == PROBE_DOMAIN,
+              "sample": routes[:3]}
+        if r["rc"] != 0:
+            return ("fail", ev, f"best --domain exit={r['rc']}")
+        if not routes:
+            return ("fail", ev, "best --domain returned no routes")
+        return ("pass", ev, f"best --domain: {len(routes)} ranked routes, best={data.get('best')!r}")
+    run_check("a8_best_domain", "spec49.36",
+              f"egressctl best --domain {PROBE_DOMAIN}", fn)
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+ALL_CHECKS = [
+    ("preflight", check_preflight),
+    # section 50 -- TUN
+    ("tun_tcp_client", check_tun_tcp),
+    ("tun_local_workload", check_tun_local_workload),
+    ("tun_udp_quic", check_tun_udp),
+    ("tun_concurrent", check_tun_concurrent),
+    ("tun_direct_isolated", check_tun_direct_isolated),
+    ("tun_no_root_escalation", check_tun_no_root),
+    ("tun_stale_cleanup", check_tun_stale_cleanup),
+    ("tun_hard_direct", check_tun_hard_direct),
+    ("openscience_tun_unsupported", check_os_tun_unsupported),
+    ("tun_no_silent_fallback", check_tun_no_fallback),
+    ("tun_capabilities_accuracy", check_tun_capabilities),
+    ("tun_no_gvisor_weakening", check_tun_static),
+    # section 49 -- host-only live
+    ("a8_public_ports_closed", check_a8_public_ports),
+    ("a8_openscience_recreate_persists", check_a8_recreate),
+    ("a8_litellm_reachable", check_a8_litellm),
+    ("a8_parallel_oneshot", check_a8_parallel_oneshot),
+    ("a8_egress_run_local", check_a8_local_exec),
+    ("a8_internal_hard_direct", check_a8_internal_direct),
+    ("a8_secrets_absent", check_a8_secrets),
+    ("a8_host_test_report", check_a8_host_test),
+    ("a8_docker_socket_absent", check_a8_docker_socket),
+    ("a8_mihomo_unreachable", check_a8_mihomo_unreachable),
+    ("a8_client_same_release", check_a8_same_release),
+    ("a8_version_negotiation", check_a8_version_mismatch),
+    ("a8_probe_domain_all", check_a8_probe_all),
+    ("a8_benchmark_bounded", check_a8_benchmark_bounded),
+    ("a8_best_domain", check_a8_best_domain),
+]
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="live-acceptance.py")
+    ap.add_argument("--out", default="host_acceptance_report.json")
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
+    ap.add_argument("--osconfig",
+                    default=os.environ.get("VIBELAB_EGRESS_OS_CONFIG", DEFAULT_OS_CONFIG))
+    ap.add_argument("--tun-helper-sock",
+                    default=os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET",
+                                           DEFAULT_TUN_SOCK))
+    ap.add_argument("--litellm-url",
+                    default=os.environ.get("VIBELAB_EGRESS_LITELLM_URL", DEFAULT_LITELLM))
+    ap.add_argument("--os-container",
+                    default=os.environ.get("VIBELAB_EGRESS_OS_CONTAINER",
+                                           DEFAULT_OS_CONTAINER))
+    ap.add_argument("--recreate", action="store_true",
+                    help="enable the destructive OpenScience recreate check "
+                         "(restarts the container; off by default)")
+    ap.add_argument("--no-tun", action="store_true", help="skip the TUN checks")
+    ap.add_argument("--check", help="comma-separated check ids to run")
+    ap.add_argument("--timeout", type=float, default=90.0)
+    args = ap.parse_args(argv)
+
+    CTX.update({
+        "config": args.config,
+        "osconfig": args.osconfig,
+        "tun_sock": args.tun_helper_sock,
+        "litellm": args.litellm_url,
+        "os_container": args.os_container,
+        "timeout": args.timeout,
+        "recreate": args.recreate,
+    })
+    redact, redact_count = make_redactor()
+    CTX["redact"] = redact
+
+    selected = set(args.check.split(",")) if args.check else None
+    for cid, fn in ALL_CHECKS:
+        if selected and cid not in selected:
+            continue
+        if args.no_tun and (cid.startswith("tun_") or cid == "openscience_tun_unsupported"):
+            continue
+        fn()
+
+    summary = {
+        "passed": sum(1 for r in RESULTS if r["status"] == "pass"),
+        "failed": sum(1 for r in RESULTS if r["status"] == "fail"),
+        "skipped": sum(1 for r in RESULTS if r["status"] == "skip"),
+        "total": len(RESULTS),
+    }
+    report = {
+        "report": "vibelab-egress live acceptance",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "host": socket.gethostname(),
+        "user": os.environ.get("USER", ""),
+        "python": sys.version.split()[0],
+        "config": args.config,
+        "osconfig": args.osconfig,
+        "tun_helper_socket": args.tun_helper_sock,
+        "litellm_url": args.litellm_url,
+        "os_container": args.os_container,
+        "redactions": redact_count["n"],
+        "checks": RESULTS,
+        "summary": summary,
+    }
+    report["checks_hash"] = canon_hash(RESULTS)
+    out = json.dumps(report, indent=2)
+    print(out)
+    os.makedirs(os.path.dirname(os.path.realpath(args.out)), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write(out + "\n")
+    print(f"\n[report] {args.out}  "
+          f"(passed={summary['passed']} failed={summary['failed']} "
+          f"skipped={summary['skipped']} total={summary['total']} "
+          f"redactions={redact_count['n']})", file=sys.stderr)
+    return 1 if summary["failed"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

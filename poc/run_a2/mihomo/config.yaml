@@ -1,0 +1,134 @@
+mixed-port: 0
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+external-controller: 127.0.0.1:21090
+secret: a2-mihomo-secret
+profile:
+  store-selected: true
+  store-fake-ip: false
+geox-url:
+  geoip: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/geoip.dat
+  geosite: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/geosite.dat
+  mmdb: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/GeoLite2-ASN.mmdb
+  asn: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/GeoLite2-ASN.mmdb
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+dns:
+  enable: true
+  listen: 127.0.0.1:21053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter:
+  - lan
+  - lan.domain
+  - '*.local'
+  - localhost.pt
+  - stun.*
+  default-nameserver: &id001
+  - 223.5.5.5
+  - 8.8.8.8
+  nameserver: *id001
+  fallback:
+  - https://1.1.1.1/dns-query
+  - https://dns.google/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+listeners:
+- name: default-proxy
+  type: socks
+  port: 21080
+  listen: 127.0.0.1
+  udp: true
+  users:
+  - username: host-user
+    password: host-pass
+  - username: os-user
+    password: os-pass
+- name: oneshot-proxy
+  type: socks
+  port: 21081
+  listen: 127.0.0.1
+  udp: true
+  users:
+  - username: os_0
+    password: os-pass-0
+  - username: os_1
+    password: os-pass-1
+  - username: os_2
+    password: os-pass-2
+  - username: os_3
+    password: os-pass-3
+proxies: []
+proxy-providers:
+  blanc:
+    type: file
+    path: /srv/workspace/vibelab-egress/poc/run_a2/mihomo/providers/blanc.yaml
+    override:
+      additional-prefix: blanc-
+  xeovo:
+    type: file
+    path: /srv/workspace/vibelab-egress/poc/run_a2/mihomo/providers/xeovo.yaml
+    override:
+      additional-prefix: xeovo-
+proxy-groups:
+- name: host-main
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+- name: openscience-main
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+- name: os_0
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+- name: os_1
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+- name: os_2
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+- name: os_3
+  type: select
+  proxies:
+  - DIRECT
+  use:
+  - blanc
+  - xeovo
+rules:
+- GEOIP,LAN,DIRECT,no-resolve
+- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+- IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+- IP-CIDR,172.17.0.0/16,DIRECT,no-resolve
+- IN-USER,host-user,host-main
+- IN-USER,os-user,openscience-main
+- IN-USER,os_0,os_0
+- IN-USER,os_1,os_1
+- IN-USER,os_2,os_2
+- IN-USER,os_3,os_3
+- MATCH,DIRECT

@@ -1,0 +1,79 @@
+# compose.tun.yaml — EXPLICIT, REVIEWED privilege grant for strict/TUN (A6).
+#
+# This is a compose OVERRIDE (used with:  docker compose -f compose.yaml
+# -f compose.tun.yaml up). It is NOT part of the default stack. It exists so
+# that the single privilege escalation required for TUN is isolated in one
+# reviewed file (spec section 21, phase A6; compose.yaml comment).
+#
+# What it adds:
+#   * a `vibelab-egress-tun-helper` service running the local privileged
+#     strict/TUN helper (host/strict-helper/egress-tun-helper.py) over a UNIX
+#     socket, with the MINIMAL capabilities needed to create a per-run netns
+#     + TUN device and drop to the caller's UID/GID.
+#
+# Security invariants (spec 21.4 / 46 A8):
+#   * NO public binds: the helper exposes only a UNIX socket (no TCP port).
+#   * NO Docker socket mounted.
+#   * Capabilities are the explicit, reviewed set: NET_ADMIN (netns + TUN)
+#     only. No CAP_SYS_ADMIN, no privileged, no cap_add:ALL.
+#   * /dev/net/tun is mounted read-write (required for the TUN device).
+#   * The helper is NOT reachable from the OpenScience container: it binds a
+#     socket in a 0700 dir on the host / a private compose volume, and the
+#     OpenScience client has tun_backend=none (it never gets this socket).
+#   * no-new-privileges is set; the helper drops to the caller UID/GID after
+#     network setup (enforced in the helper, audited).
+#   * The helper is a fixed-protocol local interface (capability/run/cleanup),
+#     never a generic root-exec API (spec 21.4).
+#
+# After enabling, re-run the A8 security gate: the public API must not be
+# stronger because of this file, and the OpenScience client must still report
+# tun: unsupported_in_environment (it does not receive this socket).
+
+name: vibelab-egress
+
+services:
+  vibelab-egress-tun-helper:
+    build:
+      context: .
+      dockerfile: host/strict-helper/Dockerfile
+    image: vibelab-egress-tun-helper:local
+    container_name: vibelab-egress-tun-helper
+    restart: unless-stopped
+    command:
+      - --socket
+      - /run/vibelab-egress/tun-helper.sock
+      - --allowed-upstreams
+      - 127.0.0.1:18081
+    # No `ports:` at all — the helper is UNIX-socket only (no TCP exposure).
+    volumes:
+      # the UNIX socket + state, in a 0700 dir on the host. The host-native
+      # egress-run (host-main) reaches it; the OpenScience client does not.
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/tun-helper:/run/vibelab-egress
+      # the TUN device (required to create a per-run TUN interface)
+      - /dev/net/tun:/dev/net/tun
+      # (no route catalog mount: egressd owns the catalog and validates the
+      # route at session creation; the helper enforces route-id format + the
+      # upstream allowlist, so it cannot be pointed at an arbitrary route.)
+    # EXPLICIT, REVIEWED capability grant — the minimal set for netns + TUN.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    # No `privileged: true`, no docker.sock, no host network namespace.
+    networks:
+      - egress-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import sys; sys.exit(0 if __import__('os').path.exists('/run/vibelab-egress/tun-helper.sock') else 1)\""
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  egress-net:
+    external: true
+    name: vibelab-egress-net

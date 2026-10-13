@@ -1,0 +1,482 @@
+{
+  "report": "vibelab-egress live acceptance",
+  "generated_at": "2026-10-13T08:53:49Z",
+  "host": "globe",
+  "user": "vibelab",
+  "python": "3.12.3",
+  "config": "/etc/vibelab-egress/client.yaml",
+  "osconfig": "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml",
+  "tun_helper_socket": "/run/vibelab-egress/tun-helper.sock",
+  "litellm_url": "http://127.0.0.1:4000/health",
+  "os_container": "openscience-container-openscience-1",
+  "redactions": 0,
+  "checks": [
+    {
+      "id": "preflight",
+      "spec": "env",
+      "status": "skip",
+      "command": "preflight",
+      "detail": "preflight: docker_ok=True egressctl_ok=False; egressctl not installed on the host (python -m fallback failed); run scripts/install-client.sh --target host first. detail: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n",
+      "evidence": {
+        "hostname": "globe",
+        "kernel": "6.8.0-139-generic",
+        "user": "vibelab",
+        "uid": 1082,
+        "gid": 1083,
+        "python": "3.12.3",
+        "tun_helper_socket": "/run/vibelab-egress/tun-helper.sock",
+        "tun_helper_socket_exists": false,
+        "docker": {
+          "rc": 0,
+          "stdout": "28.1.1\n",
+          "stderr": ""
+        },
+        "egressctl": {
+          "rc": 1,
+          "stdout": "",
+          "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n"
+        },
+        "host_public_ip": "85.89.112.155",
+        "routes": [],
+        "reason": "preflight: docker_ok=True egressctl_ok=False; egressctl not installed on the host (python -m fallback failed); run scripts/install-client.sh --target host first. detail: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n"
+      }
+    },
+    {
+      "id": "tun_tcp_client",
+      "spec": "spec50.1",
+      "status": "skip",
+      "command": "egress-run --mode tun ROUTE -- <proxy-unaware tcp client>",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_local_workload",
+      "spec": "spec50.2",
+      "status": "skip",
+      "command": "egress-run --mode tun ROUTE -- id/hostname (caller UID/GID, host fs)",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_udp_quic",
+      "spec": "spec50.3",
+      "status": "skip",
+      "command": "egress-run --mode tun ROUTE -- <udp client>",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_concurrent",
+      "spec": "spec50.4",
+      "status": "skip",
+      "command": "3+ concurrent egress-run --mode tun (different routes + direct)",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_direct_isolated",
+      "spec": "spec50.5",
+      "status": "skip",
+      "command": "egress-run --mode tun direct -- ... (isolated direct, no tun device)",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_no_root_escalation",
+      "spec": "spec50.6",
+      "status": "skip",
+      "command": "egress-run --mode tun direct -- id (caller UID/GID, no root)",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_stale_cleanup",
+      "spec": "spec50.7",
+      "status": "skip",
+      "command": "ip netns / tun device list before+after a tun run",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_hard_direct",
+      "spec": "spec50.8",
+      "status": "skip",
+      "command": "egress-run --mode tun direct -- localhost/docker-gateway (HARD DIRECT)",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "openscience_tun_unsupported",
+      "spec": "spec50.9",
+      "status": "skip",
+      "command": "egress-run --mode tun (openscience config) -> explicit unsupported",
+      "detail": "egress-run not installed in container 'openscience-container-openscience-1' (install the client bundle first)",
+      "evidence": {
+        "container": "openscience-container-openscience-1",
+        "exit": 127,
+        "stdout": "OCI runtime exec failed: executing processes for container: executing command \"egress-run --mode tun direct -- true\" in sandbox: error finding executable \"egress-run\" in PATH [/opt/venv/bin /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin]: no such file or directory: unknown\n",
+        "stderr": "",
+        "reason": "egress-run not installed in container 'openscience-container-openscience-1' (install the client bundle first)"
+      }
+    },
+    {
+      "id": "tun_no_silent_fallback",
+      "spec": "spec50.11",
+      "status": "skip",
+      "command": "egress-run --mode tun (marker env) -> explicit failure, no proxy fallback",
+      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "evidence": {
+        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+      }
+    },
+    {
+      "id": "tun_capabilities_accuracy",
+      "spec": "spec50.12",
+      "status": "skip",
+      "command": "egressctl capabilities (host + openscience) report tun accurately",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "tun_no_gvisor_weakening",
+      "spec": "spec50.10",
+      "status": "pass",
+      "command": "static audit of compose.tun.yaml + openscience config",
+      "detail": "tun privilege grant is minimal (cap_add NET_ADMIN only); no privileged/docker.sock; openscience tun_backend=none",
+      "evidence": {
+        "compose_tun": "/home/vibelab/openscience/workspace/vibelab-egress/compose.tun.yaml",
+        "cap_add": [
+          "NET_ADMIN"
+        ],
+        "issues": [],
+        "os_config_present": false,
+        "os_tun_backend": null,
+        "os_tun_helper_socket": null
+      }
+    },
+    {
+      "id": "a8_public_ports_closed",
+      "spec": "spec49.32",
+      "status": "pass",
+      "command": "ss -ltnH (no public NIC binds)",
+      "detail": "no egress client port on a public NIC (31 binds scanned; 12 other public binds ignored)",
+      "evidence": {
+        "binds": [
+          {
+            "ip": "172.30.40.1",
+            "port": 18220
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 57649
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 33060
+          },
+          {
+            "ip": "172.30.40.1",
+            "port": 1235
+          },
+          {
+            "ip": "127.0.0.53%lo",
+            "port": 53
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 35903
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 18220
+          },
+          {
+            "ip": "127.0.0.54",
+            "port": 53
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 4096
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 7080
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 8080
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 80
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 111
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 22
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 631
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 1235
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 1081
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 1080
+          },
+          {
+            "ip": "172.17.0.1",
+            "port": 1080
+          },
+          {
+            "ip": "172.17.0.1",
+            "port": 1081
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 3306
+          },
+          {
+            "ip": "172.17.0.1",
+            "port": 4001
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 4000
+          },
+          {
+            "ip": "172.17.0.1",
+            "port": 9091
+          },
+          {
+            "ip": "127.0.0.1",
+            "port": 9091
+          },
+          {
+            "ip": "0.0.0.0",
+            "port": 8787
+          },
+          {
+            "ip": "::",
+            "port": 53075
+          },
+          {
+            "ip": "::1",
+            "port": 631
+          },
+          {
+            "ip": "::",
+            "port": 45305
+          },
+          {
+            "ip": "::",
+            "port": 111
+          },
+          {
+            "ip": "::",
+            "port": 22
+          }
+        ],
+        "public_binds": [
+          "0.0.0.0:57649",
+          "127.0.0.53%lo:53",
+          "0.0.0.0:35903",
+          "0.0.0.0:8080",
+          "0.0.0.0:80",
+          "0.0.0.0:111",
+          "0.0.0.0:22",
+          "0.0.0.0:8787",
+          ":::53075",
+          ":::45305",
+          ":::111",
+          ":::22"
+        ],
+        "egress_ports_on_public": []
+      }
+    },
+    {
+      "id": "a8_openscience_recreate_persists",
+      "spec": "spec49.39",
+      "status": "skip",
+      "command": "docker exec whoami -> docker restart -> whoami (identity persists)",
+      "detail": "openscience container not reachable",
+      "evidence": {
+        "reason": "cannot whoami in openscience-container-openscience-1: "
+      }
+    },
+    {
+      "id": "a8_litellm_reachable",
+      "spec": "spec49.29",
+      "status": "skip",
+      "command": "GET http://127.0.0.1:4000/health",
+      "detail": "LiteLLM not reachable at http://127.0.0.1:4000/health (set --litellm-url)",
+      "evidence": {
+        "url": "http://127.0.0.1:4000/health",
+        "pre": false,
+        "post": false,
+        "reason": "LiteLLM not reachable at http://127.0.0.1:4000/health (set --litellm-url)"
+      }
+    },
+    {
+      "id": "a8_parallel_oneshot",
+      "spec": "spec49.23",
+      "status": "skip",
+      "command": "3 parallel egress-run one-shot (different routes + direct)",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_egress_run_local",
+      "spec": "spec49.25",
+      "status": "skip",
+      "command": "egress-run direct -- hostname/id (local exec, not remote)",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_internal_hard_direct",
+      "spec": "spec49.27",
+      "status": "skip",
+      "command": "egress-run direct -- localhost/docker-gateway (internal stays direct)",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_secrets_absent",
+      "spec": "spec49.34",
+      "status": "skip",
+      "command": "scan repo + generated artifacts + docker logs for secret values",
+      "detail": "no secrets to scan",
+      "evidence": {
+        "reason": "no secret values available to scan against"
+      }
+    },
+    {
+      "id": "a8_host_test_report",
+      "spec": "spec49.41",
+      "status": "fail",
+      "command": "python3 host/egress-host-test (fixed host harness report)",
+      "detail": "host harness produced no checks",
+      "evidence": {
+        "exit": 1,
+        "summary": {},
+        "failed_checks": []
+      }
+    },
+    {
+      "id": "a8_docker_socket_absent",
+      "spec": "spec49.33",
+      "status": "pass",
+      "command": "docker inspect .Mounts (no docker.sock)",
+      "detail": "no docker socket mounted into the egress stack",
+      "evidence": {
+        "mounts": []
+      }
+    },
+    {
+      "id": "a8_mihomo_unreachable",
+      "spec": "spec49.30",
+      "status": "pass",
+      "command": "TCP connect 127.0.0.1:9090 (must fail)",
+      "detail": "mihomo admin 9090 not published",
+      "evidence": {
+        "port": 9090,
+        "reachable_from_host_loopback": false
+      }
+    },
+    {
+      "id": "a8_client_same_release",
+      "spec": "spec49.7",
+      "status": "skip",
+      "command": "compare installed client __version__ (host vs container)",
+      "detail": "could not read installed client __version__ on host and/or in the container",
+      "evidence": {
+        "host_version": null,
+        "os_version": null,
+        "os_container": "openscience-container-openscience-1",
+        "reason": "could not read installed client __version__ on host and/or in the container"
+      }
+    },
+    {
+      "id": "a8_version_negotiation",
+      "spec": "spec49.42",
+      "status": "skip",
+      "command": "egressctl status (backend version present for negotiation)",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_probe_domain_all",
+      "spec": "spec49.20",
+      "status": "skip",
+      "command": "egressctl probe-domain cloudflare.com --all",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_benchmark_bounded",
+      "spec": "spec49.35",
+      "status": "skip",
+      "command": "egressctl benchmark ROUTE --bytes 1M (bounded bytes/time)",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    },
+    {
+      "id": "a8_best_domain",
+      "spec": "spec49.36",
+      "status": "skip",
+      "command": "egressctl best --domain cloudflare.com",
+      "detail": "no live backend",
+      "evidence": {
+        "reason": "backend/client not reachable"
+      }
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 1,
+    "skipped": 23,
+    "total": 28
+  },
+  "checks_hash": "1845c913d6768094cd0eefe79382ac209a376e4f43790aaa7f58fd375b8f7bcb"
+}

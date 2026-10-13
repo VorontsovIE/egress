@@ -1,0 +1,56 @@
+# Vibelab-egress: local privileged strict/TUN helper (A6, spec section 21).
+#
+# Runs the narrow, LOCAL-ONLY TUN helper over a UNIX socket. A host user's
+# `egress-run --mode tun ROUTE -- command` obtains a route-specific one-shot
+# upstream from egressd, then asks this helper to run the command in a
+# per-run netns pinned to that upstream.
+#
+# Privilege model (spec 21.4 / 46 A8):
+#   * The helper needs CAP_NET_ADMIN to create a per-run netns + TUN device.
+#     It is the ONLY component granted that capability (the minimal reviewed
+#     set). It drops to the caller's UID/GID before exec'ing the target.
+#   * Local only: the socket lives in /run/vibelab-egress (0700 dir, 0600
+#     socket). The OpenScience container is NOT given this socket
+#     (tun_backend=none), so it cannot reach the helper over the network.
+#   * Fixed protocol (capability/run/cleanup); never a generic root-exec API.
+#   * NoNewPrivileges, ProtectSystem, and a read-only view of the route
+#     catalog; only the TUN device and the helper's own state dir are writable.
+#
+# This unit is OPTIONAL and only installed when host-native strict/TUN is
+# wanted (see INSTALL.md, phase A6). The default stack does not enable it.
+[Unit]
+Description=vibelab-egress local strict/TUN helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=VIBELAB_EGRESS_REPO=/srv/workspace/vibelab-egress
+# The helper may pin only the configured one-shot listener (127.0.0.1:18081)
+# and only routes listed in the catalog file it is given.
+# The route catalog is owned by egressd (it validates the route when it
+# creates the one-shot session). The helper enforces the route-id FORMAT and
+# the upstream allowlist, so it cannot be pointed at an arbitrary route or
+# proxy. No static routes file is needed (it would go stale on provider
+# updates).
+ExecStart=/usr/bin/env python3 /srv/workspace/vibelab-egress/host/strict-helper/egress-tun-helper.py \
+    --socket /run/vibelab-egress/tun-helper.sock \
+    --allowed-upstreams 127.0.0.1:18081
+Restart=on-failure
+RestartSec=5
+User=root
+# The minimal reviewed capability grant for netns + TUN (spec 21.4).
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/run/vibelab-egress
+DeviceAllow=/dev/net/tun rw
+DevicePolicy=closed
+
+[Install]
+WantedBy=multi-user.target

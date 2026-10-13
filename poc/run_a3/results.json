@@ -1,0 +1,42 @@
+{
+  "checks": {
+    "config_catalog": {
+      "ok": true,
+      "detail": "mihomo=1.19.32, routes=4, ids=['blanc:FI-Helsinki-1', 'blanc:FI-Helsinki-2', 'direct', 'xeovo:US-New-York-1']"
+    },
+    "per_client_defaults": {
+      "ok": true,
+      "detail": "host=blanc:FI-Helsinki-1(NODE:FI-Helsinki-1) os=xeovo:US-New-York-1(NODE:US-New-York-1)"
+    },
+    "concurrent_oneshot": {
+      "ok": true,
+      "detail": "sess0->NODE:FI-Helsinki-1:ok | sess1->NODE:US-New-York-1:ok | sess2->NODE:FI-Helsinki-2:ok"
+    },
+    "provider_hot_reload": {
+      "ok": true,
+      "detail": "reloaded=True (reloaded), nodes_after=3, changed=['blanc:FI-Helsinki-3'], new_node_live=True, new_node_data_plane=NODE:FI-Helsinki-3"
+    },
+    "per_client_fallback": {
+      "ok": true,
+      "detail": "fallbacks=[{'client_id': 'host-main', 'from_route': 'blanc:FI-Helsinki-1', 'to_route': 'direct', 'reason': 'route_missing_after_provider_update'}], host=direct (direct data plane status=None), os=xeovo:US-New-York-1 (untouched)"
+    },
+    "domain_probe": {
+      "ok": true,
+      "detail": "route=blanc:FI-Helsinki-2, reachable=True, status=200, error=ok, latency_ms=83"
+    },
+    "doctor": {
+      "ok": true,
+      "detail": "ok=True, mihomo=up, routes=4"
+    }
+  },
+  "meta": {
+    "mihomo": "1.19.32",
+    "blanc_nodes": [
+      "FI-Helsinki-1",
+      "FI-Helsinki-2"
+    ],
+    "xeovo_nodes": [
+      "US-New-York-1"
+    ]
+  }
+}

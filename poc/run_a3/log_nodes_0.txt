@@ -1,0 +1,1 @@
+{"started": ["FI-Helsinki-1", "FI-Helsinki-2", "US-New-York-1"], "ports": {"FI-Helsinki-1": 22000, "FI-Helsinki-2": 22001, "US-New-York-1": 22002}}

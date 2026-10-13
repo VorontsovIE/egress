@@ -1,0 +1,10 @@
+{"dst": "203.0.113.1:80", "client": "('127.0.0.1', 47228)", "phase": "selected", "node": "FI-Helsinki-1", "ts": 1791652953.981402}
+{"dst": "203.0.113.1:80", "phase": "responded", "node": "FI-Helsinki-1", "ts": 1791652953.2485921}
+{"dst": "203.0.113.1:80", "client": "('127.0.0.1', 30069)", "phase": "selected", "node": "US-New-York-1", "ts": 1791652954.0579638}
+{"dst": "203.0.113.1:80", "phase": "responded", "node": "US-New-York-1", "ts": 1791652954.0623455}
+{"dst": "203.0.113.1:80", "client": "('127.0.0.1', 39600)", "phase": "selected", "node": "FI-Helsinki-1", "ts": 1791652959.8066802}
+{"dst": "203.0.113.1:80", "phase": "responded", "node": "FI-Helsinki-1", "ts": 1791652959.2497296}
+{"dst": "203.0.113.1:80", "client": "('127.0.0.1', 56116)", "phase": "selected", "node": "US-New-York-1", "ts": 1791652959.816157}
+{"dst": "203.0.113.1:80", "phase": "responded", "node": "US-New-York-1", "ts": 1791652959.8191352}
+{"dst": "203.0.113.1:80", "client": "('127.0.0.1', 48055)", "phase": "selected", "node": "FI-Helsinki-2", "ts": 1791652959.8227427}
+{"dst": "203.0.113.1:80", "phase": "responded", "node": "FI-Helsinki-2", "ts": 1791652959.8256228}

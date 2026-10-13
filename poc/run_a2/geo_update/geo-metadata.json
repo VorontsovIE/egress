@@ -1,0 +1,9 @@
+{
+  "geoip": {
+    "sha256": "efe60529ca30404864d360bb6da91556f6e28b091c3aea1073ed1d779b9ca057",
+    "size": 16583076,
+    "source": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/geoip.dat",
+    "updated_at": 1791652960.6318152,
+    "updated_at_iso": "2026-10-10T17:22:40Z"
+  }
+}

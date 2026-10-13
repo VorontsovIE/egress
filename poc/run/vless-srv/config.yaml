@@ -1,0 +1,30 @@
+mixed-port: 0
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9091
+secret: vless-srv-secret
+listeners:
+- name: vless-in
+  type: vless
+  port: 10817
+  listen: 127.0.0.1
+  users:
+  - username: u1
+    uuid: 11111111-2222-3333-4444-555555555555
+  certificate: /srv/workspace/vibelab-egress/poc/run/vless-srv/server.crt
+  private-key: /srv/workspace/vibelab-egress/poc/run/vless-srv/server.key
+proxies:
+- name: vless-upstream
+  type: socks5
+  server: 127.0.0.1
+  port: 18006
+  udp: true
+proxy-groups:
+- name: vless-out
+  type: select
+  proxies:
+  - vless-upstream
+  - DIRECT
+rules:
+- MATCH,vless-out

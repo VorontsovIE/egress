@@ -1,0 +1,12 @@
+{
+  "clients": {
+    "host-main": {
+      "mode": "proxy",
+      "route": "direct"
+    },
+    "openscience-main": {
+      "mode": "proxy",
+      "route": "xeovo:US-New-York-1"
+    }
+  }
+}

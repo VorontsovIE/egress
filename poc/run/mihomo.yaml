@@ -1,0 +1,206 @@
+mixed-port: 0
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+external-controller: 127.0.0.1:9090
+secret: poc-mihomo-secret
+profile:
+  store-selected: true
+  store-fake-ip: false
+geox-url:
+  geoip: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/geoip.dat
+  geosite: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/geosite.dat
+  mmdb: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/GeoLite2-ASN.mmdb
+  asn: https://github.com/MetaCubeX/meta-rules-dat/releases/download/release/GeoLite2-ASN.mmdb
+geodata-mode: true
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter:
+  - lan
+  - lan.domain
+  - '*.local'
+  - localhost.pt
+  - stun.*
+  default-nameserver: &id001
+  - 223.5.5.5
+  - 8.8.8.8
+  nameserver: *id001
+  fallback:
+  - https://1.1.1.1/dns-query
+  - https://dns.google/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+listeners:
+- name: default-proxy
+  type: socks
+  port: 18080
+  listen: 127.0.0.1
+  udp: true
+  users:
+  - username: host-user
+    password: host-pass
+  - username: os-user
+    password: os-pass
+- name: oneshot-proxy
+  type: socks
+  port: 18081
+  listen: 127.0.0.1
+  udp: true
+  users:
+  - username: os_0
+    password: os-pass-0
+  - username: os_1
+    password: os-pass-1
+  - username: os_2
+    password: os-pass-2
+  - username: os_3
+    password: os-pass-3
+  - username: os_4
+    password: os-pass-4
+  - username: os_5
+    password: os-pass-5
+  - username: os_6
+    password: os-pass-6
+  - username: os_7
+    password: os-pass-7
+proxies:
+- name: vless-node
+  type: vless
+  server: 127.0.0.1
+  port: 10817
+  uuid: 11111111-2222-3333-4444-555555555555
+  udp: true
+  tls: true
+  skip-cert-verify: true
+- name: wg-node
+  type: wireguard
+  server: 127.0.0.1
+  port: 51820
+  ip: 10.66.0.2
+  private-key: mMcnJSmbCRDGSYcSFjkgkoV2vXnY0Dn8c7ReOoMzAkI=
+  public-key: 5XULc2Cq2KjHC3KSqT2csl3u41atcfhg+VBqMjwkWj4=
+  allowed-ips:
+  - 0.0.0.0/0
+  udp: true
+  mtu: 1420
+proxy-providers:
+  blanc:
+    type: file
+    path: /srv/workspace/vibelab-egress/poc/run/providers/blanc.yaml
+  xeovo:
+    type: file
+    path: /srv/workspace/vibelab-egress/poc/run/providers/xeovo.yaml
+proxy-groups:
+- name: host-main
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: openscience-main
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_0
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_1
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_2
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_3
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_4
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_5
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_6
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+- name: os_7
+  type: select
+  proxies:
+  - DIRECT
+  - vless-node
+  - wg-node
+  use:
+  - blanc
+  - xeovo
+rules:
+- GEOIP,LAN,DIRECT,no-resolve
+- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+- IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+- IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+- IN-USER,host-user,host-main
+- IN-USER,os-user,openscience-main
+- IN-USER,os_0,os_0
+- IN-USER,os_1,os_1
+- IN-USER,os_2,os_2
+- IN-USER,os_3,os_3
+- IN-USER,os_4,os_4
+- IN-USER,os_5,os_5
+- IN-USER,os_6,os_6
+- IN-USER,os_7,os_7
+- MATCH,DIRECT

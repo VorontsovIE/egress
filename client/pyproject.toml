@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibelab-egress-client"
+version = "0.1.0"
+description = "vibelab-egress client package (egressctl + egress-run), stdlib-only"
+requires-python = ">=3.11"
+# Dependency-free on purpose: the same package must install in a bare host
+# and in a gVisor/OpenScience container without a package index.
+dependencies = []
+
+[project.scripts]
+egressctl = "vibelab_egress_client.egressctl:main"
+egress-run = "vibelab_egress_client.egress_run:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

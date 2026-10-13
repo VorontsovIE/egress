@@ -1,0 +1,2 @@
+vless://00000000-0000-4000-8000-000000000001@198.51.100.60:443?encryption=none&security=reality&pbk=fake-reality-pubkey-do-not-use&sni=vless.example.com&fp=chrome&type=tcp&flow=xtls-rprx-vision
+vless://00000000-0000-4000-8000-000000000002@198.51.100.61:443?encryption=none&security=tls&sni=tls.example.com&type=tcp

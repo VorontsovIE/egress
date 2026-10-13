@@ -1,0 +1,11 @@
+proxies:
+- name: xeovo-US-NY-1
+  type: socks5
+  server: 127.0.0.1
+  port: 18004
+  udp: true
+- name: xeovo-DE-FRA-1
+  type: socks5
+  server: 127.0.0.1
+  port: 18005
+  udp: true

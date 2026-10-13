@@ -1,0 +1,48 @@
+{
+  "checks": {
+    "config_validation": {
+      "ok": true,
+      "detail": "version=1.19.32, groups=['host-main', 'openscience-main', 'os_0', 'os_1', 'os_2', 'os_3'], rules=13, provider_nodes=['blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'xeovo-US-New-York-1']"
+    },
+    "node_collisions": {
+      "ok": true,
+      "detail": "adapter_rejects_dup=True, live_nodes=3 unique=True (mihomo silently loads dupes; adapter guards it)"
+    },
+    "client_selector_isolation": {
+      "ok": true,
+      "detail": "host.now=blanc-FI-Helsinki-1 (body NODE:FI-Helsinki-1), os.now=xeovo-US-New-York-1 (body NODE:US-New-York-1)"
+    },
+    "direct_route": {
+      "ok": true,
+      "detail": "DIRECT status=None reason='transport-error: timed out' (no node response expected)"
+    },
+    "concurrent_oneshot": {
+      "ok": true,
+      "detail": "os_0->NODE:FI-Helsinki-1:ok | os_1->NODE:US-New-York-1:ok | os_2->NODE:FI-Helsinki-2:ok"
+    },
+    "mapping_scale": {
+      "ok": true,
+      "detail": "rules with 300 nodes=13, rules with 3 nodes=13 (must be equal; IN-USER count is fixed)"
+    },
+    "geo_update": {
+      "ok": true,
+      "detail": "geo-auto-update=True, interval=24, mihomo_geo_files=True, updated=True, metadata=True, lkg=True, mihomo_still_up=True"
+    },
+    "docker_bypass_precedence": {
+      "ok": true,
+      "detail": "docker_cidr_rule_idx=5 < inuser_idx=6: True; docker dst via proxy -> status=None (DIRECT, no node response)"
+    }
+  },
+  "meta": {
+    "mihomo": "1.19.32",
+    "blanc_nodes": [
+      "FI-Helsinki-1",
+      "FI-Helsinki-2"
+    ],
+    "xeovo_nodes": [
+      "US-New-York-1"
+    ],
+    "rules_small": 13,
+    "rules_big": 13
+  }
+}

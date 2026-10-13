@@ -1,0 +1,13 @@
+# Vibelab-egress: keep the generated Docker CIDR artifact fresh (spec 35).
+# Triggers: boot + every 10 minutes (covers Docker restarts and new networks).
+[Unit]
+Description=vibelab-egress Docker CIDR sync timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

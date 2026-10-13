@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""egress-hostctl -- narrow host-side control CLI for vibelab-egress (phase A1).
+
+Security invariants (TECH_SPEC.md sections 33-38):
+  * Python 3 standard library only.
+  * No arbitrary shell / command execution. The only external commands ever
+    run are a fixed, hardcoded allowlist: `docker` (specific subcommands).
+    Every subprocess.run uses a fixed argv list; no shell=True, no os.system.
+  * No secrets in any output.
+  * Fixed operations only. Unknown subcommand -> stderr + exit 2.
+    There is no shell/exec/run/cmd/--command flag anywhere.
+
+Subcommands:
+  sync-docker-cidrs   collect Docker networks, write generated CIDR artifact
+  status              filtered compose status for the fixed project
+  logs <service>      filtered logs for one of the two fixed services
+  deploy / redeploy   docker compose up -d [--force-recreate] on the fixed path
+  run-acceptance      invoke sibling egress-host-test, pass through its report
+  install-client <t>  copy a pre-built client bundle to a fixed target
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+PROJ = "vibelab-egress"
+SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
+DEFAULT_ROOT = "/home/vibelab/openscience/egress"
+DEFAULT_REPO = "/srv/workspace/vibelab-egress"
+HOST_INSTALL_DIR = "/etc/vibelab-egress"
+DEFAULT_CLIENT_BUNDLE_DIR = "/home/vibelab/openscience/egress/client-bundle"
+# Docker >= 28 removed .Subnet/.Gateway from the `network ls` template context
+# (a network may carry multiple IPAM configs, so they are no longer flattened).
+# We therefore list name/id/driver via `ls` and read the IPAM config per network
+# via `network inspect` (stable across all Docker versions).
+DOCKER_LS_FORMAT = "{{.Name}}\t{{.ID}}\t{{.Driver}}"
+DOCKER_INSPECT_IPAM_FORMAT = "{{range .IPAM.Config}}{{.Subnet}}\t{{.Gateway}}\n{{end}}"
+REDACT = [
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}"),
+    re.compile(r"(?i)\b(secret|token|api_?key|password|passwd|auth)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|\S+)"),
+]
+
+
+def root_dir():
+    return os.environ.get("VIBELAB_EGRESS_ROOT", DEFAULT_ROOT)
+
+
+def repo_dir():
+    return os.environ.get("VIBELAB_EGRESS_REPO", DEFAULT_REPO)
+
+
+def client_bundle_dir():
+    return os.environ.get("VIBELAB_EGRESS_CLIENT_BUNDLE_DIR", DEFAULT_CLIENT_BUNDLE_DIR)
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def err(msg, code=1):
+    sys.stderr.write("egress-hostctl: %s\n" % msg)
+    sys.exit(code)
+
+
+def sha8(data):
+    return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()[:8]
+
+
+def run_fixed(argv, timeout=180):
+    """Run a fixed, hardcoded argv list. No shell, no user-controlled argv."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", "command not found: %s" % argv[0]
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout: %s" % argv[0]
+
+
+def redact(line):
+    for rx in REDACT:
+        line = rx.sub(lambda m: m.group(0).split(" ", 1)[0] + "=[REDACTED]"
+                      if " " in m.group(0) else "[REDACTED]", line)
+    return line
+
+
+def compose_path(args):
+    if getattr(args, "compose", None):
+        c = os.path.realpath(args.compose)
+    else:
+        c = os.path.realpath(os.path.join(repo_dir(), "compose.yaml"))
+    root = os.path.realpath(repo_dir())
+    if not (c == root or c.startswith(root + os.sep)):
+        err("compose path outside allowed repo root %s (path traversal rejected)" % root, 2)
+    if not os.path.isfile(c):
+        err("compose file not found: %s" % c, 2)
+    return c
+
+
+# --------------------------------------------------------------------------
+# sync-docker-cidrs
+# --------------------------------------------------------------------------
+
+def collect_networks(args):
+    if getattr(args, "offline", None):
+        nets = []
+        with open(args.offline, "r", encoding="utf-8") as f:
+            for ln, raw in enumerate(f, 1):
+                raw = raw.rstrip("\n")
+                if not raw.strip() or raw.lstrip().startswith("#"):
+                    continue
+                parts = raw.split("\t")
+                if len(parts) != 5:
+                    err("offline fixture line %d: expected 5 tab-separated fields" % ln, 2)
+                name, nid, driver, subnet, gateway = parts
+                nets.append({"name": name, "id": nid, "driver": driver,
+                             "subnet": subnet, "gateway": gateway})
+        return nets, "offline:%s" % os.path.realpath(args.offline)
+    dc = getattr(args, "docker_cmd", None) or "docker"
+    rc, out, e = run_fixed([dc, "network", "ls", "--format", DOCKER_LS_FORMAT])
+    if rc != 0:
+        err("docker network ls failed (rc=%d): %s" % (rc, e.strip()[:200]))
+    nets = []
+    for raw in out.splitlines():
+        raw = raw.rstrip()
+        if not raw:
+            continue
+        parts = raw.split("\t")
+        if len(parts) < 3:
+            continue
+        name, nid, driver = parts[0], parts[1], parts[2]
+        # Subnet/gateway come from `network inspect` (Docker >= 28 dropped them
+        # from the `ls` template context). A network can carry several IPAM
+        # configs; we take the first one (the primary subnet).
+        subnet, gateway = "", ""
+        rc2, out2, e2 = run_fixed(
+            [dc, "network", "inspect", "--format", DOCKER_INSPECT_IPAM_FORMAT, name])
+        if rc2 == 0:
+            for line in out2.splitlines():
+                line = line.rstrip()
+                if not line:
+                    continue
+                ipam = line.split("\t")
+                subnet = ipam[0] if len(ipam) > 0 else ""
+                gateway = ipam[1] if len(ipam) > 1 else ""
+                break
+        nets.append({"name": name, "id": nid, "driver": driver,
+                     "subnet": subnet, "gateway": gateway})
+    return nets, "docker:%s" % dc
+
+
+def yaml_scalar(v):
+    if v is None or v == "":
+        return "''"
+    s = str(v)
+    if any(ch in s for ch in ":#{}[]&*!|>'\"%@`") or s != s.strip() or s == "":
+        return "'" + s.replace("'", "''") + "'"
+    return s
+
+
+def emit_cidrs(nets, source, ts):
+    lines = [
+        "# generated by egress-hostctl sync-docker-cidrs -- do not edit",
+        "generated_at: %s" % ts,
+        "source: %s" % source,
+        "network_count: %d" % len(nets),
+        "networks:",
+    ]
+    for n in nets:
+        lines.append("- name: %s" % yaml_scalar(n["name"]))
+        lines.append("  id: %s" % yaml_scalar(n["id"]))
+        lines.append("  driver: %s" % yaml_scalar(n["driver"]))
+        lines.append("  subnet: %s" % yaml_scalar(n["subnet"]))
+        lines.append("  gateway: %s" % yaml_scalar(n["gateway"]))
+    return "\n".join(lines) + "\n"
+
+
+def cmd_sync(args):
+    nets, source = collect_networks(args)
+    ts = now_iso()
+    out = args.out or os.path.join(root_dir(), "generated", "docker-cidrs.yaml")
+    out = os.path.realpath(out)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(emit_cidrs(nets, source, ts))
+    os.chmod(out, 0o600)
+    print(json.dumps({"ok": True, "artifact": out, "network_count": len(nets),
+                      "source": source, "generated_at": ts}))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# status
+# --------------------------------------------------------------------------
+
+def parse_compose_ps(out):
+    out = out.strip()
+    if not out:
+        return []
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = data.get("services") or data.get("containers") or []
+    svcs = []
+    for c in data:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name") or c.get("service") or c.get("Name") or ""
+        state = c.get("state") or c.get("Status") or c.get("status") or "unknown"
+        health = c.get("health") or c.get("Health") or ""
+        if isinstance(health, dict):
+            health = health.get("Status") or health.get("status") or ""
+        svcs.append({"service": name, "state": str(state), "health": str(health)})
+    return svcs
+
+
+def cmd_status(args):
+    if getattr(args, "offline", None):
+        with open(args.offline, "r", encoding="utf-8") as f:
+            raw = f.read()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = parse_compose_ps(raw)
+        if isinstance(data, dict):
+            data = data.get("services", data)
+        print(json.dumps({"project": PROJ, "source": "offline:%s" % args.offline,
+                          "services": data}, indent=2))
+        return 0
+    c = compose_path(args)
+    rc, out, e = run_fixed(["docker", "compose", "-f", c, "ps", "--format", "json"])
+    if rc != 0:
+        print(json.dumps({"ok": False, "error": e.strip()[:300] or ("rc=%d" % rc)}))
+        return rc
+    print(json.dumps({"project": PROJ, "services": parse_compose_ps(out)}, indent=2))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# logs
+# --------------------------------------------------------------------------
+
+def cmd_logs(args):
+    svc = args.service
+    if svc not in SERVICES:
+        err("service must be one of %s (got %r)" % (list(SERVICES), svc), 2)
+    if args.offline:
+        with open(args.offline, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        if args.tail is not None:
+            lines = lines[-args.tail:]
+        for ln in lines:
+            print(redact(ln))
+        return 0
+    c = compose_path(args)
+    argv = ["docker", "compose", "-f", c, "logs", "--no-color", svc]
+    if args.tail is not None:
+        argv += ["--tail", str(args.tail)]
+    rc, out, e = run_fixed(argv)
+    if rc != 0:
+        err("docker compose logs failed (rc=%d): %s" % (rc, e.strip()[:200]))
+    for ln in out.splitlines():
+        print(redact(ln))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# deploy / redeploy
+# --------------------------------------------------------------------------
+
+def cmd_deploy(args, force):
+    c = compose_path(args)
+    argv = ["docker", "compose", "-f", c, "up", "-d"]
+    if force:
+        argv.append("--force-recreate")
+    rc, out, e = run_fixed(argv, timeout=600)
+    if rc != 0:
+        err("deploy failed (rc=%d): %s" % (rc, (e or out).strip()[:300]))
+    print(json.dumps({"ok": True, "operation": "redeploy" if force else "deploy",
+                      "compose": c}))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# run-acceptance
+# --------------------------------------------------------------------------
+
+def cmd_run_acceptance(args):
+    here = os.path.dirname(os.path.realpath(__file__))
+    test = os.path.join(here, "egress-host-test")
+    if not os.path.isfile(test):
+        err("sibling egress-host-test not found at %s" % test, 2)
+    rc, out, e = run_fixed([sys.executable, test], timeout=900)
+    if out:
+        sys.stdout.write(out if out.endswith("\n") else out + "\n")
+    if e:
+        sys.stderr.write(e)
+    return rc
+
+
+# --------------------------------------------------------------------------
+# install-client
+# --------------------------------------------------------------------------
+
+def _copy_fixed(src, dst):
+    shutil.copy2(src, dst)
+    os.chmod(dst, 0o600)
+
+
+def cmd_install_client(args):
+    target = args.target
+    if target == "host":
+        dest = HOST_INSTALL_DIR
+    elif target == "openscience":
+        dest = client_bundle_dir()
+    else:
+        err("target must be 'host' or 'openscience' (got %r)" % target, 2)
+    bundle = os.path.realpath(args.bundle)
+    if not os.path.isdir(bundle):
+        err("bundle directory not found: %s" % args.bundle, 2)
+    os.makedirs(dest, exist_ok=True)
+    os.chmod(dest, 0o700)
+    shutil.copytree(bundle, dest, dirs_exist_ok=True, copy_function=_copy_fixed)
+    nfiles = sum(len(fs) for _, _, fs in os.walk(dest))
+    print(json.dumps({"ok": True, "target": target, "dest": dest,
+                      "files": nfiles, "perms": "dir=0700,file=0600"}))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# main
+# --------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="egress-hostctl", add_help=True,
+                                description="narrow host control CLI (fixed operations only)")
+    sub = p.add_subparsers(dest="cmd")
+
+    s = sub.add_parser("sync-docker-cidrs", help="write generated Docker CIDR artifact")
+    s.add_argument("--out")
+    s.add_argument("--docker-cmd", default="docker")
+    s.add_argument("--offline")
+    s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("status", help="filtered compose status")
+    s.add_argument("--compose")
+    s.add_argument("--offline")
+    s.set_defaults(fn=cmd_status)
+
+    s = sub.add_parser("logs", help="filtered logs for one fixed service")
+    s.add_argument("service")
+    s.add_argument("--tail", type=int, default=None)
+    s.add_argument("--compose")
+    s.add_argument("--offline")
+    s.set_defaults(fn=cmd_logs)
+
+    s = sub.add_parser("deploy", help="docker compose up -d (fixed compose path)")
+    s.add_argument("--compose")
+    s.set_defaults(fn=lambda a: cmd_deploy(a, False))
+
+    s = sub.add_parser("redeploy", help="docker compose up -d --force-recreate")
+    s.add_argument("--compose")
+    s.set_defaults(fn=lambda a: cmd_deploy(a, True))
+
+    s = sub.add_parser("run-acceptance", help="run sibling egress-host-test")
+    s.set_defaults(fn=cmd_run_acceptance)
+
+    s = sub.add_parser("install-client", help="install pre-built client bundle to fixed target")
+    s.add_argument("target", choices=["host", "openscience"])
+    s.add_argument("--bundle", required=True)
+    s.set_defaults(fn=cmd_install_client)
+
+    return p
+
+
+def main(argv=None):
+    p = build_parser()
+    a = p.parse_args(argv)
+    if not getattr(a, "fn", None):
+        p.print_usage(sys.stderr)
+        err("missing or unknown subcommand (allowed: sync-docker-cidrs, status, logs, "
+            "deploy, redeploy, run-acceptance, install-client)", 2)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

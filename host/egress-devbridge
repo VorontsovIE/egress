@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""egress-devbridge -- narrow dev/test bridge for vibelab-egress (A1).
+
+A small stdlib HTTP server that lets the OpenScience agent request a FIXED
+set of host operations (spec section 33.2) without any arbitrary shell
+access. It is the "bootstrap-dev-access" mechanism: an administrator starts
+it once (or via host/units/vibelab-egress-devbridge.service), and the agent
+can then:
+
+    POST /  {"op":"deploy"}
+    POST /  {"op":"redeploy"}
+    POST /  {"op":"status"}
+    POST /  {"op":"logs","service":"vibelab-egress-mihomo","tail":100}
+    POST /  {"op":"run-acceptance"}
+    POST /  {"op":"sync-docker-cidrs"}
+    POST /  {"op":"install-client","target":"host"|"openscience","bundle":"<path>"}
+
+Security invariants:
+  * Python 3 standard library only.
+  * Fixed operations only. Any other op, non-JSON body, or unexpected
+    free-form field -> HTTP 400. There is no command payload anywhere.
+  * Bearer-token auth from --token-file; wrong/missing token -> 401.
+  * Refuses to bind 0.0.0.0 or a public IP unless --allow-public is passed
+    explicitly (default: only loopback / private binds).
+  * Delegates to the sibling egress-hostctl (fixed argv, no shell).
+  * Logs op names only -- never request bodies or secrets.
+"""
+
+import argparse
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+HOSTCTL = os.path.join(HERE, "egress-hostctl")
+ALLOWED_OPS = {
+    "deploy", "redeploy", "status", "logs",
+    "run-acceptance", "sync-docker-cidrs", "install-client",
+}
+ALLOWED_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
+ALLOWED_TARGETS = ("host", "openscience")
+# fields allowed per op, beyond "op" itself
+ALLOWED_FIELDS = {
+    "deploy": set(),
+    "redeploy": set(),
+    "status": set(),
+    "logs": {"service", "tail"},
+    "run-acceptance": set(),
+    "sync-docker-cidrs": set(),
+    "install-client": {"target", "bundle"},
+}
+REDACT = [
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}"),
+    re.compile(r"(?i)\b(secret|token|api_?key|password|passwd)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|\S+)"),
+]
+
+
+def redact(text):
+    for rx in REDACT:
+        text = rx.sub("[REDACTED]", text)
+    return text
+
+
+def log_line(op, code, detail=""):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(json.dumps({"ts": ts, "op": op, "http": code, "detail": redact(detail)}),
+          flush=True)
+
+
+def is_local_ip(ip):
+    if ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private or addr.is_link_local
+
+
+def run_hostctl(argv, timeout=900):
+    """Delegate to egress-hostctl with a fixed argv. No shell."""
+    try:
+        p = subprocess.run([sys.executable, HOSTCTL] + argv,
+                           capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", f"egress-hostctl not found at {HOSTCTL}"
+    except subprocess.TimeoutExpired:
+        return 124, "", "egress-hostctl timed out"
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "egress-devbridge/0.1"
+
+    def log_message(self, fmt, *args):  # silence default stderr logging
+        pass
+
+    def _send(self, code, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self._send(200, {"ok": True})
+            return
+        self._send(405, {"error": "use POST with a JSON body"})
+
+    def do_POST(self):
+        # ---- auth ----
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:].strip() != self.server.token:
+            log_line("auth-fail", 401)
+            self._send(401, {"error": "invalid or missing bearer token"})
+            return
+        # ---- body ----
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b""
+            data = json.loads(raw.decode()) if raw else None
+        except (ValueError, UnicodeDecodeError):
+            log_line("bad-body", 400)
+            self._send(400, {"error": "body must be a JSON object"})
+            return
+        if not isinstance(data, dict) or "op" not in data:
+            log_line("bad-body", 400)
+            self._send(400, {"error": "body must be a JSON object with 'op'"})
+            return
+        op = data["op"]
+        if op not in ALLOWED_OPS:
+            log_line(f"op={op}", 400)
+            self._send(400, {"error": f"unknown op {op!r}; allowed: {sorted(ALLOWED_OPS)}"})
+            return
+        extra = set(data) - {"op"}
+        unknown = extra - ALLOWED_FIELDS[op]
+        if unknown:
+            log_line(f"op={op}", 400, f"unknown fields {sorted(unknown)}")
+            self._send(400, {"error": f"unknown field(s) for {op}: {sorted(unknown)}"})
+            return
+
+        # ---- dispatch (fixed argv per op) ----
+        if op in ("deploy", "redeploy"):
+            rc, out, e = run_hostctl([op], timeout=1200)
+        elif op == "status":
+            rc, out, e = run_hostctl(["status"])
+        elif op == "logs":
+            svc = data.get("service")
+            if svc not in ALLOWED_SERVICES:
+                self._send(400, {"error": f"service must be one of {list(ALLOWED_SERVICES)}"})
+                return
+            argv = ["logs", svc]
+            if data.get("tail") is not None:
+                tail = int(data["tail"])
+                argv += ["--tail", str(tail)]
+            rc, out, e = run_hostctl(argv)
+        elif op == "run-acceptance":
+            rc, out, e = run_hostctl(["run-acceptance"], timeout=1800)
+        elif op == "sync-docker-cidrs":
+            rc, out, e = run_hostctl(["sync-docker-cidrs"])
+        elif op == "install-client":
+            target = data.get("target")
+            if target not in ALLOWED_TARGETS:
+                self._send(400, {"error": f"target must be one of {list(ALLOWED_TARGETS)}"})
+                return
+            bundle = data.get("bundle", "")
+            if not bundle or not os.path.isabs(bundle):
+                self._send(400, {"error": "bundle must be an absolute path"})
+                return
+            rc, out, e = run_hostctl(["install-client", target, "--bundle", bundle])
+        else:  # pragma: no cover
+            rc, out, e = 2, "", "unreachable"
+
+        log_line(f"op={op}", 200 if rc == 0 else 500)
+        payload = {"ok": rc == 0, "exit_code": rc}
+        if out.strip():
+            try:
+                payload["result"] = json.loads(out)
+            except ValueError:
+                payload["result"] = redact(out.strip()[-4000:])
+        if e.strip():
+            payload["stderr"] = redact(e.strip()[-2000:])
+        self._send(200 if rc == 0 else 500, payload)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="egress-devbridge")
+    ap.add_argument("--bind", default="172.17.0.1",
+                    help="interface to bind (default: docker gateway 172.17.0.1)")
+    ap.add_argument("--port", type=int, default=9099)
+    ap.add_argument("--token-file", default="/etc/vibelab-egress/secrets/devbridge.token")
+    ap.add_argument("--allow-public", action="store_true",
+                    help="explicitly allow binding a public IP (NOT recommended)")
+    args = ap.parse_args(argv)
+
+    if not is_local_ip(args.bind) and not args.allow_public:
+        print(f"egress-devbridge: refusing to bind public IP {args.bind!r}; "
+              "pass --allow-public to override (not recommended)", file=sys.stderr)
+        return 2
+    try:
+        with open(args.token_file, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+    except OSError as e:
+        print(f"egress-devbridge: cannot read token file {args.token_file}: {e}",
+              file=sys.stderr)
+        return 3
+    if not token:
+        print("egress-devbridge: token file is empty", file=sys.stderr)
+        return 3
+
+    os.environ.setdefault("VIBELAB_EGRESS_REPO",
+                          os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress"))
+    server = ThreadingHTTPServer((args.bind, args.port), Handler)
+    server.token = token
+    print(json.dumps({"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "msg": "egress-devbridge listening",
+                      "bind": args.bind, "port": args.port}), flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

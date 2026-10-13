@@ -1,0 +1,44 @@
+DEBUG: wgserver: 2026/10/10 00:23:00 UAPI: Updating listen port
+DEBUG: wgserver: 2026/10/10 00:23:00 UAPI: Updating private key
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: encryption worker 1 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: decryption worker 1 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: encryption worker 2 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: handshake worker 2 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: TUN reader - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: handshake worker 1 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: event worker - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: decryption worker 2 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 peer(6RIJ…0rzQ) - UAPI: Created
+DEBUG: wgserver: 2026/10/10 00:23:00 peer(6RIJ…0rzQ) - UAPI: Adding allowedip
+WG_SERVER_OK public_key=5XULc2Cq2KjHC3KSqT2csl3u41atcfhg+VBqMjwkWj4= port=51820
+DEBUG: wgserver: 2026/10/10 00:23:00 Interface up requested
+DEBUG: wgserver: 2026/10/10 00:23:00 UDP bind has been updated
+DEBUG: wgserver: 2026/10/10 00:23:00 peer(6RIJ…0rzQ) - Starting
+DEBUG: wgserver: 2026/10/10 00:23:00 Interface state was Down, requested Up, now Up
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: receive incoming v6 - started
+DEBUG: wgserver: 2026/10/10 00:23:00 peer(6RIJ…0rzQ) - Routine: sequential receiver - started
+DEBUG: wgserver: 2026/10/10 00:23:00 peer(6RIJ…0rzQ) - Routine: sequential sender - started
+DEBUG: wgserver: 2026/10/10 00:23:00 Routine: receive incoming v4 - started
+DEBUG: wgserver: 2026/10/10 00:23:07 peer(6RIJ…0rzQ) - Received handshake initiation
+DEBUG: wgserver: 2026/10/10 00:23:07 peer(6RIJ…0rzQ) - Sending handshake response
+2026/10/10 00:23:07 FWD NewConnection src=10.66.0.2:60484 dst=203.0.113.1:18999 target=127.0.0.1:18999
+2026/10/10 00:23:07 FWD dialed 127.0.0.1:18999, relaying
+2026/10/10 00:23:07 FWD client->echo 86 bytes
+2026/10/10 00:23:07 FWD echo->client 145 bytes
+2026/10/10 00:23:07 FWD echo->client 54 bytes
+2026/10/10 00:23:07 FWD echo read end: EOF
+2026/10/10 00:23:07 FWD client read end: EOF
+DEBUG: wgserver: 2026/10/10 00:23:07 Device closing
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: TUN reader - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: event worker - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: receive incoming v4 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: receive incoming v6 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 peer(6RIJ…0rzQ) - Stopping
+DEBUG: wgserver: 2026/10/10 00:23:07 peer(6RIJ…0rzQ) - Routine: sequential sender - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 peer(6RIJ…0rzQ) - Routine: sequential receiver - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Device closed
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: decryption worker 2 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: handshake worker 1 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: decryption worker 1 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: handshake worker 2 - stopped
+DEBUG: wgserver: 2026/10/10 00:23:07 Routine: encryption worker 1 - stopped

@@ -1,0 +1,32 @@
+# BlancVPN subscription fixture -- Clash/Mihomo-compatible YAML.
+# All node addresses and keys are FAKE (do-not-use placeholders); this file
+# exists to exercise the adapter's parsing + normalization, not to provide a
+# working subscription.
+proxies:
+  - name: FI - Helsinki 1
+    type: socks5
+    server: 198.51.100.10
+    port: 1080
+    udp: true
+  - name: FI - Helsinki 2
+    type: socks5
+    server: 198.51.100.11
+    port: 1080
+    udp: true
+  - name: NL - Ams 1
+    type: wireguard
+    server: 198.51.100.20
+    port: 51820
+    ip: 10.66.0.2
+    private-key: fake-private-key-do-not-use-0001
+    public-key: fake-public-key-do-not-use-0001
+    allowed-ips:
+      - 0.0.0.0/0
+    persistent-keepalive: 25
+  - name: DE - FRA 1
+    type: vless
+    server: 198.51.100.30
+    port: 443
+    uuid: 00000000-0000-4000-8000-000000000001
+    tls: true
+    servername: fra1.example.com

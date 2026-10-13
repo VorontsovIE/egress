@@ -1,0 +1,95 @@
+{
+  "checks": {
+    "P01_controller_version": {
+      "ok": true,
+      "detail": "status=200 ver={'meta': True, 'version': '1.19.32'}"
+    },
+    "P02_controller_requires_auth": {
+      "ok": true,
+      "detail": "no-auth status=401"
+    },
+    "P03_selector_host-main": {
+      "ok": true,
+      "detail": "type=Selector all=['DIRECT', 'vless-node', 'wg-node', 'blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'blanc-NL-Ams-1', 'xeovo-US-NY-1', 'xeovo-DE-FRA-1']"
+    },
+    "P03_selector_openscience-main": {
+      "ok": true,
+      "detail": "type=Selector all=['DIRECT', 'vless-node', 'wg-node', 'blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'blanc-NL-Ams-1', 'xeovo-US-NY-1', 'xeovo-DE-FRA-1']"
+    },
+    "P04_oneshot_slot_groups": {
+      "ok": true,
+      "detail": "found 8 slot groups"
+    },
+    "P05_set_default_host": {
+      "ok": true,
+      "detail": "set=204 now=blanc-FI-Helsinki-1"
+    },
+    "P06_client_isolation": {
+      "ok": true,
+      "detail": "os.now=xeovo-US-NY-1 host.now=blanc-FI-Helsinki-1"
+    },
+    "P07_default_proxy_host": {
+      "ok": true,
+      "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 61\\r\\n\\r\\nNODE:blanc-FI-Helsinki-1\\ndst:203.0.1'"
+    },
+    "P08_default_proxy_openscience": {
+      "ok": true,
+      "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 55\\r\\n\\r\\nNODE:xeovo-US-NY-1\\ndst:203.0.113.1:8'"
+    },
+    "P09_oneshot_route": {
+      "ok": true,
+      "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 61\\r\\n\\r\\nNODE:blanc-FI-Helsinki-1\\ndst:203.0.1'"
+    },
+    "P10_oneshot_no_default_change": {
+      "ok": true,
+      "detail": "host=blanc-FI-Helsinki-1 os=xeovo-US-NY-1"
+    },
+    "P11_concurrent_oneshot": {
+      "ok": true,
+      "detail": "statuses=['200', '200', '?'] direct_body='' nodes=['blanc-FI-Helsinki-1', 'xeovo-DE-FRA-1']"
+    },
+    "P12_harddirect_precedence": {
+      "ok": true,
+      "detail": "hard-direct@1 before IN-USER@5"
+    },
+    "P13_provider_update_api": {
+      "ok": true,
+      "detail": "status=204"
+    },
+    "P14_node_delay_api": {
+      "ok": true,
+      "detail": "status=200 d={'delay': 12}"
+    },
+    "P15_update_preserves_selection": {
+      "ok": true,
+      "detail": "after update host.now=blanc-FI-Helsinki-1"
+    },
+    "P16_geoip_rules_loaded": {
+      "ok": true,
+      "detail": "geoip rules=1 total=16"
+    },
+    "P17_dns_query": {
+      "ok": true,
+      "detail": "status=200"
+    },
+    "P18_mapping_scale": {
+      "ok": true,
+      "detail": "300 nodes -> 39 rules, 1 node -> 39, expected 39 (independent of node count)"
+    },
+    "P19_client_token_no_mihomo_api": {
+      "ok": true,
+      "detail": "client-token on mihomo api status=401"
+    },
+    "P20_vless_e2e": {
+      "ok": true,
+      "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 56\\r\\n\\r\\nNODE:vless-upstream\\ndst:203.0.113.1:80\\nclient:127.0.0.1\\n'"
+    },
+    "P21_wireguard_e2e": {
+      "ok": true,
+      "detail": "status=200 body='HTTP/1.0 200 OK\\r\\nServer: BaseHTTP/0.6 Python/3.11.17\\r\\nDate: Sat, 10 Oct 2026 00:23:07 GMT\\r\\nContent-Type: application/json\\r\\nContent-Length: 54\\r\\n\\r\\n{\"src_ip\": \"127'"
+    }
+  },
+  "meta": {
+    "mihomo_version": "1.19.32"
+  }
+}

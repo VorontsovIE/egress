@@ -1,0 +1,25 @@
+# Vibelab-egress: narrow dev/test bridge (spec section 33.2).
+# The OpenScience agent may request only the fixed operations implemented
+# in egress-devbridge; there is no arbitrary host command path.
+[Unit]
+Description=vibelab-egress narrow dev/test bridge
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=simple
+Environment=VIBELAB_EGRESS_REPO=/srv/workspace/vibelab-egress
+# Bind to the Docker bridge gateway so container clients (OpenScience) can
+# reach it; the unit refuses public binds by default in the tool itself.
+ExecStart=/usr/bin/env python3 /srv/workspace/vibelab-egress/host/egress-devbridge \
+    --bind 172.17.0.1 --port 9099 \
+    --token-file /etc/vibelab-egress/secrets/devbridge.token
+Restart=on-failure
+RestartSec=5
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/vibelab/openscience/egress
+
+[Install]
+WantedBy=multi-user.target

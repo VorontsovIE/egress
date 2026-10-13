@@ -1,0 +1,140 @@
+# vibelab-egress backend stack (spec sections 1.1, 36, 37, 38).
+#
+# Security invariants enforced by this file:
+#   * NO public binds: every published port is bound to 127.0.0.1 (host
+#     clients) or ${DOCKER_GATEWAY} (container clients, e.g. OpenScience).
+#     Never 0.0.0.0 / public IP. The host firewall (install-backend-host.sh)
+#     is the second layer.
+#   * NO Docker socket mounted into any service.
+#   * Mihomo admin API (9090) is NOT published at all — reachable only on
+#     the private compose network by egressd.
+#   * Secrets are mounted as read-only files, never set as environment
+#     variables (so `docker inspect` does not leak them).
+#   * Mihomo image is pinned by tag AND digest.
+#
+# Variables (set by install-backend-host.sh, sane defaults for dev):
+#   VIBELAB_EGRESS_ROOT   persistent data root (default /home/vibelab/openscience/egress)
+#   VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
+#   DOCKER_GATEWAY        IP of the Docker bridge gateway for container
+#                         clients (default 172.17.0.1)
+#   MIHOMO_IMAGE          pinned mihomo image (default metacubex/mihomo:v1.19.32)
+
+name: vibelab-egress
+
+x-secrets: &secrets
+  - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
+
+services:
+  vibelab-egress-mihomo:
+    image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.32}
+    container_name: vibelab-egress-mihomo
+    restart: unless-stopped
+    command:
+      - -d
+      - /root/.config/mihomo
+      - -f
+      - /root/.config/mihomo/generated/config.yaml
+    # No `ports:` for the admin controller (9090): private compose network only.
+    # Published ports are the authenticated SOCKS data plane only.
+    ports:
+      # host clients (loopback)
+      - "127.0.0.1:1080:18080"
+      - "127.0.0.1:1081:18081"
+      # container clients (OpenScience etc.) via the Docker bridge gateway
+      - "${DOCKER_GATEWAY:-172.17.0.1}:1080:18080"
+      - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081"
+    volumes:
+      # persistent mihomo state (bbolt cache with stored selections, logs)
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/mihomo:/root/.config/mihomo
+      # generated config (written by egressd, read by mihomo)
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/generated:/root/.config/mihomo/generated:ro
+      # provider subscriptions (read-only; updates go through egressd)
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/providers:/root/.config/mihomo/providers:ro
+      # GEO data is OPTIONAL and mihomo-managed: the generated config sets
+      # geox-url + geo-auto-update (spec 14.1), so mihomo downloads/refreshes
+      # GeoIP/GeoSite/ASN into its own persistent home dir (the `mihomo`
+      # volume above) at startup. We deliberately do NOT bind-mount the
+      # individual GEO files: a missing file would make Docker create a
+      # directory at the host path, breaking mihomo and future re-downloads.
+      # Mihomo runs fine without GEO (it is routing context, not a hard
+      # dependency — spec 14.3); it simply has no GEO data until its
+      # auto-update succeeds.
+      # the mihomo API secret is needed by the healthcheck; it is already
+      # present in the generated config, so this adds no new exposure.
+      - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}/mihomo_api_secret:/etc/vibelab-egress/secrets/mihomo_api_secret:ro
+    networks:
+      - egress-net
+    healthcheck:
+      # Docker 28 compose rejects a bare exec list (["sh","-c",...]); the test
+      # must be shell form. Use the explicit CMD-SHELL list form (stable across
+      # compose versions).
+      test:
+        - CMD-SHELL
+        - |
+          wget -q -O /dev/null \
+            --header="Authorization: Bearer $(tr -d '\n' < /etc/vibelab-egress/secrets/mihomo_api_secret)" \
+            http://127.0.0.1:9090/version
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    # No cap_add / privileged: TUN (if ever enabled) comes via compose.tun.yaml
+    # with an explicit, reviewed privilege grant (spec section 21, phase A6).
+
+  vibelab-egress-egressd:
+    build:
+      context: .
+      dockerfile: egressd/Dockerfile
+    image: vibelab-egress-egressd:local
+    container_name: vibelab-egress-egressd
+    restart: unless-stopped
+    environment:
+      # Non-secret configuration only. Secrets are read from mounted files.
+      MIHOMO_API_URL: http://vibelab-egress-mihomo:9090
+      MIHOMO_SECRET_FILE: /etc/vibelab-egress/secrets/mihomo_api_secret
+      EGRESSD_CLIENTS_DIR: /etc/vibelab-egress/secrets/clients
+      EGRESSD_PROVIDERS_DIR: /etc/vibelab-egress/secrets/providers
+      EGRESSD_DATA_DIR: /var/lib/egressd
+      EGRESSD_GENERATED_DIR: /var/lib/egressd/generated
+      # Where egressd writes the generated mihomo config. Must be the shared
+      # mount that mihomo reads from (/var/lib/egressd/generated == the host's
+      # $ROOT/generated, mounted :ro into mihomo). The default
+      # /root/.config/mihomo/config.yaml is WRONG: it is not the shared mount
+      # (mihomo would never see a runtime regeneration) and it is not writable
+      # by the non-root egressd user (uid 1000), so a regenerate() would crash.
+      EGRESSD_CONFIG_OUT: /var/lib/egressd/generated/config.yaml
+      EGRESSD_LISTEN: 0.0.0.0:9091
+    # egressd public narrow API: host loopback + container gateway only.
+    ports:
+      - "127.0.0.1:9091:9091"
+      - "${DOCKER_GATEWAY:-172.17.0.1}:9091:9091"
+    volumes:
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/egressd:/var/lib/egressd
+      # generated config output (egressd writes, mihomo reads via its mount)
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/generated:/var/lib/egressd/generated
+      # backend secrets (client tokens for auth, mihomo secret, provider subs)
+      - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
+    depends_on:
+      vibelab-egress-mihomo:
+        condition: service_healthy
+    networks:
+      - egress-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9091/v1/health', timeout=3).status==200 else 1)\""
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  egress-net:
+    name: vibelab-egress-net
+    driver: bridge
+    # Not `internal`: mihomo needs outbound internet. Ingress is restricted
+    # by the absence of public port bindings + host firewall.

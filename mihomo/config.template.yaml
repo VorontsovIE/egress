@@ -1,0 +1,174 @@
+# =============================================================================
+# vibelab-egress — Mihomo configuration REFERENCE TEMPLATE
+#
+# This file is a human-readable reference of the structure produced by the
+# config generator (egressd/src/egressd/configgen.py). The LIVE config is
+# generated at <root>/generated/config.yaml by egressd from:
+#   * backend secrets (/etc/vibelab-egress/secrets/clients/*.token,
+#     *.proxy-creds)
+#   * provider definitions (<root>/providers/*.yaml)
+#   * one-shot slot count (EGRESSD_ONESHOT_SLOTS)
+# Do not hand-edit the generated file; change inputs and re-run
+# `egressctl reconcile` (A3) or restart egressd.
+#
+# Architecture (validated in PoC, POC_REPORT.md):
+#   * ONE default SOCKS listener, one authenticated user per client
+#     -> IN-USER rule -> per-client select group (isolated defaults).
+#   * ONE one-shot SOCKS listener with pre-allocated users os_0..os_N-1
+#     -> IN-USER -> per-slot select group (concurrent sessions, fixed
+#     rule count independent of route count).
+#   * Hard-direct CIDRs BEFORE IN-USER rules: internal destinations are
+#     DIRECT on every path.
+#   * MATCH,DIRECT last: never implicit VPN.
+#   * profile.store-selected: true persists selections across hot reload.
+# =============================================================================
+
+mixed-port: 0            # disabled; named listeners only
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+
+# Admin controller: private compose network only (NOT published in
+# compose.yaml). Secret comes from /etc/vibelab-egress/secrets/mihomo_api_secret.
+external-controller: 127.0.0.1:9090
+secret: <MIHOMO_API_SECRET>
+
+profile:
+  store-selected: true   # selections survive config reload (bbolt cache)
+  store-fake-ip: false
+
+# GEO update sources. OPTIONAL: mihomo downloads/refreshes the datasets into
+# its own home dir; the proxy runs fine without them (spec 14.3). The release
+# tag is `latest` (moving release); the old `release` tag no longer exists.
+geox-url:
+  geoip: https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat
+  geosite: https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
+  mmdb: https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb
+  asn: https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb
+geodata-mode: true       # memory mode (files loaded at startup)
+geo-auto-update: true    # re-download datasets from geox-url when stale
+geo-update-interval: 24  # hours
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/16
+  fake-ip-filter:
+    - lan
+    - lan.domain
+    - "*.local"
+    - localhost.pt
+    - stun.*
+  default-nameserver:
+    - 223.5.5.5
+    - 8.8.8.8
+  nameserver:
+    - 223.5.5.5
+    - 8.8.8.8
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://dns.google/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
+# ---------------------------------------------------------------------------
+# Listeners. In the container they bind 0.0.0.0 (isolated netns); the
+# host-side publish address in compose.yaml is what enforces "no public
+# binds" (127.0.0.1 for host clients, docker gateway for container clients).
+# ---------------------------------------------------------------------------
+listeners:
+  - name: default-proxy
+    type: socks
+    port: 18080
+    listen: 0.0.0.0
+    udp: true
+    users:
+      # one user per provisioned client (from clients/<id>.proxy-creds)
+      - username: host-main
+        password: <HOST_PROXY_PASSWORD>
+      - username: openscience-main
+        password: <OPENSCEIENCE_PROXY_PASSWORD>
+  - name: oneshot-proxy
+    type: socks
+    port: 18081
+    listen: 0.0.0.0
+    udp: true
+    users:
+      # pre-allocated slots; egressd assigns a slot per one-shot session
+      - username: os_0
+        password: <OS_0_PASSWORD>
+      - username: os_1
+        password: <OS_1_PASSWORD>
+      # ... os_N-1
+
+# DIRECT/REJECT are built-in; they must NOT be declared here.
+# Static (non-provider) proxies, e.g. the custom VLESS node (spec 11.3):
+proxies: []
+#  - name: vless-custom
+#    type: vless
+#    server: <host>
+#    port: 443
+#    uuid: <uuid>
+#    tls: true
+#    skip-cert-verify: true
+
+# Provider subscriptions (file providers read <root>/providers/<name>.yaml;
+# http providers fetch the subscription URL on interval).
+proxy-providers:
+  blanc:
+    type: file
+    path: /root/.config/mihomo/providers/blanc.yaml
+    override:
+      additional-prefix: blanc-
+  xeovo:
+    type: file
+    path: /root/.config/mihomo/providers/xeovo.yaml
+    override:
+      additional-prefix: xeovo-
+
+# One select group per client + one per one-shot slot. Provider nodes are
+# pulled in via `use`; DIRECT is always a member (safe fallback target).
+proxy-groups:
+  - name: host-main
+    type: select
+    proxies: [DIRECT]
+    use: [blanc, xeovo]
+  - name: openscience-main
+    type: select
+    proxies: [DIRECT]
+    use: [blanc, xeovo]
+  - name: os_0
+    type: select
+    proxies: [DIRECT]
+    use: [blanc, xeovo]
+  - name: os_1
+    type: select
+    proxies: [DIRECT]
+    use: [blanc, xeovo]
+
+# ---------------------------------------------------------------------------
+# Rules (order matters; generated by configgen._rules()):
+#   1. GEOIP,LAN,DIRECT,no-resolve
+#   2. IP-CIDR,<hard-direct cidr>,DIRECT,no-resolve   (LAN/Docker/operator)
+#   3. IN-USER,<client user>,<client group>           (per client)
+#   4. IN-USER,os_<i>,os_<i>                          (per one-shot slot)
+#   5. MATCH,DIRECT                                   (never implicit VPN)
+# ---------------------------------------------------------------------------
+rules:
+  - GEOIP,LAN,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  # Docker CIDRs (from generated/docker-cidrs.yaml, spec section 35):
+  - IP-CIDR,172.17.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,172.19.0.0/16,DIRECT,no-resolve
+  - IN-USER,host-main,host-main
+  - IN-USER,openscience-main,openscience-main
+  - IN-USER,os_0,os_0
+  - IN-USER,os_1,os_1
+  - MATCH,DIRECT

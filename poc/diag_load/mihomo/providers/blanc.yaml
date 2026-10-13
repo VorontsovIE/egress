@@ -1,0 +1,11 @@
+proxies:
+- name: FI-Helsinki-1
+  type: socks5
+  server: 127.0.0.1
+  port: 25000
+  udp: true
+- name: FI-Helsinki-2
+  type: socks5
+  server: 127.0.0.1
+  port: 25001
+  udp: true

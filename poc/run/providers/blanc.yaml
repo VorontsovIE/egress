@@ -1,0 +1,16 @@
+proxies:
+- name: blanc-FI-Helsinki-1
+  type: socks5
+  server: 127.0.0.1
+  port: 18001
+  udp: true
+- name: blanc-FI-Helsinki-2
+  type: socks5
+  server: 127.0.0.1
+  port: 18002
+  udp: true
+- name: blanc-NL-Ams-1
+  type: socks5
+  server: 127.0.0.1
+  port: 18003
+  udp: true
