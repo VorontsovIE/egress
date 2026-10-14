@@ -16,6 +16,14 @@ Modes:
             dependent checks are reported as skipped with a reason.
   (default) live mode: also run daemon-dependent checks.
 
+Live mode additionally runs the self-explaining stack checks
+(egressd_container_healthy, client_package_importable, egressctl_on_path,
+generated_config_present, secrets_readable_by_container_user). If any
+live check fails, the report gains a top-level "diagnosis" block
+(collected once: compose ps + per-service state/health/restarts +
+redacted log tails) and each failed live check's detail gets an
+actionable "next: <command>" line.
+
 Environment:
   VIBELAB_EGRESS_ROOT   persistent data root (default /home/vibelab/openscience/egress)
   VIBELAB_EGRESS_REPO   repo root with compose.yaml (default /srv/workspace/vibelab-egress)
@@ -43,6 +51,40 @@ SECRETS = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets"
 HOST_CLIENT_DIR = "/etc/vibelab-egress"
 MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32"
 MIHOMO_ADMIN_PORT = 9090
+CLIENT_LIB_DIR = "/usr/local/lib/vibelab-egress"
+STACK_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
+EGRESSD_UID = 1000
+# Live-mode checks (daemon or backend required). Used to attach diagnosis
+# and actionable "next:" hints on failure.
+LIVE_CHECK_IDS = frozenset([
+    "compose_health",
+    "restart_recreate",
+    "host_whoami_identity",
+    "host_default_route_mode",
+    "per_client_isolation",
+    "egressd_container_healthy",
+    "client_package_importable",
+    "egressctl_on_path",
+    "generated_config_present",
+    "secrets_readable_by_container_user",
+])
+LIVE_NEXT_HINTS = {
+    "compose_health": "docker compose ps",
+    "restart_recreate": "docker compose ps",
+    "host_whoami_identity": "docker logs vibelab-egress-egressd",
+    "host_default_route_mode": "docker logs vibelab-egress-egressd",
+    "per_client_isolation": "provision a second client and run tests/integration",
+    "egressd_container_healthy": "docker logs vibelab-egress-egressd",
+    "client_package_importable":
+        "bash scripts/install-client.sh --client host-main --target host "
+        "--bundle <root>/client-bundles/host-main",
+    "egressctl_on_path":
+        "bash scripts/install-client.sh --client host-main --target host "
+        "--bundle <root>/client-bundles/host-main",
+    "generated_config_present": "docker logs vibelab-egress-egressd",
+    "secrets_readable_by_container_user":
+        "chown -R 1000:1000 /etc/vibelab-egress/secrets (re-run install step 8b)",
+}
 
 RESULTS = []
 
@@ -637,6 +679,262 @@ def check_strict_helper_privileges():
 
 
 # ---------------------------------------------------------------------------
+# live-only self-explaining checks (fix: install logging, 2026-10-14)
+# ---------------------------------------------------------------------------
+def docker_inspect_field(service, fmt):
+    """One `docker inspect --format <fmt> <service>` field; '' when
+    unavailable (no daemon / no such container)."""
+    try:
+        p = subprocess.run(["docker", "inspect", "--format", fmt, service],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:
+        return ""
+    if p.returncode != 0:
+        return ""
+    return p.stdout.strip()
+
+
+def check_egressd_container_healthy(live):
+    """Both stack services must be running + healthy with 0 restarts.
+
+    Guards the 2026-10-12 failure mode: a restarting container whose single
+    inspect read still reported stale healthy/running.
+    """
+    if not live:
+        add("egressd_container_healthy", "skipped",
+            "no docker daemon (static mode)")
+        return
+    states = []
+    ok = True
+    for svc in STACK_SERVICES:
+        st = docker_inspect_field(svc, "{{.State.Status}}")
+        h = docker_inspect_field(svc, "{{.State.Health.Status}}")
+        rcnt = docker_inspect_field(svc, "{{.RestartCount}}")
+        states.append("%s: state=%s health=%s restarts=%s" %
+                      (svc, st or "unknown", h or "unknown", rcnt or "?"))
+        if not (st == "running" and h == "healthy" and rcnt == "0"):
+            ok = False
+    if ok:
+        add("egressd_container_healthy", "pass",
+            "both services running + healthy + 0 restarts", "; ".join(states))
+    else:
+        add("egressd_container_healthy", "fail",
+            "service state(s): " + "; ".join(states), "; ".join(states))
+
+
+def check_client_package_importable(live):
+    """The installed client package must import from its install prefix.
+
+    Checks the 2026-10-12 bug where install-client.sh copied the package
+    CONTENTS (flattened), so `import vibelab_egress_client.egressctl`
+    failed even though the prefix existed. Skipped (not failed) when the
+    install prefix itself is absent: the package was simply never
+    installed, which the client provisioning flow (not this layout check)
+    owns.
+    """
+    if not live:
+        add("client_package_importable", "skipped",
+            "no live backend (static mode)")
+        return
+    if not os.path.isdir(CLIENT_LIB_DIR):
+        add("client_package_importable", "skipped",
+            "client package prefix not installed: %s (run "
+            "scripts/install-client.sh --target host)" % CLIENT_LIB_DIR)
+        return
+    code = ("import sys; sys.path.insert(0, %r); "
+            "import vibelab_egress_client.egressctl" % CLIENT_LIB_DIR)
+    try:
+        p = subprocess.run(["python3", "-c", code],
+                           capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        add("client_package_importable", "fail",
+            "import check could not run: %s" % e)
+        return
+    if p.returncode == 0:
+        add("client_package_importable", "pass",
+            "vibelab_egress_client imports from %s" % CLIENT_LIB_DIR)
+    else:
+        add("client_package_importable", "fail",
+            "installed package layout broken; re-run "
+            "scripts/install-client.sh --target host", p.stderr.strip()[:200])
+
+
+def check_egressctl_on_path(live):
+    """`egressctl --help` must succeed (wrapper on PATH, importable)."""
+    if not live:
+        add("egressctl_on_path", "skipped", "no live backend (static mode)")
+        return
+    try:
+        p = subprocess.run(["egressctl", "--help"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        add("egressctl_on_path", "fail",
+            "egressctl not on PATH; check /usr/local/bin wrappers (%s)" % e)
+        return
+    if p.returncode == 0:
+        add("egressctl_on_path", "pass", "egressctl --help rc=0")
+    else:
+        add("egressctl_on_path", "fail",
+            "egressctl not on PATH; check /usr/local/bin wrappers",
+            p.stderr.strip()[:200])
+
+
+def check_generated_config_present(live):
+    """The bootstrap mihomo config must exist, parse, and declare a
+    listener (top-level mixed-port or socks-port; the generated config
+    uses mixed-port + named listeners)."""
+    if not live:
+        add("generated_config_present", "skipped", "no live backend (static mode)")
+        return
+    path = os.path.join(ROOT, "generated", "config.yaml")
+    text = read_file(path)
+    if text is None or not text.strip():
+        add("generated_config_present", "fail",
+            "bootstrap config missing; re-run install step 8 or check "
+            "egressd logs", "path=%s" % path)
+        return
+    try:
+        cfg = parse_yaml(text)
+    except Exception as e:
+        add("generated_config_present", "fail",
+            "bootstrap config missing; re-run install step 8 or check "
+            "egressd logs (unparseable: %s)" % e, "path=%s" % path)
+        return
+    top = cfg if isinstance(cfg, dict) else {}
+    if "mixed-port" in top or "socks-port" in top:
+        add("generated_config_present", "pass",
+            "bootstrap config present (top-level listener key: "
+            + ("mixed-port" if "mixed-port" in top else "socks-port") + ")",
+            "path=%s" % path)
+    else:
+        add("generated_config_present", "fail",
+            "bootstrap config missing; re-run install step 8 or check "
+            "egressd logs (no mixed-port/socks-port top-level key)",
+            "path=%s" % path)
+
+
+def check_secrets_readable_by_container_user(live):
+    """Every file/dir under the backend secrets dir must be owned by the
+    egressd container uid (1000), or egressd crash-loops at startup with
+    PermissionError in ClientRegistry.reload. Skipped when uid 1000 does
+    not exist on this host."""
+    if not live:
+        add("secrets_readable_by_container_user", "skipped",
+            "no live backend (static mode)")
+        return
+    try:
+        p = subprocess.run(["id", "-u", str(EGRESSD_UID)],
+                           capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        add("secrets_readable_by_container_user", "skipped",
+            "could not check uid %d: %s" % (EGRESSD_UID, e))
+        return
+    if p.returncode != 0:
+        add("secrets_readable_by_container_user", "skipped",
+            "uid %d (egressd container user) does not exist on this host"
+            % EGRESSD_UID)
+        return
+    fail_detail = ("egressd (uid %d) cannot read backend secrets; re-run "
+                   "install (step 8b)" % EGRESSD_UID)
+    if not os.path.isdir(SECRETS):
+        add("secrets_readable_by_container_user", "fail", fail_detail,
+            "secrets dir missing: %s" % SECRETS)
+        return
+    bad = []
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(SECRETS):
+        for name in dirnames + filenames:
+            fp = os.path.join(dirpath, name)
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            count += 1
+            if st.st_uid != EGRESSD_UID:
+                bad.append(os.path.relpath(fp, SECRETS))
+    if count == 0:
+        add("secrets_readable_by_container_user", "fail", fail_detail,
+            "no entries under %s (secrets not generated?)" % SECRETS)
+    elif bad:
+        add("secrets_readable_by_container_user", "fail", fail_detail,
+            "; ".join(bad[:5]))
+    else:
+        add("secrets_readable_by_container_user", "pass",
+            "%d entry(ies) under %s owned by uid %d" % (count, SECRETS, EGRESSD_UID))
+
+
+# ---------------------------------------------------------------------------
+# stack diagnosis (live mode, on failure)
+# ---------------------------------------------------------------------------
+def _secret_needle_values():
+    """Values of the known backend secrets, read ONLY for redacting
+    diagnosis output (never emitted). Same file set as
+    install-backend-host.sh redact_stream()."""
+    vals = []
+
+    def _maybe(path):
+        data = read_file(path)
+        if data and data.strip():
+            vals.append(data.strip())
+
+    _maybe(os.path.join(SECRETS, "mihomo_api_secret"))
+    clients = os.path.join(SECRETS, "clients")
+    if os.path.isdir(clients):
+        for name in sorted(os.listdir(clients)):
+            if name.endswith(".token") or name.endswith(".proxy-creds"):
+                _maybe(os.path.join(clients, name))
+    return vals
+
+
+def _redact(text, values):
+    for v in values:
+        if v:
+            text = text.replace(v, "[REDACTED]")
+    return text
+
+
+def collect_stack_diagnosis():
+    """One-time stack snapshot for a failed live run.
+
+    Collected ONCE and stored in the report's top-level "diagnosis" block
+    (additive; the per-check schema is unchanged) rather than repeated in
+    every failed check's evidence; each failed live check additionally gets
+    an actionable "next: <command>" line appended to its detail.
+    """
+    values = _secret_needle_values()
+    diag = {"collected_at":
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "compose_ps": None, "services": {}}
+    compose_file = os.path.join(REPO, "compose.yaml")
+    if os.path.isfile(compose_file):
+        argv = ["docker", "compose", "-f", compose_file, "ps"]
+    else:
+        argv = ["docker", "compose", "ps"]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        diag["compose_ps"] = _redact(
+            (p.stdout or "") + (p.stderr or ""), values)[:4000]
+    except Exception as e:
+        diag["compose_ps"] = "docker compose ps failed: %s" % e
+    for svc in STACK_SERVICES:
+        entry = {
+            "state": docker_inspect_field(svc, "{{.State.Status}}") or None,
+            "health": docker_inspect_field(svc, "{{.State.Health.Status}}")
+            or None,
+            "restarts": docker_inspect_field(svc, "{{.RestartCount}}") or None,
+        }
+        try:
+            p = subprocess.run(["docker", "logs", "--tail", "50", svc],
+                               capture_output=True, text=True, timeout=30)
+            entry["logs_tail"] = _redact(
+                ((p.stdout or "") + "\n" + (p.stderr or ""))[-8000:], values)
+        except Exception as e:
+            entry["logs_tail"] = "docker logs failed: %s" % e
+        diag["services"][svc] = entry
+    return diag
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main(argv=None):
@@ -664,6 +962,22 @@ def main(argv=None):
     check_host_default_route_mode(live)
     check_per_client_isolation(live)
     check_strict_helper_privileges()
+    check_egressd_container_healthy(live)
+    check_client_package_importable(live)
+    check_egressctl_on_path(live)
+    check_generated_config_present(live)
+    check_secrets_readable_by_container_user(live)
+
+    diagnosis = None
+    if live:
+        failed_live = [r for r in RESULTS
+                       if r["status"] == "fail" and r["id"] in LIVE_CHECK_IDS]
+        if failed_live:
+            diagnosis = collect_stack_diagnosis()
+            for r in failed_live:
+                hint = LIVE_NEXT_HINTS.get(r["id"])
+                if hint:
+                    r["detail"] = r["detail"] + " | next: " + hint
 
     summary = {
         "passed": sum(1 for r in RESULTS if r["status"] == "pass"),
@@ -677,6 +991,8 @@ def main(argv=None):
         "checks": RESULTS,
         "summary": summary,
     }
+    if diagnosis is not None:
+        report["diagnosis"] = diagnosis
     out = json.dumps(report, indent=2)
     print(out)
     if args.out:
