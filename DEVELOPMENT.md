@@ -1,0 +1,157 @@
+# DEVELOPMENT.md — vibelab-egress
+
+Как работать с проектом из среды разработки. Окружение, команды, ограничения.
+
+## Окружение: мы внутри докер-контейнера
+
+Разработка ведётся **изнутри докер-контейнера** (OpenScience, gVisor).
+Контейнер примонтирован к хост-машине так:
+
+| host | container |
+|---|---|
+| `/home/vibelab/openscience/workspace` | `/srv/workspace` |
+| `/home/vibelab/openscience/state` | `/var/lib/openscience` |
+
+Практические следствия:
+
+- Рабочий каталог — `/srv/workspace`; всё, что в нём создано, видно на хосте
+  в `/home/vibelab/openscience/workspace` и переживает перезапуск контейнера.
+- `/var/lib/openscience` — state OpenScience (проекты, сессии, scratch);
+  это не место для артефактов проекта.
+- Контейнер — недоверенная execution environment по threat model проекта
+  (spec §7.1). Backend (mihomo + egressd) **не запускается здесь** — он живёт
+  на хосте в отдельном compose stack.
+- Доступ к backend из контейнера — через docker-bridge gateway
+  `172.17.0.1` (eth0 контейнера `172.17.0.2/16`): control API `:9091`,
+  SOCKS `:1080` (default) / `:1081` (one-shot).
+- Dev/test bridge для host-операций: `host/egress-devbridge` на
+  `172.17.0.1:9099` (bearer-token, фиксированные операции, spec §33.2).
+  Поднимается администратором один раз: `scripts/bootstrap-dev-access.sh`.
+
+### Чего НЕТ в этом контейнере (зафиксировано в STATUS.md, влияет на тесты)
+
+- **Нет Docker/podman** (`/var/run/docker.sock` отсутствует) — compose stack
+  нельзя поднять здесь; `compose.yaml` — артефакт для целевого хоста.
+  Live-проверки, требующие Docker daemon, в контейнере считаются skipped.
+- **Нет CAP_NET_ADMIN**: `/proc/net/wireguard` отсутствует, `unshare -n`
+  запрещён — TUN/netns не проверяются в этой среде (capability matrix — A6).
+- **Сетевые блокировки:** `objects.githubusercontent.com` и
+  `raw.githubusercontent.com` недоступны; работает `codeload.github.com`.
+  Поэтому mihomo собран из исходников (`poc/mihomo-src/`), а не скачан из
+  релизов GitHub.
+- **Публичные цели для e2e:** доступны `cloudflare.com/cdn-cgi/trace` (200),
+  `gstatic.com/generate_204` (204); `api.ipify.org`, `example.com` — нет.
+  Для локальных e2e-проверок использовать TEST-NET-3 (`203.0.113.0/24`) —
+  он не попадает под правило `GEOIP,LAN,DIRECT` (127.0.0.1 попадает, и это
+  уже ловило невалидные тесты — см. STATUS.md «Валидность тестов»).
+
+### Инструменты, которые ЕСТЬ
+
+| Инструмент | Версия / путь |
+|---|---|
+| Python | 3.11.17 (`python3`) |
+| pytest | 9.1.1 (fastapi, httpx, pyyaml, aiosqlite, cryptography установлены) |
+| git | 2.43.0 |
+| Go | 1.27.2 (`/usr/local/go/bin/go`) — для сборки `poc/wgserver/` |
+| curl, wget, tar | есть |
+| CPU / RAM | 24 CPU / 256 GiB |
+
+## Команды
+
+Все команды выполнять из корня репозитория (корня проекта; относительные
+пути в harness'ах от него).
+
+### Тесты (оффлайн, без mihomo, без сети)
+
+```bash
+python3 -m pytest tests/ client/tests/ -q        # 309 passed (2026-10-13)
+python3 -m pytest tests/security/ -v             # A8 security gate отдельно
+```
+
+Пакеты не установлены как dist — тесты подставляют `egressd/src` и корень
+репо в `sys.path` сами (как и `poc/run_*.py`).
+
+### Live-оркестраторы PoC (нужен собранный mihomo, без Docker)
+
+```bash
+python3 poc/run_poc.py      # Phase 0: 22 проверки (idempotent, сам поднимает процессы)
+python3 poc/run_a2.py       # A2: providers/GEO на реальном mihomo (8 live-проверок)
+python3 poc/run_a3.py       # A3: /v1 API на реальном mihomo (7 live-проверок)
+```
+
+Используют бинарники `poc/mihomo` / `poc/mihomo-gvisor` и GEO из `poc/geo/`.
+
+### Host-side (выполняются на хосте, НЕ в контейнере)
+
+```bash
+# root на хосте:
+scripts/install-backend-host.sh        # полный bootstrap backend
+scripts/verify-backend-host.sh         # проверка задеплоенного backend
+scripts/run-live-acceptance.sh         # live acceptance → reports/host_acceptance_report.json
+scripts/uninstall-backend-host.sh      # rollback
+
+# из контейнера — только через devbridge (172.17.0.1:9099):
+#   deploy / redeploy / status / logs / run-acceptance / sync-docker-cidrs / install-client
+```
+
+### Клиент (в любой execution environment)
+
+```bash
+egressctl config validate && egressctl whoami && egressctl doctor
+egressctl route current            # текущий default
+egress-run <route> -- <command>    # one-shot, не меняет default
+egress-run --mode tun <route> -- <command>   # только host (tun_backend=host-helper)
+```
+
+Правила использования — `skills/egress/SKILL.md` (обязательны для агентов).
+
+### Сборка (редко)
+
+```bash
+# wgserver (userspace WireGuard-сервер):
+cd poc/wgserver && /usr/local/go/bin/go build -o wgserver .
+
+# mihomo из исходников (только при смене версии; релизы GitHub недоступны):
+# исходники в poc/mihomo-src/ (v1.19.32), см. POC_REPORT.md §1
+```
+
+## Layout и точки входа
+
+```text
+корень репозитория (/srv/workspace в dev-контейнере)
+├── AGENTS.md            # опись + соглашения для агентов
+├── DEVELOPMENT.md       # этот файл
+├── README.md            # обзор + быстрый старт
+├── TECH_SPEC.md         # требования (источник правды)
+├── STATUS.md            # статус фаз + журнал решений
+├── compose.yaml         # backend stack (host)
+├── egressd/             # control plane (FastAPI /v1)
+├── client/              # egressctl + egress-run (stdlib-only)
+├── adapters/            # provider-адаптеры
+├── host/                # host-инструменты (stdlib-only, fixed argv)
+├── scripts/             # install/verify/provision (host, bash)
+├── tests/               # offline pytest + A8 security gate
+├── poc/                 # PoC: бинарники, исходники, GEO, harness'ы
+└── reports/             # acceptance-артефакты
+```
+
+## Ключевые пути на host (persistent)
+
+```text
+/home/vibelab/openscience/egress/     # persistent root (VIBELAB_EGRESS_ROOT)
+  mihomo/        # bbolt state (store-selected), logs
+  providers/     # подписки (ro-mount)
+  generated/     # config.yaml + docker-cidrs.yaml
+  egressd/       # metrics.sqlite, session state
+  geo/           # GeoIP.dat, GeoSite.dat, ASN.mmdb
+/etc/vibelab-egress/secrets/          # секреты backend (0600, mounted files)
+/etc/vibelab-egress/                  # host client: client.yaml, token, proxy auth
+```
+
+## Ограничения и известные проблемы
+
+- Live-часть (Docker + CAP_NET_ADMIN) не проверяется в контейнере — только на
+  хосте; текущий acceptance-репорт: `reports/host_acceptance_report.json`
+  (4 passed / 1 failed / 23 skipped, 2026-10-12) — проверить статус failed
+  пункта в `STATUS.md` перед повторным прогоном.
+- `poc/` содержит ~470 МБ бинарников/данных — намеренно (см. AGENTS.md).

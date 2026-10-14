@@ -1,0 +1,29 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# --- Go ---
+# (poc/wgserver and poc/mihomo-src are vendored source; their build outputs
+#  are the committed binaries and are kept on purpose — see AGENTS.md)
+
+# --- Runtime / generated state ---
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.lkg
+*.log
+
+# --- OS / editor noise ---
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

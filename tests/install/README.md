@@ -7,7 +7,6 @@
 ## Запуск
 
 ```bash
-cd vibelab-egress
 python3 -m pytest tests/install/ -q        # через pytest-обёртку
 bash tests/install/test_install_scripts.sh # или напрямую
 ```
