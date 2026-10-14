@@ -112,6 +112,47 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
                                            #  --remove-data — удалить)
 ```
 
+### Логи и диагностика установки
+
+**Где лежат логи.**
+- Установка: `<root>/install-backend-host.log` (append; по умолчанию
+  `/home/vibelab/openscience/egress/install-backend-host.log`).
+- Верификация: `<root>/verify-backend-host.log` (append, тот же формат).
+
+**Формат строк.** Каждая строка: `[<UTC timestamp>] [step N/10] <message>`,
+где N — номер шага из 10 (1 = prerequisites, 2 = persistent root,
+3 = backend secrets, 4 = GEO, 5 = CIDR sync, 6 = firewall, 7 = client,
+8 = bootstrap config, 9 = compose deploy, 10 = acceptance harness).
+Файл начинается с run header: hostname, kernel, пользователь, версии
+docker/compose/python3, git-rev репозитория, все аргументы запуска
+(только пути — значения секретов в лог не попадают никогда).
+
+В лог также тупится вывод ключевых subprocess'ов: `docker compose
+build/up/ps`, `egress-hostctl sync-docker-cidrs`,
+`egressd.bootstrap_config` и **целиком** JSON-репорт harness
+(`egress-host-test`). При timeout health gate в лог пишутся поля
+`docker inspect` (State/Health/RestartCount/ExitCode/Error/OOMKilled) и
+`docker logs --tail 100` каждого сервиса — значения известных backend
+секретов в дампах замазаны как `[REDACTED]`.
+
+**Exit codes и что делать.**
+
+| exit | значение | что делать |
+|------|----------|------------|
+| 0 | установка завершена, acceptance PASS | — |
+| 2 | ошибка аргументов | поправить флаги (`--help`), повторить |
+| 3 | окружение/инфраструктура (docker, compose build/up, CIDR sync, bootstrap, health gate) | читать лог: строка `ERROR: step=N (...) command='...' exit=<rc>` + `full log: <путь>`; затем `docker logs <vibelab-egress-egressd\|vibelab-egress-mihomo>`, исправить причину, повторить |
+| 4 | acceptance harness не прошёл | открыть `<root>/acceptance-report.json` (JSON есть и в лог целиком), по detail каждого failed-чека + блоку `diagnosis` (live-режим) |
+
+Установка **идемпотентна**: повторный запуск после падения безопасен —
+секреты сохраняются (генерируются один раз), каталоги переиспользуются,
+compose пересобирает/перезапускает только то, что нужно.
+
+**Health gate.** Считается успешным только после 3 последовательных
+поллов (интервал 2 с), где каждый сервис `running + healthy +
+RestartCount=0`; timeout 90 с. Один «усталый» healthy-reading у
+restarting-контейнера (баг 2026-10-12) прохождения не даёт.
+
 ---
 
 ## B. Client installation in each execution environment

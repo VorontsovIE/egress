@@ -69,6 +69,15 @@
    пройдёт. Тесты: `tests/test_verify_live_report.py` (8/8).
  - `scripts/run-live-acceptance.sh` — одна команда на хосте (авто-детект
    контейнера OpenScience); `host/LIVE_ACCEPTANCE.md` — инструкция.
+ - **Install logging (2026-10-14, ветка `install-logging`, 7 коммитов:
+   handoff + 6 фиксов)**: структурный лог установки
+   (`<root>/install-backend-host.log`, `step N/10` + run header + ERR trap),
+   robust health gate (3 последовательных полла, redacted-дампы),
+   self-explaining harness (5 новых live-чексов + блок `diagnosis`),
+   оффлайн-свит `tests/install/` (stubbed docker, без root — возрождение
+   утраченного `/tmp/a1_test.sh`), per-service health + лог
+   `<root>/verify-backend-host.log`. Подробности — журнал 2026-10-14;
+   merge в `main` — решение lead'а.
    - [x] **Установить бэкенд на хосте**: `bash scripts/install-backend-host.sh`
          (GEO опционален; 2026-10-12: стек поднят на globe — mihomo healthy,
          egressd up; harness-фиксы из этого же дня, см. журнал решений).
@@ -575,6 +584,71 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
       harness report — через `host/egress-host-test` + administrator loop.
 
 ## Журнал решений
+- 2026-10-14: Install logging + self-explaining tests — ветка
+  `install-logging` (work order `HANDOFF-install-logging.md`; 6 фикс-коммитов
+  после handoff-коммита; merge в `main` делает lead). Причина — прогон
+  2026-10-12: health gate пропустил restarting-egressd (ОДИН docker inspect
+  вернул устаревшие healthy/running, `RestartCount=1` никто не читал),
+  установка «успешно» дошла до harness и упала на
+  `host_whoami_identity: Connection refused` (exit 4) без объяснения, какой
+  шаг сломался; лога установки не существовало. Сделано:
+  (1) `scripts/install-backend-host.sh` — `log()`: `[<UTC ts>] [step N/10]`
+  в stdout + append в `$ROOT/install-backend-host.log`; run header
+  (hostname/kernel/user, версии docker/compose/python3, git rev, argv —
+  только пути); `STEP`/`STEP_NAME` на всех 10 маркерах; `trap on_error ERR`
+  (step + BASH_COMMAND + exit code + `full log:`; непредвиденные сбое —
+  exit 3, реальный rc остаётся в строке лога); `run_logged` (tee в лог с
+  PIPESTATUS[0]): compose build/up/ps, `sync-docker-cidrs`,
+  `bootstrap_config`, harness (JSON-репорт целиком в лог); обязательные
+  subprocess-сбои — `die_env` с `full log:` (compose up rc 1 → exit 3).
+  (2) Health gate: для КАЖДОГО сервиса `State.Status=running` +
+  `Health.Status=healthy` + `RestartCount=0`; переход — только после 3
+  последовательных поллов (2 с, счётчик сбрасывается); timeout 90 с →
+  поля inspect (State/Health/RestartCount/ExitCode/Error/OOMKilled) +
+  `docker logs --tail 100` через `redact_stream()` (значения
+  mihomo_api_secret, clients/*.token, *.proxy-creds → `[REDACTED]`) +
+  `die_env` с `full log:`.
+  (3) `host/egress-host-test`: 5 новых live-only чексов (`--static` —
+  skipped): `egressd_container_healthy` (оба сервиса, баг 2026-10-12),
+  `client_package_importable` (import из /usr/local/lib/vibelab-egress;
+  skipped, если префикс не установлен — документировано в docstring),
+  `egressctl_on_path`, `generated_config_present` (mixed-port/socks-port),
+  `secrets_readable_by_container_user` (uid 1000; skipped, если uid нет).
+  `collect_stack_diagnosis()`: при ЛЮБОМ упавшем live-чеке — ОДИН блок
+  `diagnosis` в корне отчёта (compose ps, state/health/restarts, redacted
+  `docker logs --tail 50`; выбор «общий блок» задокументирован в
+  docstring) + actionable `next:`-строка в detail каждого упавшего
+  live-чека. Существующие 17 чексов — без изменений (статусы и detail
+  сопоставлены по --static-прогону).
+  (4) `tests/install/` — оффлайн-свит (stubbed docker/id/sleep/ufw/
+  systemctl/findmnt/df/egressctl, `VIBELAB_EGRESS_TEST_MODE=1`): success
+  (rc 0, run header + маркеры всех 10 шагов, config.yaml, секреты 0600,
+  harness 0 failed), compose up rc 1 → exit 3 + step 9 + `full log:`,
+  never-healthy → exit 3 + дамп + RestartCount + redaction (вбитое
+  значение секрета в лог возвращается только как `[REDACTED]`),
+  restarting (усталый healthy) → exit 3, root-escape (--help rc 0; без
+  TEST_MODE под non-root → exit 3), negative-harness из утраченного
+  /tmp/a1_test.sh (0.0.0.0:1080, docker.sock, provider-секрет в бандле).
+  `sleep`-стуб: 90-с таймаут прогоняется мгновенно, логика цикла — в
+  полном объёме. В install-скрипте — test-escape (только root-check; в
+  production не используется, в шапке задокументировано). Non-root
+  success-путь: `--skip-client` + препроvisions бандла реальным
+  provision-client.sh (install-client.sh пишет /usr/local + /etc —
+  root-only; в root-контейнере свит ходит ровно по флагам work order).
+  (5) `scripts/verify-backend-host.sh`: per-service health (старый
+  grep '"healthy"' проходил, когда healthy был ХОТЬ ОДИН из двух сервисов)
+  + весь вывод в `$ROOT/verify-backend-host.log` (run header как в
+  install-логе); 7 секций, счётчик, exit 0/2/3 — без изменений.
+  (6) INSTALL.md — «Логи и диагностика установки»: где логи, формат,
+  таблица exit codes 0/2/3/4 + действия, идемпотентность, health gate.
+  Проверено: bash -n/py_compile на каждом коммите; оффлайн-свит 56/56
+  (`python3 -m pytest tests/install/ -q`); полный свит **302 passed**
+  (базовые 301 + tests/install; 8 environment-зависимых тестов требуют
+  root: PermissionError `/run/vibelab-egress`, `/var/lib/egressd` —
+  (на root-контейнере: 309)); security gate 54/54. Инварианты:
+  data plane (egressd/mihomo/compose/client) не тронут, новых
+  зависимостей нет, host-инструменты stdlib-only без shell=True/eval/exec,
+  секреты в логах — только `[REDACTED]`/пути, `poc/` и `reports/` нетронуты.
 - 2026-10-12: Повторная установка на globe — стек поднялся (mihomo healthy,
   egressd up; healthcheck-фикс сработал). Встроенный harness: 4 pass / 4 fail /
   9 skip. Все 4 fail и 5 «compose.yaml not found» — баги harness/установщика,
