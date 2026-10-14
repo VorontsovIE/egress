@@ -2,25 +2,36 @@
 # install-backend-host.sh — deploy the vibelab-egress backend on a Docker
 # host (spec sections 32-A, 35, 36, 37, 38).
 #
-# Steps:
+# Steps (numbered as logged, step N/10):
 #   1. prerequisites (docker, compose v2, python3)
 #   2. persistent root: create dirs, check filesystem (findmnt/df)
 #   3. backend secrets: /etc/vibelab-egress/secrets/{mihomo_api_secret,
 #      devbridge.token, providers/, clients/} (0600, never printed)
-#   4. (GEO data is optional and managed by mihomo at runtime — see below)
+#   4. GEO data (optional — mihomo auto-updates at runtime)
 #   5. Docker CIDR sync (egress-hostctl) + systemd timer
 #   6. firewall: restrict published ports to local sources (best effort,
 #      ufw; nftables fallback documented)
-#   7. compose deploy (pinned mihomo image, egressd built from repo)
-#   8. host client provisioning + install (unless --skip-client)
-#   9. host acceptance harness (egress-host-test)
+#   7. host client provisioning + install (unless --skip-client)
+#   8. bootstrap config generation (incl. 8b: secrets readable by uid 1000)
+#   9. compose deploy (pinned mihomo image, egressd built from repo)
+#   10. host acceptance harness (egress-host-test)
+#
+# Structured logging:
+#   Every action is logged as "[<UTC timestamp>] [step N/10] <message>" to
+#   stdout AND appended to <root>/install-backend-host.log, which starts
+#   with a run header (hostname, kernel, user, docker/compose/python
+#   versions, git rev, full argv). Subprocess output that used to be lost
+#   (compose build/up/ps, CIDR sync, bootstrap config, acceptance harness)
+#   is teed into the same file. On any unhandled failure an ERR trap logs
+#   the failing step, the failing command and the exit code, and points to
+#   "full log: <log file>".
 #
 # Usage:
 #   install-backend-host.sh [--root <persistent-root>] [--secrets-dir <dir>] \
 #       [--docker-gateway <ip>] [--skip-client] [--skip-firewall] [--yes]
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error, 4 verification failed.
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}"
 SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
@@ -31,10 +42,65 @@ ASSUME_YES=0
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOSTCTL="$REPO_ROOT/host/egress-hostctl"
 
+ARGS="$*"
+
 die_usage() { echo "install-backend: $*" >&2; exit 2; }
 die_env()   { echo "install-backend: $*" >&2; exit 3; }
-say()       { echo "[install-backend] $*"; }
 
+# ---------------------------------------------------------------------------
+# structured logging
+# ---------------------------------------------------------------------------
+STEP=0
+STEP_NAME=""
+LOG_FILE=""
+
+now_utc() { date -u +%FT%TZ; }
+
+log() {
+  local line
+  line="[$(now_utc)] [step $STEP/10] $*"
+  echo "$line" || true
+  if [ -n "$LOG_FILE" ]; then
+    printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# run_logged <label> <cmd...> — run a required command, tee its combined
+# output into the install log, and return the command's exit code
+# (PIPESTATUS[0], so a tee failure cannot mask it).
+run_logged() {
+  local label="$1"
+  shift
+  log "run: $label"
+  local rc=0
+  "$@" 2>&1 | tee -a "$LOG_FILE" || rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ]; then
+    log "run: $label FAILED (exit $rc) — full log: $LOG_FILE"
+  fi
+  return "$rc"
+}
+
+on_error() {
+  local rc=$?
+  local msg
+  msg="[$(now_utc)] [step $STEP/10] ERROR: step=$STEP ($STEP_NAME) command='${BASH_COMMAND:-unknown}' exit=$rc"
+  echo "$msg" >&2 || true
+  echo "install-backend: full log: ${LOG_FILE:-<not created yet>}" >&2 || true
+  if [ -n "$LOG_FILE" ]; then
+    {
+      printf '%s\n' "$msg"
+      printf '%s\n' "[$(now_utc)] [step $STEP/10] full log: $LOG_FILE"
+    } >> "$LOG_FILE" 2>/dev/null || true
+  fi
+  # Documented exit code: unexpected failure = environment error (3).
+  # The underlying command rc is recorded in $msg above.
+  exit 3
+}
+
+# ---------------------------------------------------------------------------
+# argument parsing
+# ---------------------------------------------------------------------------
 while [ $# -gt 0 ]; do
   case "$1" in
     --root)           ROOT="${2:?}"; shift 2 ;;
@@ -48,11 +114,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Host bootstrap operation: root is required.
 [ "$(id -u)" = "0" ] || die_env "must run as root (host bootstrap operation)"
-command -v docker >/dev/null || die_env "docker not found"
-command -v python3 >/dev/null || die_env "python3 not found"
-docker compose version >/dev/null 2>&1 || die_env "docker compose v2 not available"
-[ -f "$REPO_ROOT/compose.yaml" ] || die_env "compose.yaml not found in $REPO_ROOT"
+
+# Log file is created before step 2 (persistent root) so steps 2+ are
+# captured; until then log() prints to stdout only (graceful).
+LOG_FILE="$ROOT/install-backend-host.log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+: >> "$LOG_FILE" 2>/dev/null || LOG_FILE=""
+
+trap on_error ERR
+
+# ---------------------------------------------------------------------------
+# run header
+# ---------------------------------------------------------------------------
+log "=== vibelab-egress backend install ==="
+log "run header: hostname=$(hostname) kernel=$(uname -r) user=$(id -un)"
+log "run header: docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unavailable) compose=$(docker compose version 2>/dev/null || echo unavailable)"
+log "run header: python3=$(python3 --version 2>&1) git_rev=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+log "run header: root=$ROOT secrets_dir=$SECRETS_DIR docker_gateway=$DOCKER_GATEWAY skip_client=$SKIP_CLIENT skip_firewall=$SKIP_FIREWALL assume_yes=$ASSUME_YES args='$ARGS'"
 
 confirm() {
   [ "$ASSUME_YES" = "1" ] && return 0
@@ -61,11 +141,23 @@ confirm() {
 }
 
 # ---------------------------------------------------------------------------
+# 1. prerequisites (docker, compose v2, python3)
+# ---------------------------------------------------------------------------
+STEP=1; STEP_NAME="prerequisites"
+log "prerequisites"
+command -v docker >/dev/null 2>&1 || die_env "docker not found"
+command -v python3 >/dev/null 2>&1 || die_env "python3 not found"
+docker compose version >/dev/null 2>&1 || die_env "docker compose v2 not available"
+[ -f "$REPO_ROOT/compose.yaml" ] || die_env "compose.yaml not found in $REPO_ROOT"
+log "prerequisites ok (docker, compose v2, python3, compose.yaml)"
+
+# ---------------------------------------------------------------------------
 # 2. persistent root + filesystem check (spec 38)
 # ---------------------------------------------------------------------------
-say "persistent root: $ROOT"
+STEP=2; STEP_NAME="persistent root"
+log "persistent root: $ROOT"
 if [ -e "$ROOT" ]; then
-  say "existing filesystem for $ROOT:"
+  log "existing filesystem for $ROOT:"
   findmnt -T "$ROOT" || true
   df -h "$ROOT" || true
 else
@@ -94,7 +186,7 @@ chmod 755 "$ROOT/egressd"
 # lets uid 1000 write.
 chown 1000:1000 "$ROOT/generated" 2>/dev/null || true
 chmod 700 "$ROOT/generated"
-say "persistent dirs ready (0700; egressd+generated -> uid 1000)"
+log "persistent dirs ready (0700; egressd+generated -> uid 1000)"
 
 # Seed the GEO datasets into the mihomo home dir. Mihomo v1.19.32 treats a
 # missing GeoIP.dat that it also cannot download as a FATAL config-parse
@@ -107,25 +199,26 @@ for f in GeoIP.dat GeoSite.dat asn.mmdb; do
   if [ -f "$GEO_SEED/$f" ]; then
     [ -f "$ROOT/mihomo/$f" ] || cp "$GEO_SEED/$f" "$ROOT/mihomo/$f"
   else
-    say "  WARNING: GEO seed missing: $GEO_SEED/$f (first boot will fail if the geox-url download is unreachable)"
+    log "  WARNING: GEO seed missing: $GEO_SEED/$f (first boot will fail if the geox-url download is unreachable)"
   fi
 done
-say "GEO seed: $ROOT/mihomo (GeoIP/GeoSite/ASN present or seeded)"
+log "GEO seed: $ROOT/mihomo (GeoIP/GeoSite/ASN present or seeded)"
 
 # ---------------------------------------------------------------------------
 # 3. backend secrets (spec 37) — generated once, never printed
 # ---------------------------------------------------------------------------
-say "backend secrets: $SECRETS_DIR"
+STEP=3; STEP_NAME="backend secrets"
+log "backend secrets: $SECRETS_DIR"
 mkdir -p "$SECRETS_DIR/providers" "$SECRETS_DIR/clients"
 chmod 700 "$SECRETS_DIR" "$SECRETS_DIR/providers" "$SECRETS_DIR/clients"
 gen_secret() { # path
   if [ -f "$1" ]; then
-    say "  keep existing $(basename "$1")"
+    log "  keep existing $(basename "$1")"
   else
     umask 077
     python3 -c "import secrets,sys; open(sys.argv[1],'w').write(secrets.token_urlsafe(32))" "$1"
     chmod 600 "$1"
-    say "  generated $(basename "$1")"
+    log "  generated $(basename "$1")"
   fi
 }
 gen_secret "$SECRETS_DIR/mihomo_api_secret"
@@ -141,14 +234,18 @@ gen_secret "$SECRETS_DIR/devbridge.token"
 #    until its auto-update succeeds. (egressd's separate enrichment store at
 #    ${ROOT}/egressd/geo is likewise best-effort and tolerates fetch failures.)
 # ---------------------------------------------------------------------------
-say "GEO data: optional — mihomo auto-updates at runtime (no pre-download)"
+STEP=4; STEP_NAME="GEO data (optional)"
+log "GEO data: optional — mihomo auto-updates at runtime (no pre-download)"
 
 # ---------------------------------------------------------------------------
 # 5. Docker CIDR sync + timer (spec 35)
 # ---------------------------------------------------------------------------
-say "Docker CIDR sync"
+STEP=5; STEP_NAME="Docker CIDR sync"
+log "Docker CIDR sync"
 export VIBELAB_EGRESS_ROOT="$ROOT"
-python3 "$HOSTCTL" sync-docker-cidrs || die_env "CIDR sync failed"
+run_logged "egress-hostctl sync-docker-cidrs" \
+  python3 "$HOSTCTL" sync-docker-cidrs \
+  || die_env "CIDR sync failed (full log: $LOG_FILE)"
 if command -v systemctl >/dev/null; then
   install -m 644 "$REPO_ROOT/host/units/vibelab-egress-cidr-sync.service" \
                  /etc/systemd/system/ 2>/dev/null || true
@@ -156,35 +253,37 @@ if command -v systemctl >/dev/null; then
                  /etc/systemd/system/ 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable --now vibelab-egress-cidr-sync.timer 2>/dev/null || \
-    say "  note: could not enable cidr-sync timer (run: systemctl enable --now vibelab-egress-cidr-sync.timer)"
+    log "  note: could not enable cidr-sync timer (run: systemctl enable --now vibelab-egress-cidr-sync.timer)"
 else
-  say "  note: systemctl not available; run CIDR sync manually after Docker restarts"
+  log "  note: systemctl not available; run CIDR sync manually after Docker restarts"
 fi
 
 # ---------------------------------------------------------------------------
 # 6. firewall (spec 36) — best effort with ufw
 # ---------------------------------------------------------------------------
+STEP=6; STEP_NAME="firewall"
 if [ "$SKIP_FIREWALL" = "1" ]; then
-  say "firewall: skipped (--skip-firewall)"
+  log "firewall: skipped (--skip-firewall)"
 elif command -v ufw >/dev/null; then
-  say "firewall (ufw): allow egress ports only from local sources"
+  log "firewall (ufw): allow egress ports only from local sources"
   ufw allow in on lo 2>/dev/null || true
   ufw allow from "$DOCKER_GATEWAY" to any port 9091,1080:1081 proto tcp 2>/dev/null || true
   ufw deny 9090 2>/dev/null || true   # mihomo admin: never reachable outside compose
-  say "  (verify with: ufw status verbose; adjust for your host policy)"
+  log "  (verify with: ufw status verbose; adjust for your host policy)"
 else
-  say "firewall: ufw not found — manually restrict ports 9091/1080/1081 to"
-  say "  127.0.0.1 and $DOCKER_GATEWAY, and block 9090 (spec section 36)."
+  log "firewall: ufw not found — manually restrict ports 9091/1080/1081 to"
+  log "  127.0.0.1 and $DOCKER_GATEWAY, and block 9090 (spec section 36)."
 fi
 
 # ---------------------------------------------------------------------------
 # 7. host client provisioning + install (must precede bootstrap config: the
 #    generated mihomo config embeds the per-client proxy credentials).
 # ---------------------------------------------------------------------------
+STEP=7; STEP_NAME="host client provisioning"
 if [ "$SKIP_CLIENT" = "1" ]; then
-  say "host client: skipped (--skip-client)"
+  log "host client: skipped (--skip-client)"
 else
-  say "provisioning host client (host-main)"
+  log "provisioning host client (host-main)"
   # Invoke helpers via `bash` (read, not exec): direct shebang exec of a
   # script that is still open for write by another process fails with
   # ETXTBSY ("Text file busy") on some filesystems (observed on the 9p
@@ -202,12 +301,14 @@ fi
 # 8. bootstrap config: generate the initial mihomo config from secrets so
 #    the stack can start (egressd takes over generation at runtime in A3).
 # ---------------------------------------------------------------------------
-say "generating initial mihomo config (bootstrap)"
+STEP=8; STEP_NAME="bootstrap config"
+log "generating initial mihomo config (bootstrap)"
 touch "$ROOT/providers/.gitkeep"
-PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \
+run_logged "python3 -m egressd.bootstrap_config" \
+  env PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \
   --root "$ROOT" --secrets-dir "$SECRETS_DIR" \
   --oneshot-slots "${EGRESSD_ONESHOT_SLOTS:-8}" \
-  || die_env "bootstrap config generation failed"
+  || die_env "bootstrap config generation failed (full log: $LOG_FILE)"
 
 # ---------------------------------------------------------------------------
 # 8b. make the backend secrets readable by the egressd container user.
@@ -220,23 +321,26 @@ PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \
 #     egressd can read it. mihomo runs as root in its container, so it can
 #     still read the files regardless of host ownership.
 # ---------------------------------------------------------------------------
-say "making backend secrets readable by the egressd user (uid 1000)"
+log "making backend secrets readable by the egressd user (uid 1000)"
 chown -R 1000:1000 "$SECRETS_DIR" 2>/dev/null || \
-  say "  note: could not chown $SECRETS_DIR to uid 1000 (egressd may fail to read secrets)"
+  log "  note: could not chown $SECRETS_DIR to uid 1000 (egressd may fail to read secrets)"
 
 # ---------------------------------------------------------------------------
 # 9. compose deploy
 # ---------------------------------------------------------------------------
-say "deploying compose stack (mihomo pinned, egressd built from repo)"
-export VIBELAB_EGRESS_ROOT="$ROOT"
+STEP=9; STEP_NAME="compose deploy"
+log "deploying compose stack (mihomo pinned, egressd built from repo)"
 export VIBELAB_EGRESS_SECRETS="$SECRETS_DIR"
 export DOCKER_GATEWAY
 cd "$REPO_ROOT"
 # Service key in compose.yaml is the full name (vibelab-egress-egressd);
 # the short name is not a valid compose service reference.
-docker compose build vibelab-egress-egressd
-docker compose up -d
-say "waiting for services to become healthy"
+run_logged "docker compose build vibelab-egress-egressd" \
+  docker compose build vibelab-egress-egressd \
+  || die_env "docker compose build failed (full log: $LOG_FILE)"
+run_logged "docker compose up -d" docker compose up -d \
+  || die_env "docker compose up -d failed (full log: $LOG_FILE)"
+log "waiting for services to become healthy"
 # Require EVERY service to be healthy, not just any one. The old check
 # (grep '"healthy"') broke out as soon as mihomo was healthy, so it reported
 # success while egressd was crash-looping. We poll each service's health and
@@ -261,16 +365,16 @@ for i in $(seq 1 45); do
   if all_healthy; then healthy=1; break; fi
   sleep 2
 done
-docker compose ps || true
+run_logged "docker compose ps" docker compose ps || true
 if [ "$healthy" -ne 1 ]; then
-  say "ERROR: not all services became healthy within 90s"
+  log "ERROR: not all services became healthy within 90s"
   for s in "${SERVICES[@]}"; do
     h="$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo unknown)"
     st="$(docker inspect --format '{{.State.Status}}' "$s" 2>/dev/null || echo unknown)"
-    say "  $s: state=$st health=$h"
+    log "  $s: state=$st health=$h"
     if [ "$h" != "healthy" ]; then
-      say "  --- last 40 lines of $s logs ---"
-      docker logs --tail 40 "$s" 2>&1 | sed 's/^/    /' || true
+      log "  --- last 40 lines of $s logs ---"
+      docker logs --tail 40 "$s" 2>&1 | sed 's/^/    /' | tee -a "$LOG_FILE" || true
     fi
   done
   die_env "egress stack not healthy (see logs above); re-run after fixing the crash"
@@ -279,19 +383,21 @@ fi
 # ---------------------------------------------------------------------------
 # 10. acceptance harness
 # ---------------------------------------------------------------------------
-say "running host acceptance harness"
+STEP=10; STEP_NAME="acceptance harness"
+log "running host acceptance harness"
 # The harness resolves compose.yaml from VIBELAB_EGRESS_REPO; point it at the
 # repo checkout on this host (its built-in default is the sandbox path).
 export VIBELAB_EGRESS_REPO="$REPO_ROOT"
-if python3 "$REPO_ROOT/host/egress-host-test" --out "$ROOT/acceptance-report.json"; then
-  say "acceptance: PASS"
+if run_logged "egress-host-test (host acceptance harness)" \
+     python3 "$REPO_ROOT/host/egress-host-test" --out "$ROOT/acceptance-report.json"; then
+  log "acceptance: PASS"
 else
-  say "acceptance: see $ROOT/acceptance-report.json"
+  log "acceptance: FAIL — see $ROOT/acceptance-report.json (full harness JSON above in this log)"
   exit 4
 fi
 
-say "backend installation complete"
-say "  persistent root : $ROOT"
-say "  secrets         : $SECRETS_DIR"
-say "  compose project : vibelab-egress (mihomo + egressd)"
-say "  next: provision container clients with scripts/provision-client.sh"
+log "backend installation complete"
+log "  persistent root : $ROOT"
+log "  secrets         : $SECRETS_DIR"
+log "  compose project : vibelab-egress (mihomo + egressd)"
+log "  next: provision container clients with scripts/provision-client.sh"
