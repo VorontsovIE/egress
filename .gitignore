@@ -27,3 +27,28 @@ dist/
 *~
 .idea/
 .vscode/
+# --- GEO data: NOT in git (stripped from history 2026-10-15) ---
+# Download on demand: sh scripts/fetch-geo-data.sh
+host/geo/
+poc/geo/
+poc/geo.tar.gz
+poc/meta-rules-dat-release/
+poc/diag_load/mihomo/GeoIP.dat
+poc/diag_load/mihomo/GeoSite.dat
+poc/diag_load/mihomo/asn.mmdb
+poc/diag_put/mihomo/GeoIP.dat
+poc/diag_put/mihomo/GeoSite.dat
+poc/diag_put/mihomo/asn.mmdb
+poc/diag_timing/mihomo/GeoIP.dat
+poc/diag_timing/mihomo/GeoSite.dat
+poc/diag_timing/mihomo/asn.mmdb
+poc/run/GeoIP.dat
+poc/run/GeoSite.dat
+poc/run/ASN.mmdb
+poc/run_a2/geo_update/
+poc/run_a2/mihomo/GeoIP.dat
+poc/run_a2/mihomo/GeoSite.dat
+poc/run_a2/mihomo/asn.mmdb
+poc/run_a3/mihomo/GeoIP.dat
+poc/run_a3/mihomo/GeoSite.dat
+poc/run_a3/mihomo/asn.mmdb

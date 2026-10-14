@@ -23,7 +23,7 @@
 Корень git-репозитория — корень проекта: репозиторий автономен (GitHub
 `VorontsovIE/egress`), «внешнего» окружения нет. В dev-контейнере корень
 репозитория смонтирован в `/srv/workspace`, на globe —
-`/home/vibelab/openscience/workspace`. Отслеживается 1353 файла, ~600 МБ.
+`/home/vibelab/openscience/workspace`. Отслеживается 1299 файлов, ~127 МБ.
 
 ```text
 .
@@ -66,7 +66,7 @@
 │   ├── LIVE_ACCEPTANCE.md
 │   ├── strict-helper/                  # TUN helper (Dockerfile + egress-tun-helper.py, NET_ADMIN)
 │   ├── units/                          # systemd: devbridge, tun-helper, cidr-sync (service+timer)
-│   └── geo/                            # GeoIP.dat, GeoSite.dat, asn.mmdb (~29 МБ)
+│   └── geo/                            # качается по требованию (не в git; scripts/fetch-geo-data.sh)
 │
 ├── scripts/                            # bash-скрипты (host, root где указано)
 │   ├── install-backend-host.sh         # полный bootstrap backend (secrets, CIDR sync, ufw, compose)
@@ -76,6 +76,7 @@
 │   ├── install-client.sh               # установка client package (host | gvisor-container)
 │   ├── verify-client.sh                # config validate/whoami/doctor + права на секреты
 │   ├── bootstrap-dev-access.sh         # один раз: devbridge token + unit + start
+│   ├── fetch-geo-data.sh               # GEO-скачивание по требованию (не в git; spec 14/41)
 │   ├── run-live-acceptance.sh          # live acceptance на host → reports/host_acceptance_report.json
 │   └── verify-live-report.py           # независимая re-verification репорта (tamper-evident)
 │
@@ -96,8 +97,8 @@
     ├── mihomo-src/                     # vendored исходники v1.19.32 (~6 МБ, .git удалён)
     ├── mihomo-src.tar.gz
     ├── wgserver/                       # userspace WireGuard-сервер (Go, wireguard-go + sing-wireguard)
-    ├── geo/                            # GEO-данные (codeload) + geo.tar.gz
-    ├── meta-rules-dat-release/         # полный release-набор GEO/metadb + sha256sum
+    ├── geo/                            # не в git (scripts/fetch-geo-data.sh)
+    ├── meta-rules-dat-release/         # не в git (scripts/fetch-geo-data.sh --full)
     ├── fake_node.py                    # фейковые SOCKS5-ноды с JSONL-логом
     ├── run_poc.py, run_a2.py, run_a3.py# live-оркестраторы (реальный mihomo)
     ├── run/, run_a2/, run_a3/          # результаты прогонов (logs, configs, state, clients/)
@@ -105,7 +106,7 @@
     └── results.json                    # итог PoC: 22/22
 ```
 
-Состав по типам: 39 `.py`, 1047 `.go` (vendored mihomo-src), 15 `.sh`, 39 `.yaml`,
+Состав по типам: 39 `.py`, 1047 `.go` (vendored mihomo-src), 16 `.sh`, 39 `.yaml`,
 12 `.md`.
 
 ### Зачем в репо такие крупные бинарники и данные
@@ -113,9 +114,10 @@
 - `poc/mihomo*`, `poc/wgserver/wgserver` — собраны из исходников, т.к.
   `objects.githubusercontent.com` / `raw.githubusercontent.com` заблокированы
   в этой среде (релизы GitHub недоступны). Коммитятся намеренно.
-- `poc/geo/`, `poc/meta-rules-dat-release/`, `host/geo/` — GEO-данные
-  (GeoIP/GeoSite/ASN), скачаны через `codeload.github.com`; нужны для оффлайн-
-  прогонов.
+- GEO-данные (GeoIP/GeoSite/ASN) **не хранятся в git** (исключены из истории
+  2026-10-15): скачиваются по требованию `scripts/fetch-geo-data.sh` (источник
+  MetaCubeX/meta-rules-dat, те же URL, что `geox-url`; в OpenScience работает
+  fallback на `codeload.github.com`).
 - `poc/mihomo-src/` — исходники, чтобы бинарники воспроизводились.
 
 ## Соглашения (обязательные)
@@ -146,8 +148,9 @@
    `VorontsovIE/egress`); все пути в доках и скриптах — относительно корня
    репозитория. «Внешнего» слоя и корневых дублей проектных файлов не
    создавать (2026-10-14: исторические корневые дубли удалены).
-9. **Не удалять** `poc/` (бинарники, исходники, GEO, результаты прогонов) и
+9. **Не удалять** `poc/` (бинарники, исходники, результаты прогонов) и
    `reports/` — это доказательства приёмки (POC_REPORT.md, acceptance-репорт).
+   GEO-данные в git не хранятся — `scripts/fetch-geo-data.sh`.
 10. **Язык документации** — русский (как в существующих документах проекта);
     код и комментарии — английский.
 

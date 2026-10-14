@@ -38,7 +38,8 @@
 - **Сетевые блокировки:** `objects.githubusercontent.com` и
   `raw.githubusercontent.com` недоступны; работает `codeload.github.com`.
   Поэтому mihomo собран из исходников (`poc/mihomo-src/`), а не скачан из
-  релизов GitHub.
+  релизов GitHub. Скачивание GEO — `scripts/fetch-geo-data.sh` (тот же
+  codeload-fallback).
 - **Публичные цели для e2e:** доступны `cloudflare.com/cdn-cgi/trace` (200),
   `gstatic.com/generate_204` (204); `api.ipify.org`, `example.com` — нет.
   Для локальных e2e-проверок использовать TEST-NET-3 (`203.0.113.0/24`) —
@@ -80,6 +81,8 @@ python3 poc/run_a3.py       # A3: /v1 API на реальном mihomo (7 live-�
 ```
 
 Используют бинарники `poc/mihomo` / `poc/mihomo-gvisor` и GEO из `poc/geo/`.
+GEO в git не хранится (с 2026-10-15): `sh scripts/fetch-geo-data.sh`
+(в этой среде автоматически включается codeload-fallback).
 
 ### Host-side (выполняются на хосте, НЕ в контейнере)
 
@@ -154,4 +157,5 @@ cd poc/wgserver && /usr/local/go/bin/go build -o wgserver .
   хосте; текущий acceptance-репорт: `reports/host_acceptance_report.json`
   (4 passed / 1 failed / 23 skipped, 2026-10-12) — проверить статус failed
   пункта в `STATUS.md` перед повторным прогоном.
-- `poc/` содержит ~470 МБ бинарников/данных — намеренно (см. AGENTS.md).
+- `poc/` содержит ~130 МБ бинарников/исходников — намеренно (см. AGENTS.md);
+  GEO-данные в git не хранятся — `scripts/fetch-geo-data.sh`.

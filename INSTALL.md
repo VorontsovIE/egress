@@ -18,7 +18,10 @@
 - Docker Engine + Compose v2 (`docker compose version`);
 - python3 (для host-утилит, без сторонних пакетов);
 - root на host;
-- доступ в интернет для загрузки GEO-данных и образа `metacubex/mihomo`.
+- доступ в интернет для загрузки GEO-данных и образа `metacubex/mihomo`
+  (если GEO-URL недоступны — до установки выполнить `sh scripts/fetch-geo-data.sh`:
+  скрипт-установки seed-ит mihomo из `host/geo/`, иначе mihomo скачает сам
+  через `geox-url`).
 
 ### Persistent paths
 
@@ -69,7 +72,8 @@ docker-bridge, заблокируйте 9090 наружу.
 scripts/install-backend-host.sh            # полный bootstrap (root)
 ```
 
-Скрипт: создаёт persistent dirs → генерирует secrets → скачивает GEO →
+Скрипт: создаёт persistent dirs → генерирует secrets → GEO-seed (из
+`host/geo/`, если присутствует; иначе mihomo скачает сам) →
 sync Docker CIDRs (+ systemd timer) → firewall → `docker compose build
 egressd && docker compose up -d` → provision+install host client →
 host acceptance harness. Переключатели: `--root`, `--secrets-dir`,

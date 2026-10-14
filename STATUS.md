@@ -56,6 +56,9 @@
 показывает полный путь tunnel → gVisor → echo → tunnel.
 
 ## Текущий шаг / Next
+ 2026-10-15: репозиторий автономен (GitHub `VorontsovIE/egress`), проект =
+ корень git; GEO-данные (~370 МБ) исключены из истории — перед оффлайн
+ PoC-прогоном: `sh scripts/fetch-geo-data.sh`.
  Все фазы A0–A8 закрыты в части, реализуемой в этой среде. Остаётся только
  live-часть, требующая целевого хоста с Docker + CAP_NET_ADMIN. Для неё
  подготовлен **готовый к запуску harness + перепроверка** (2026-10-11):
@@ -820,3 +823,11 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   процесс); fake-node offset для новой ноды (порт-коллизия).
 - 2026-10-11: A3 закрыта — 18/18 offline (pytest) + 7/7 live
   (`poc/run_a3.py`, реальный мihomo), стабильно x2; A2+A3 offline 60/60.
+- 2026-10-15: Реструктуризация репозитория: проект = git root («внешний» слой
+  упразднён — корневые метофайлы AGENTS.md/DEVELOPMENT.md/.gitignore перенесены
+  в проект, побайтовые дубли TECH_SPEC.md и live-acceptance.py удалены).
+  ~370 МБ GEO-данных исключены из истории (host/geo, poc/geo, poc/geo.tar.gz,
+  poc/meta-rules-dat-release, копии в poc/run* и poc/diag_*/mihomo) —
+  скачиваются по требованию `scripts/fetch-geo-data.sh` (--full/--release/
+  --check, codeload-fallback для OpenScience). SHAs переписаны
+  (git filter-repo); ветка `main`; force-push на GitHub.
