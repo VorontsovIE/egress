@@ -1,0 +1,340 @@
+#!/usr/bin/env bash
+# Offline install suite for scripts/install-backend-host.sh and the
+# host/egress-host-test harness.
+#
+# Runs WITHOUT a Docker daemon and WITHOUT root (VIBELAB_EGRESS_TEST_MODE=1
+# + stubs in tests/install/stubs shadow docker/id/sleep/... on PATH). As
+# root the success path additionally exercises the real client install
+# (scripts/install-client.sh -> /usr/local + /etc/vibelab-egress); without
+# root the client step is skipped (--skip-client) because /usr/local and
+# /etc are root-owned (see README.md, «Ограничения»).
+#
+# Scenarios:
+#   0. syntax: bash -n all scripts/*.sh, py_compile host utilities
+#   1. success path: rc 0, log file with run header + all 10 step markers,
+#      generated/config.yaml, secrets 0600, harness report 0 failed
+#   2. fail A: STUB_DOCKER_UP_RC=1 -> rc 3, log has step 9,
+#      'docker compose up -d', 'full log:'
+#   3. fail B: STUB_DOCKER_HEALTH=never -> rc 3, redacted egressd log dump
+#      + RestartCount in the install log
+#   4. fail C: STUB_DOCKER_HEALTH=restarting (stale healthy read) -> rc 3
+#   5. root escape: --help rc 0; run without VIBELAB_EGRESS_TEST_MODE as
+#      non-root -> rc 3 'must run as root'
+#   6. negative harness (ported from the lost /tmp/a1_test.sh): public
+#      bind, docker.sock mount, provider secret in a client bundle
+#
+# Exit: 0 all pass, 1 any failure.
+set -u
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+STUBS="$HERE/stubs"
+
+PASS=0
+FAIL=0
+FAILED_NAMES=""
+
+ok()  { PASS=$((PASS + 1)); echo "ok   - $1"; }
+bad() { FAIL=$((FAIL + 1)); FAILED_NAMES="$FAILED_NAMES $1"; echo "FAIL - $1: $2"; }
+check() { # <name> <rc> [detail]
+  if [ "$2" -eq 0 ]; then ok "$1"; else bad "$1" "${3:-condition failed}"; fi
+}
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+IS_ROOT=0
+[ "$(id -u)" = "0" ] && IS_ROOT=1
+echo "# offline install suite (root=$IS_ROOT, bash stubs: $STUBS)"
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+make_env() { # <dir> — root + secrets dirs; provision client host-main
+  local d="$1"
+  mkdir -p "$d/root" "$d/secrets"
+  chmod 700 "$d/root"
+  env PATH="$STUBS:$PATH" VIBELAB_EGRESS_TEST_MODE=1 \
+    bash "$REPO/scripts/provision-client.sh" \
+    --client host-main --environment host \
+    --secrets-dir "$d/secrets" --out "$d/root/client-bundles" \
+    > "$d/provision.out" 2>&1
+  check "env: provision-client.sh host-main" $? \
+    "$(head -1 "$d/provision.out" 2>/dev/null)"
+}
+
+# scenario_install <dir> [KEY=VAL...] [--flag...]
+# KEY=VAL pairs are passed to the install script's environment.
+scenario_install() {
+  local d="$1"; shift
+  local envs=() flags=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      *=*) envs+=("$a") ;;
+      *)   flags+=("$a") ;;
+    esac
+  done
+  ( cd "$REPO"
+    env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
+      VIBELAB_EGRESS_TEST_MODE=1 \
+      bash scripts/install-backend-host.sh \
+      --root "$d/root" --secrets-dir "$d/secrets" \
+      --yes --skip-firewall ${flags[@]+"${flags[@]}"} \
+      > "$d/install.out" 2> "$d/install.err" )
+}
+
+log_of() { echo "$1/root/install-backend-host.log"; }
+
+# ---------------------------------------------------------------------------
+# 0. syntax
+# ---------------------------------------------------------------------------
+echo "== 0. syntax"
+for sh in "$REPO"/scripts/*.sh; do
+  bash -n "$sh" 2> "$TMP/syn.err"
+  check "bash -n $(basename "$sh")" $? "$(head -1 "$TMP/syn.err" 2>/dev/null)"
+done
+for py in "$REPO"/host/egress-host-test "$REPO"/host/egress-hostctl \
+          "$REPO"/host/live-acceptance.py; do
+  python3 -m py_compile "$py" 2> "$TMP/syn.err"
+  check "py_compile $(basename "$py")" $? "$(head -1 "$TMP/syn.err" 2>/dev/null)"
+done
+
+# ---------------------------------------------------------------------------
+# 1. success path
+# ---------------------------------------------------------------------------
+echo "== 1. success path"
+d="$TMP/success"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d"
+else
+  # non-root: the client HOST install writes /usr/local + /etc (root-only),
+  # so step 7 is skipped; the client bundle + client secrets are already
+  # provisioned by make_env, which is exactly the state step 7 would leave.
+  scenario_install "$d" --skip-client
+fi
+rc=$?
+check "success: install rc=0" $rc "$(tail -1 "$d/install.err" 2>/dev/null)"
+logf="$(log_of "$d")"
+[ -f "$logf" ]
+check "success: install log file exists" $? "missing $logf"
+grep -q "run header: hostname=" "$logf" 2>/dev/null
+check "success: run header (hostname/kernel/user)" $?
+grep -q "compose=" "$logf" 2>/dev/null
+check "success: run header (docker/compose versions)" $?
+grep -q "git_rev=" "$logf" 2>/dev/null
+check "success: run header (git rev)" $?
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q "\[step $i/10\]" "$logf" 2>/dev/null
+  check "success: step marker $i/10" $?
+done
+[ -s "$d/root/generated/config.yaml" ]
+check "success: generated/config.yaml created" $?
+[ "$(stat -c '%a' "$d/secrets/mihomo_api_secret" 2>/dev/null)" = "600" ]
+check "success: mihomo_api_secret mode 600" $?
+[ "$(stat -c '%a' "$d/secrets/devbridge.token" 2>/dev/null)" = "600" ]
+check "success: devbridge.token mode 600" $?
+[ "$(stat -c '%a' "$d/secrets/clients/host-main.token" 2>/dev/null)" = "600" ]
+check "success: clients/host-main.token mode 600" $?
+python3 - "$d/root/acceptance-report.json" <<'PY'
+import json, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if r.get("summary", {}).get("failed") == 0 else 1)
+PY
+check "success: harness report 0 failed" $?
+grep -q '"summary"' "$logf" 2>/dev/null
+check "success: harness JSON report teed into install log" $?
+
+# ---------------------------------------------------------------------------
+# 2. fail A: compose up fails
+# ---------------------------------------------------------------------------
+echo "== 2. fail A (compose up rc 1)"
+d="$TMP/fail-up"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d" STUB_DOCKER_UP_RC=1
+else
+  scenario_install "$d" STUB_DOCKER_UP_RC=1 --skip-client
+fi
+rc=$?
+[ "$rc" -eq 3 ]
+check "fail-up: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
+logf="$(log_of "$d")"
+grep -q "\[step 9/10\]" "$logf" 2>/dev/null
+check "fail-up: log has step 9" $?
+grep -q "docker compose up -d" "$logf" 2>/dev/null
+check "fail-up: log has 'docker compose up -d'" $?
+grep -q "full log:" "$logf" 2>/dev/null
+check "fail-up: log has 'full log:' pointer" $?
+
+# ---------------------------------------------------------------------------
+# 3. fail B: never healthy (timeout dump + redaction)
+# ---------------------------------------------------------------------------
+echo "== 3. fail B (never healthy)"
+d="$TMP/fail-never"
+make_env "$d"
+# pre-seed the mihomo secret so its value can be planted in the (stub)
+# container logs and must come back redacted
+printf 'offline-test-mihomo-secret-value' > "$d/secrets/mihomo_api_secret"
+chmod 600 "$d/secrets/mihomo_api_secret"
+{
+  echo "egressd stub log: starting"
+  echo "egressd stub log: token offline-test-mihomo-secret-value leaked"
+} > "$d/container-logs.txt"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d" STUB_DOCKER_HEALTH=never STUB_DOCKER_LOGS="$d/container-logs.txt"
+else
+  scenario_install "$d" STUB_DOCKER_HEALTH=never STUB_DOCKER_LOGS="$d/container-logs.txt" --skip-client
+fi
+rc=$?
+[ "$rc" -eq 3 ]
+check "fail-never: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
+logf="$(log_of "$d")"
+grep -q "last 100 lines of vibelab-egress-egressd logs" "$logf" 2>/dev/null
+check "fail-never: log has egressd docker-logs dump" $?
+grep -q "RestartCount=" "$logf" 2>/dev/null
+check "fail-never: log has RestartCount" $?
+grep -q "egressd stub log: starting" "$logf" 2>/dev/null
+check "fail-never: stub log content captured" $?
+if grep -qF "offline-test-mihomo-secret-value" "$logf" 2>/dev/null; then
+  check "fail-never: secret value redacted in log" 1 "raw secret found in install log"
+else
+  ok "fail-never: secret value redacted in log"
+fi
+grep -q "\[REDACTED\]" "$logf" 2>/dev/null
+check "fail-never: [REDACTED] marker present in log" $?
+
+# ---------------------------------------------------------------------------
+# 4. fail C: restarting (stale healthy read must NOT pass the gate)
+# ---------------------------------------------------------------------------
+echo "== 4. fail C (restarting, stale healthy)"
+d="$TMP/fail-restarting"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d" STUB_DOCKER_HEALTH=restarting
+else
+  scenario_install "$d" STUB_DOCKER_HEALTH=restarting --skip-client
+fi
+rc=$?
+[ "$rc" -eq 3 ]
+check "fail-restarting: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
+logf="$(log_of "$d")"
+grep -q "state=restarting" "$logf" 2>/dev/null
+check "fail-restarting: log shows restarting state" $?
+grep -q "full log:" "$logf" 2>/dev/null
+check "fail-restarting: log has 'full log:' pointer" $?
+
+# ---------------------------------------------------------------------------
+# 5. root escape
+# ---------------------------------------------------------------------------
+echo "== 5. root escape"
+mkdir -p "$TMP/root-esc/root" "$TMP/root-esc/secrets"
+( cd "$REPO"
+  env PATH="$STUBS:$PATH" STUB_ID_UID=1000 \
+    bash scripts/install-backend-host.sh --help > "$TMP/root-esc/help.out" 2>&1 )
+check "root-escape: --help rc 0 (without root)" $?
+( cd "$REPO"
+  env PATH="$STUBS:$PATH" STUB_ID_UID=1000 \
+    bash scripts/install-backend-host.sh \
+    --root "$TMP/root-esc/root" --secrets-dir "$TMP/root-esc/secrets" \
+    --yes --skip-firewall > "$TMP/root-esc/run.out" 2> "$TMP/root-esc/run.err" )
+rc=$?
+[ "$rc" -eq 3 ]
+check "root-escape: run without TEST_MODE as non-root rc=3 (got $rc)" $?
+grep -q "must run as root" "$TMP/root-esc/run.err" 2>/dev/null
+check "root-escape: stderr says 'must run as root'" $?
+
+# ---------------------------------------------------------------------------
+# 6. negative harness (ported from the lost /tmp/a1_test.sh)
+# ---------------------------------------------------------------------------
+echo "== 6. negative harness (--static, tmp trees)"
+
+# 6a. public bind 0.0.0.0:1080
+d="$TMP/neg-public"
+mkdir -p "$d/repo" "$d/root" "$d/secrets"
+cat > "$d/repo/compose.yaml" <<'YAML'
+services:
+  vibelab-egress-mihomo:
+    image: metacubex/mihomo:v1.19.32
+    ports:
+      - "0.0.0.0:1080"
+  vibelab-egress-egressd:
+    build: ./egressd
+    ports:
+      - "127.0.0.1:9091"
+YAML
+env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
+    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+    python3 "$REPO/host/egress-host-test" --static \
+    > "$d/report.json" 2> "$d/report.err"
+rc=$?
+[ "$rc" -eq 1 ]
+check "neg-public: harness rc=1 (got $rc)" $?
+python3 - "$d/report.json" no_public_binds <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+c = next((x for x in r["checks"] if x["id"] == sys.argv[2]), None)
+sys.exit(0 if c and c["status"] == "fail" else 1)
+PY
+check "neg-public: no_public_binds=fail" $?
+
+# 6b. docker.sock mounted
+d="$TMP/neg-socket"
+mkdir -p "$d/repo" "$d/root" "$d/secrets"
+cat > "$d/repo/compose.yaml" <<'YAML'
+services:
+  vibelab-egress-egressd:
+    build: ./egressd
+    ports:
+      - "127.0.0.1:9091"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+YAML
+env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
+    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+    python3 "$REPO/host/egress-host-test" --static \
+    > "$d/report.json" 2> "$d/report.err"
+python3 - "$d/report.json" docker_socket_not_mounted <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+c = next((x for x in r["checks"] if x["id"] == sys.argv[2]), None)
+sys.exit(0 if c and c["status"] == "fail" else 1)
+PY
+check "neg-socket: docker_socket_not_mounted=fail" $?
+
+# 6c. provider secret leaked into a client bundle
+d="$TMP/neg-leak"
+mkdir -p "$d/repo" "$d/root/client-bundles/host-main" "$d/secrets/providers"
+chmod 700 "$d/root" "$d/root/client-bundles"
+printf 'fake-provider-subscription-value-0001\n' > "$d/secrets/providers/sub1.yaml"
+cat > "$d/root/client-bundles/host-main/client.yaml" <<'YAML'
+client_id: host-main
+control_url: http://127.0.0.1:9091
+subscription: fake-provider-subscription-value-0001
+YAML
+env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
+    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+    python3 "$REPO/host/egress-host-test" --static \
+    > "$d/report.json" 2> "$d/report.err"
+python3 - "$d/report.json" no_backend_secrets_in_client_bundles <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+c = next((x for x in r["checks"] if x["id"] == sys.argv[2]), None)
+sys.exit(0 if c and c["status"] == "fail" else 1)
+PY
+check "neg-leak: no_backend_secrets_in_client_bundles=fail" $?
+
+# ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+echo
+echo "== offline install suite: $PASS passed, $FAIL failed"
+if [ "$FAIL" -ne 0 ]; then
+  echo "failed checks:$FAILED_NAMES"
+  exit 1
+fi
+exit 0

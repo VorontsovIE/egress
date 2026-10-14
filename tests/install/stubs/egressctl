@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# stub egressctl for the offline install suite.
+set -u
+case "${1:-}" in
+  --help|-h)
+    echo "egressctl (stub) — manage vibelab-egress egress"
+    exit 0
+    ;;
+  --json)
+    case "${2:-}" in
+      whoami) echo '{"client_id": "host-main"}' ;;
+      route)
+        case "${3:-}" in
+          current) echo '{"route": "default"}' ;;
+          *) exit 2 ;;
+        esac ;;
+      mode)
+        case "${3:-}" in
+          current) echo '{"mode": "rule"}' ;;
+          *) exit 2 ;;
+        esac ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  *)
+    echo "stub egressctl: unsupported: $*" >&2
+    exit 64
+    ;;
+esac

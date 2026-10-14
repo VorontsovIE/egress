@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# stub ufw — best-effort firewall no-op for the offline install suite.
+exit 0

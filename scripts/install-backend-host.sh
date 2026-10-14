@@ -31,6 +31,10 @@
 #       [--docker-gateway <ip>] [--skip-client] [--skip-firewall] [--yes]
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error, 4 verification failed.
+#
+# Test mode:
+#   VIBELAB_EGRESS_TEST_MODE=1 — только для stubbed-тестов (tests/install),
+#   снимает требование root; в production не используется.
 set -Eeuo pipefail
 
 ROOT="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}"
@@ -114,8 +118,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Host bootstrap operation: root is required.
-[ "$(id -u)" = "0" ] || die_env "must run as root (host bootstrap operation)"
+# Host bootstrap operation: root is required. VIBELAB_EGRESS_TEST_MODE=1
+# bypasses ONLY this check — it is consumed by the offline stubbed test
+# suite (tests/install, see tests/install/README.md) and is not a
+# production flag.
+[ "${VIBELAB_EGRESS_TEST_MODE:-0}" = "1" ] || [ "$(id -u)" = "0" ] || \
+  die_env "must run as root (host bootstrap operation)"
 
 # Log file is created before step 2 (persistent root) so steps 2+ are
 # captured; until then log() prints to stdout only (graceful).

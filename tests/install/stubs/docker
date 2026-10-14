@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# stub docker for the offline install suite (no Docker daemon available).
+set -u
+HEALTH="${STUB_DOCKER_HEALTH:-healthy}"    # healthy | restarting | never
+
+kind_of() {
+  case "$1" in
+    *egressd*) echo egressd ;;
+    *mihomo*) echo mihomo ;;
+    *) echo unknown ;;
+  esac
+}
+
+case "${1:-}" in
+  compose)
+    shift
+    # optional global flags (-f <file>, -p <project>)
+    while [ "${1:-}" = "-f" ] || [ "${1:-}" = "-p" ]; do shift 2; done
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      version)
+        echo "Docker Compose version v2.29.7-stub"
+        ;;
+      build)
+        echo "stub: compose build $*"
+        exit "${STUB_DOCKER_BUILD_RC:-0}"
+        ;;
+      up)
+        echo "stub: compose up -d"
+        if [ "${STUB_DOCKER_UP_RC:-0}" != "0" ]; then
+          echo "Error: stubbed compose up failure (injected by STUB_DOCKER_UP_RC)" >&2
+          exit "${STUB_DOCKER_UP_RC}"
+        fi
+        echo "Container vibelab-egress-mihomo  Started"
+        echo "Container vibelab-egress-egressd  Started"
+        ;;
+      ps)
+        for a in "$@"; do
+          if [ "$a" = "--format" ]; then JSON=1; fi
+        done
+        if [ "${JSON:-0}" = "1" ]; then
+          case "$HEALTH" in
+            healthy)
+              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"running","Health":"healthy"}]\n'
+              ;;
+            restarting)
+              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"restarting","Health":"healthy"}]\n'
+              ;;
+            *)
+              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"running","Health":"starting"}]\n'
+              ;;
+          esac
+        else
+          echo "NAME                       IMAGE   COMMAND   SERVICE    CREATED   STATUS    PORTS"
+          case "$HEALTH" in
+            healthy)
+              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "vibelab-egress-egressd   stub    stub      egressd    stub      stub       stub"
+              ;;
+            restarting)
+              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "vibelab-egress-egressd   stub    stub      egressd    stub      restarting stub"
+              ;;
+            *)
+              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "vibelab-egress-egressd   stub    stub      egressd    stub      starting   stub"
+              ;;
+          esac
+        fi
+        ;;
+      *)
+        echo "stub docker compose: unsupported subcommand: $sub" >&2
+        exit 64
+        ;;
+    esac
+    ;;
+  inspect)
+    shift
+    fmt=""; name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --format) fmt="$2"; shift 2 ;;
+        *) name="$1"; shift ;;
+      esac
+    done
+    case "$fmt" in
+      *Health.Status*)
+        case "$HEALTH" in
+          healthy) echo healthy ;;
+          restarting) echo healthy ;;   # stale read: the 2026-10-12 bug
+          *) echo starting ;;
+        esac ;;
+      *State.Status*)
+        case "$HEALTH" in
+          healthy) echo running ;;
+          restarting) echo restarting ;;
+          *) echo running ;;
+        esac ;;
+      *RestartCount*)
+        case "$HEALTH" in
+          healthy) echo 0 ;;
+          restarting) echo 1 ;;
+          *) echo 0 ;;
+        esac ;;
+      *State.ExitCode*)
+        case "$HEALTH" in
+          healthy) echo 0 ;;
+          restarting) echo 1 ;;
+          *) echo 137 ;;
+        esac ;;
+      *State.Error*)
+        case "$HEALTH" in
+          healthy) echo "" ;;
+          restarting) echo "exec: container restarting" ;;
+          *) echo "healthcheck timeout (stub)" ;;
+        esac ;;
+      *OOMKilled*)
+        case "$HEALTH" in
+          healthy) echo false ;;
+          restarting) echo false ;;
+          *) echo true ;;
+        esac ;;
+      *)
+        echo ""
+        ;;
+    esac
+    ;;
+  logs)
+    # docker logs [--tail N] <name>
+    name="${@: -1}"
+    if [ -n "${STUB_DOCKER_LOGS:-}" ] && [ -f "${STUB_DOCKER_LOGS}" ]; then
+      cat "${STUB_DOCKER_LOGS}"
+    else
+      echo "stub-log: $name line 1"
+      echo "stub-log: $name line 2"
+    fi
+    ;;
+  network)
+    case "${2:-}" in
+      ls)
+        printf 'vibelab-egress_default\tstubid1\tbridge\nbridge\tstubid2\tbridge\n'
+        ;;
+      inspect)
+        printf '172.17.0.0/16\t172.17.0.1\n'
+        ;;
+      *)
+        echo "stub docker network: unsupported: ${2:-}" >&2
+        exit 64
+        ;;
+    esac
+    ;;
+  version)
+    echo "Docker version 27.3.1-stub, build stub"
+    ;;
+  *)
+    echo "stub docker: unsupported: $*" >&2
+    exit 64
+    ;;
+esac
+exit 0

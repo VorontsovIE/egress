@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# stub id for the offline install suite.
+#   STUB_ID_UID  uid reported for the current user (default 0)
+#   `id -u [target]` prints target (rc 0) or STUB_ID_UID.
+set -u
+case "${1:-}" in
+  -u|-un|-nu|--name|--user|--real-uid)
+    if [ -n "${2:-}" ]; then
+      echo "$2"
+    else
+      echo "${STUB_ID_UID:-0}"
+    fi
+    exit 0
+    ;;
+esac
+echo "uid=${STUB_ID_UID:-0}(stub) gid=${STUB_ID_GID:-0}(stub) groups=${STUB_ID_GID:-0}(stub)"
+exit 0

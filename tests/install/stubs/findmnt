@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# stub findmnt — plausible output for the offline install suite.
+echo "TARGET SOURCE FSTYPE OPTIONS"
+echo "stubfs stubfs stub  rw,relatime"
+exit 0

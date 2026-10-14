@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# stub sleep — no-op so the 90s health-gate timeout runs instantly offline.
+exit 0
