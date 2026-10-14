@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # verify-backend-host.sh — verify the deployed backend (spec 32-A, 34, 36).
 #
-# Checks:
-#   1. compose stack up + services healthy
+# Checks (7 sections, semantics unchanged):
+#   1. compose stack up + services healthy (per service: running + healthy
+#      + RestartCount == 0)
 #   2. no public binds (published ports bound to 127.0.0.1 / gateway only)
 #   3. docker socket not mounted into any service
 #   4. mihomo admin API (9090) not reachable from outside the compose net
 #   5. secrets not present in container environment (docker inspect)
 #   6. persistent dirs + permissions
 #   7. host acceptance harness (egress-host-test) — full report
+#
+# Log: the entire output (run header, all pass/fail/skip lines, the
+# harness JSON) is duplicated to <root>/verify-backend-host.log (append),
+# mirroring scripts/install-backend-host.sh.
 #
 # Usage:
 #   verify-backend-host.sh [--root <persistent-root>] [--secrets-dir <dir>] \
@@ -22,11 +27,27 @@ SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
 DOCKER_GATEWAY="${DOCKER_GATEWAY:-172.17.0.1}"
 REPORT="$ROOT/acceptance-report.json"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ARGV="$*"
 
 FAILURES=0
-pass() { echo "  PASS  $*"; }
-fail() { echo "  FAIL  $*"; FAILURES=$((FAILURES + 1)); }
-skip() { echo "  SKIP  $*"; }
+LOG_FILE=""
+
+now_utc() { date -u +%FT%TZ; }
+
+# vlog — print a line to stdout AND append it to the verify log (graceful
+# stdout-only until the log file is available).
+vlog() {
+  local line="[$(now_utc)] $*"
+  echo "$line" || true
+  if [ -n "$LOG_FILE" ]; then
+    printf '%s\n' "$line" >> "$LOG_FILE" 2>/dev/null || true
+  fi
+  return 0
+}
+
+pass() { vlog "PASS  $*"; }
+fail() { vlog "FAIL  $*"; FAILURES=$((FAILURES + 1)); }
+skip() { vlog "SKIP  $*"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,20 +60,39 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-echo "== verify-backend-host =="
+# Log file (append): created as soon as the root dir exists; if it cannot
+# be created the script still runs, stdout-only.
+LOG_FILE="$ROOT/verify-backend-host.log"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+: >> "$LOG_FILE" 2>/dev/null || LOG_FILE=""
+
+# run header (same fields as the install log)
+vlog "== verify-backend-host =="
+vlog "run header: hostname=$(hostname) kernel=$(uname -r) user=$(id -un)"
+vlog "run header: docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unavailable) compose=$(docker compose version 2>/dev/null || echo unavailable)"
+vlog "run header: python3=$(python3 --version 2>&1) git_rev=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+vlog "run header: root=$ROOT secrets_dir=$SECRETS_DIR docker_gateway=$DOCKER_GATEWAY report=$REPORT args='$ARGV'"
+
 cd "$REPO_ROOT"
 
-# 1. compose up + healthy
+# 1. compose up + healthy (per service)
 if docker compose ps --format json 2>/dev/null | grep -q '"running"'; then
   pass "compose stack running"
 else
   fail "compose stack not running"
 fi
-if docker compose ps --format json 2>/dev/null | grep -q '"healthy"'; then
-  pass "services healthy"
-else
-  fail "no service reports healthy"
-fi
+# Per-service health (a single grep '"healthy"' over compose ps used to pass
+# as soon as ANY service was healthy, masking a crash-looping sibling).
+for c in vibelab-egress-mihomo vibelab-egress-egressd; do
+  st="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null)"
+  h="$(docker inspect --format '{{.State.Health.Status}}' "$c" 2>/dev/null)"
+  rcnt="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null)"
+  if [ "$st" = "running" ] && [ "$h" = "healthy" ] && [ "$rcnt" = "0" ]; then
+    pass "$c: running + healthy + RestartCount=0"
+  else
+    fail "$c: state=${st:-unknown} health=${h:-unknown} RestartCount=${rcnt:-unknown} (expected running/healthy/0)"
+  fi
+done
 
 # 2. no public binds: every published port must be on 127.0.0.1 or the gateway
 PUB="$(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
@@ -132,13 +172,20 @@ else
 fi
 
 # 7. host acceptance harness
-echo "== host acceptance harness =="
-if python3 "$REPO_ROOT/host/egress-host-test" --out "$REPORT"; then
+vlog "== host acceptance harness =="
+if [ -n "$LOG_FILE" ]; then
+  python3 "$REPO_ROOT/host/egress-host-test" --out "$REPORT" 2>&1 | tee -a "$LOG_FILE"
+  harness_rc=${PIPESTATUS[0]}
+else
+  python3 "$REPO_ROOT/host/egress-host-test" --out "$REPORT"
+  harness_rc=$?
+fi
+if [ "$harness_rc" -eq 0 ]; then
   pass "host acceptance harness: all checks passed (report: $REPORT)"
 else
   fail "host acceptance harness reported failures (report: $REPORT)"
 fi
 
-echo "== verify-backend-host: $FAILURES failure(s) =="
+vlog "== verify-backend-host: $FAILURES failure(s) =="
 [ "$FAILURES" -eq 0 ] || exit 3
 exit 0
