@@ -340,44 +340,112 @@ run_logged "docker compose build vibelab-egress-egressd" \
   || die_env "docker compose build failed (full log: $LOG_FILE)"
 run_logged "docker compose up -d" docker compose up -d \
   || die_env "docker compose up -d failed (full log: $LOG_FILE)"
-log "waiting for services to become healthy"
+log "waiting for services to become healthy (3 consecutive polls, 2s interval, 90s timeout)"
 # Require EVERY service to be healthy, not just any one. The old check
 # (grep '"healthy"') broke out as soon as mihomo was healthy, so it reported
-# success while egressd was crash-looping. We poll each service's health and
-# only proceed when all of them are healthy; on timeout we dump the failing
-# container's logs so the crash is visible instead of masked.
+# success while egressd was crash-looping. A single healthy/running reading
+# of a restarting container can also be STALE (real failure on 2026-10-12:
+# compose ps showed "Restarting (1)" yet one inspect read still said
+# healthy/running and the install passed the gate). We therefore require
+# 3 CONSECUTIVE all-healthy polls before proceeding; the counter resets on
+# any failure. On timeout we dump the failing containers' logs (redacted)
+# and inspect fields so the crash is visible instead of masked.
 SERVICES=(vibelab-egress-mihomo vibelab-egress-egressd)
+
+# svc_field <service> <format> — one docker inspect field; empty on error.
+svc_field() {
+  docker inspect --format "$2" "$1" 2>/dev/null || true
+}
+
 all_healthy() {
-  local s
+  local s h st rcnt
   for s in "${SERVICES[@]}"; do
-    local h
-    h="$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null)"
+    h="$(svc_field "$s" '{{.State.Health.Status}}')"
+    st="$(svc_field "$s" '{{.State.Status}}')"
+    rcnt="$(svc_field "$s" '{{.RestartCount}}')"
     [ "$h" = "healthy" ] || return 1
-    # also guard against a container that is restarting/crashed (no health)
-    local st
-    st="$(docker inspect --format '{{.State.Status}}' "$s" 2>/dev/null)"
     [ "$st" = "running" ] || return 1
+    [ "$rcnt" = "0" ] || return 1
   done
   return 0
 }
+
+# redact_stream — replace the VALUES of the known backend secrets on stdin
+# with [REDACTED]. Values are urlsafe tokens (no sed metacharacters); empty
+# values are skipped. We run as root, so the files are readable.
+redact_stream() {
+  local f val exprs=""
+  local files=()
+  if [ -f "$SECRETS_DIR/mihomo_api_secret" ]; then
+    files+=("$SECRETS_DIR/mihomo_api_secret")
+  fi
+  for f in "$SECRETS_DIR/clients/"*.token "$SECRETS_DIR/clients/"*.proxy-creds; do
+    if [ -f "$f" ]; then
+      files+=("$f")
+    fi
+  done
+  for f in ${files[@]+"${files[@]}"}; do
+    val="$(cat "$f" 2>/dev/null)" || continue
+    if [ -n "$val" ]; then
+      exprs="${exprs}-e s/${val}/[REDACTED]/g "
+    fi
+  done
+  if [ -n "$exprs" ]; then
+    # shellcheck disable=SC2086  # exprs is built from urlsafe tokens only
+    sed $exprs
+  else
+    cat
+  fi
+}
+
+# log_stack_dump — per-service inspect fields + redacted `docker logs --tail
+# 100`, written to the install log (indented) and stdout.
+log_stack_dump() {
+  local s st h rcnt xcode cerr oom out
+  for s in "${SERVICES[@]}"; do
+    st="$(svc_field "$s" '{{.State.Status}}')"
+    h="$(svc_field "$s" '{{.State.Health.Status}}')"
+    rcnt="$(svc_field "$s" '{{.RestartCount}}')"
+    xcode="$(svc_field "$s" '{{.State.ExitCode}}')"
+    cerr="$(svc_field "$s" '{{.State.Error}}')"
+    oom="$(svc_field "$s" '{{.State.OOMKilled}}')"
+    [ -n "$st" ] || st="unknown"
+    [ -n "$h" ] || h="unknown"
+    log "  $s: state=$st health=$h RestartCount=$rcnt ExitCode=$xcode OOMKilled=$oom"
+    if [ -n "$cerr" ]; then
+      log "  $s: Error=$cerr"
+    fi
+    log "  --- last 100 lines of $s logs (redacted) ---"
+    out="$(docker logs --tail 100 "$s" 2>&1 || true)"
+    out="$(printf '%s\n' "$out" | redact_stream)"
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | sed 's/^/    /' | tee -a "$LOG_FILE" || true
+    else
+      log "  (no logs available for $s)"
+    fi
+  done
+}
+
+consecutive=0
 healthy=0
 for i in $(seq 1 45); do
-  if all_healthy; then healthy=1; break; fi
+  if all_healthy; then
+    consecutive=$((consecutive + 1))
+    if [ "$consecutive" -ge 3 ]; then
+      healthy=1
+      break
+    fi
+  else
+    consecutive=0
+  fi
   sleep 2
 done
 run_logged "docker compose ps" docker compose ps || true
 if [ "$healthy" -ne 1 ]; then
-  log "ERROR: not all services became healthy within 90s"
-  for s in "${SERVICES[@]}"; do
-    h="$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo unknown)"
-    st="$(docker inspect --format '{{.State.Status}}' "$s" 2>/dev/null || echo unknown)"
-    log "  $s: state=$st health=$h"
-    if [ "$h" != "healthy" ]; then
-      log "  --- last 40 lines of $s logs ---"
-      docker logs --tail 40 "$s" 2>&1 | sed 's/^/    /' | tee -a "$LOG_FILE" || true
-    fi
-  done
-  die_env "egress stack not healthy (see logs above); re-run after fixing the crash"
+  log "ERROR: not all services became healthy within 90s (3 consecutive polls required)"
+  log_stack_dump
+  log "ERROR: egress stack not healthy (full log: $LOG_FILE); re-run after fixing the crash"
+  die_env "egress stack not healthy (full log: $LOG_FILE); re-run after fixing the crash"
 fi
 
 # ---------------------------------------------------------------------------
