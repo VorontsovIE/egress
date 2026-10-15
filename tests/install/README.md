@@ -55,6 +55,9 @@ bash tests/install/test_install_scripts.sh # или напрямую
      `0.0.0.0:1080` → `no_public_binds=fail`; маунт `docker.sock` →
      `docker_socket_not_mounted=fail`; provider-секрет в client-бандле →
      `no_backend_secrets_in_client_bundles=fail`.
+  7. `verify-backend-host.sh`: live-allowlist биндов поверх stubbed docker —
+     безопасные бинды (127.0.0.1 + gateway) → rc 0; публичный бинд
+     `0.0.0.0` → rc 3 с указанием offending-маппинга.
 
 ## Ограничения (отличие от среды work order)
 

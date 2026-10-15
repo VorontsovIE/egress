@@ -94,18 +94,36 @@ for c in vibelab-egress-mihomo vibelab-egress-egressd; do
   fi
 done
 
-# 2. no public binds: every published port must be on 127.0.0.1 or the gateway
+# 2. no public binds: every published port must be on 127.0.0.1 or the
+#    docker bridge gateway. `NetworkSettings.Ports` renders one line per
+#    published container port (the map VALUE — no port key):
+#      [{127.0.0.1 1080} {172.17.0.1 1080}]
+# The host bindings are the dotted quads inside the brackets; a line with
+# no host address (0.0.0.0 or :: publish) means "all interfaces" -> fail.
 PUB="$(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
       vibelab-egress-mihomo 2>/dev/null || true)"
 PUB="$PUB
 $(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
       vibelab-egress-egressd 2>/dev/null || true)"
-BAD_BINDS="$(echo "$PUB" | grep -v '^0.0.0.0' | grep -vE "^(127\.0\.0\.1|${DOCKER_GATEWAY%%.*}\.)" | grep -v '^$' || true)"
-# docker inspect shows host bindings as "IP:port"; empty IP means 0.0.0.0
-if echo "$PUB" | grep -qE '^:|^0\.0\.0\.0:'; then
-  fail "a published port is bound to 0.0.0.0 (public)"
-elif [ -n "$BAD_BINDS" ]; then
-  fail "published port(s) on unexpected interface: $BAD_BINDS"
+BAD_BINDS=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  ips="$(printf '%s\n' "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)"
+  if [ -z "$ips" ]; then
+    BAD_BINDS="$BAD_BINDS$line
+"
+    continue
+  fi
+  while IFS= read -r ip; do
+    if [ "$ip" != "127.0.0.1" ] && [ "$ip" != "$DOCKER_GATEWAY" ]; then
+      BAD_BINDS="$BAD_BINDS$line
+"
+      break
+    fi
+  done <<< "$ips"
+done <<< "$PUB"
+if [ -n "$BAD_BINDS" ]; then
+  fail "published port(s) on unexpected interface (expected 127.0.0.1 or $DOCKER_GATEWAY): $(printf '%s' "$BAD_BINDS" | grep -v '^$' | paste -sd';' -)"
 else
   pass "all published ports bound to 127.0.0.1 / $DOCKER_GATEWAY"
 fi
@@ -119,25 +137,29 @@ else
 fi
 
 # 4. mihomo admin API not reachable from host loopback (it is compose-private)
-if python3 - "$SECRETS_DIR" <<'PY'
-import socket, sys, os
-secret_path = os.path.join(sys.argv[1], "mihomo_api_secret")
+#    9090 is not published, so a direct loopback connect must fail.
+#    Exit 0: not reachable (pass); 1: reachable (fail); 2: probe impossible
+#    (sandbox forbids socket() -> skip; only restricted test environments).
+if python3 - <<'PY'
+import socket, sys
 try:
-    secret = open(secret_path).read().strip()
+    s = socket.socket()
+    s.settimeout(2)
+    rc = s.connect_ex(("127.0.0.1", 9090))
+    s.close()
 except OSError:
-    secret = ""
-# try the mihomo container IP on the compose network via its published
-# ports: 9090 must NOT be published, so a direct loopback connect must fail.
-s = socket.socket()
-s.settimeout(2)
-rc = s.connect_ex(("127.0.0.1", 9090))
-s.close()
+    sys.exit(2)
 sys.exit(0 if rc != 0 else 1)
 PY
 then
   pass "mihomo admin API (9090) not reachable on host loopback"
 else
-  fail "mihomo admin API (9090) reachable on host loopback"
+  probe_rc=$?
+  if [ "$probe_rc" -eq 2 ]; then
+    skip "mihomo admin API probe (9090): socket() not permitted in this environment"
+  else
+    fail "mihomo admin API (9090) reachable on host loopback"
+  fi
 fi
 
 # 5. secrets not in container environment

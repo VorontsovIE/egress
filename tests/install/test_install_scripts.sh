@@ -22,6 +22,8 @@
 #      non-root -> rc 3 'must run as root'
 #   6. negative harness (ported from the lost /tmp/a1_test.sh): public
 #      bind, docker.sock mount, provider secret in a client bundle
+#   7. verify-backend-host.sh: live bind allowlist (safe binds -> rc 0;
+#      0.0.0.0 bind -> rc 3 with the offending mapping named)
 #
 # Exit: 0 all pass, 1 any failure.
 set -u
@@ -327,6 +329,60 @@ c = next((x for x in r["checks"] if x["id"] == sys.argv[2]), None)
 sys.exit(0 if c and c["status"] == "fail" else 1)
 PY
 check "neg-leak: no_backend_secrets_in_client_bundles=fail" $?
+
+# ---------------------------------------------------------------------------
+# 7. verify-backend-host.sh (live bind allowlist, stubbed docker)
+# ---------------------------------------------------------------------------
+echo "== 7. verify-backend-host"
+
+scenario_verify() { # <dir> [KEY=VAL...]
+  local d="$1"; shift
+  local envs=()
+  local a
+  for a in "$@"; do envs+=("$a"); done
+  ( cd "$REPO"
+    env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
+      VIBELAB_EGRESS_ROOT="$d/root" VIBELAB_EGRESS_SECRETS="$d/secrets" \
+      bash scripts/verify-backend-host.sh \
+      --root "$d/root" --secrets-dir "$d/secrets" \
+      > "$d/verify.out" 2> "$d/verify.err" )
+}
+
+# 7a. safe binds (127.0.0.1 + gateway) -> rc 0, allowlist PASS line
+d="$TMP/verify-ok"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d"
+else
+  scenario_install "$d" --skip-client
+fi
+scenario_verify "$d"
+rc=$?
+[ "$rc" -eq 0 ]
+check "verify-ok: rc=0 (got $rc)" $? "$(tail -1 "$d/verify.err" 2>/dev/null)"
+grep -q "PASS  all published ports bound to 127.0.0.1 / 172.17.0.1" \
+  "$d/verify.out" 2>/dev/null
+check "verify-ok: safe binds within allowlist" $?
+[ -f "$d/root/verify-backend-host.log" ]
+check "verify-ok: verify log file exists" $?
+
+# 7b. public bind (0.0.0.0) -> rc 3, FAIL line names the mapping
+d="$TMP/verify-public"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  scenario_install "$d"
+else
+  scenario_install "$d" --skip-client
+fi
+scenario_verify "$d" STUB_DOCKER_BINDS=public
+rc=$?
+[ "$rc" -eq 3 ]
+check "verify-public: rc=3 (got $rc)" $? "$(tail -1 "$d/verify.err" 2>/dev/null)"
+grep -q "FAIL  published port(s) on unexpected interface" \
+  "$d/verify.out" 2>/dev/null
+check "verify-public: FAIL line for the bad binds" $?
+grep -q "0.0.0.0" "$d/verify.out" 2>/dev/null
+check "verify-public: 0.0.0.0 binding reported" $?
 
 # ---------------------------------------------------------------------------
 # summary

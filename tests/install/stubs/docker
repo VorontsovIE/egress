@@ -120,6 +120,27 @@ case "${1:-}" in
           restarting) echo false ;;
           *) echo true ;;
         esac ;;
+      *NetworkSettings.Ports*)
+        # faithful render: map value per published port, e.g.
+        #   [{127.0.0.1 1080} {172.17.0.1 1080}]
+        gateway="${STUB_DOCKER_GATEWAY:-172.17.0.1}"
+        case "${STUB_DOCKER_BINDS:-ok}" in
+          public)
+            case "$(kind_of "$name")" in
+              mihomo)  echo "[{0.0.0.0 1080}]"
+                       echo "[{0.0.0.0 1081}]" ;;
+              egressd) echo "[{0.0.0.0 9091}]" ;;
+            esac
+            ;;
+          *)
+            case "$(kind_of "$name")" in
+              mihomo)  echo "[{127.0.0.1 1080} {${gateway} 1080}]"
+                       echo "[{127.0.0.1 1081} {${gateway} 1081}]" ;;
+              egressd) echo "[{127.0.0.1 9091} {${gateway} 9091}]" ;;
+            esac
+            ;;
+        esac
+        ;;
       *)
         echo ""
         ;;
