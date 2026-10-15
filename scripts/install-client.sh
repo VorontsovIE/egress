@@ -117,9 +117,26 @@ case "$TARGET" in
     # makes this survive container recreate (spec section 32).
     install_package "$INSTALL_ROOT"
     install_config /etc/vibelab-egress
-    # /run/secrets is the documented in-container secret location; it is
-    # normally a read-only mount — only write it if it is writable.
+    # /run/secrets is the documented in-container secret location. In
+    # production images it is provided as a read-only mount; in a plain
+    # root container it does not exist at all — create it in the writable
+    # rootfs so the install is self-contained (any-container support).
+    # A pre-existing read-only /run/secrets is left alone: the image build
+    # must provide the files there.
+    # NOTE: if the image mounts a tmpfs on /run, these files do not survive
+    # a container restart — use a named-volume mount or a baked image then.
+    run_secrets_ok=0
     if [ -d /run/secrets ] && [ -w /run/secrets ]; then
+      run_secrets_ok=1
+    elif [ ! -e /run/secrets ] && [ "$(id -u)" = "0" ]; then
+      mkdir -p /run/secrets
+      run_secrets_ok=1
+    else
+      echo "note: /run/secrets not writable here; if this container uses the"
+      echo "      documented /run/secrets/vibelab_egress_* mounts, the image"
+      echo "      build must provide them (see INSTALL.md, step B)."
+    fi
+    if [ "$run_secrets_ok" = "1" ]; then
       install_config /run/secrets/vibelab-egress
       # the example config references /run/secrets/vibelab_egress_* files;
       # provide them as symlinks to the installed copies.
@@ -127,10 +144,6 @@ case "$TARGET" in
              /run/secrets/vibelab_egress_client_token
       ln -sf /run/secrets/vibelab-egress/default-proxy.auth \
              /run/secrets/vibelab_egress_default_proxy_auth
-    else
-      echo "note: /run/secrets not writable here; if this container uses the"
-      echo "      documented /run/secrets/vibelab_egress_* mounts, the image"
-      echo "      build must provide them (see INSTALL.md, step B)."
     fi
     echo "installed client $CLIENT (gvisor-container) under $INSTALL_ROOT and /etc/vibelab-egress"
     ;;

@@ -180,7 +180,9 @@ restarting-контейнера (баг 2026-10-12) прохождения не 
 
 3. **Отдельные read-only secrets**: API token + default-proxy auth в
    отдельных файлах (host: `/etc/vibelab-egress/*.token|*.auth` 0600;
-   OpenScience: `/run/secrets/vibelab_egress_*` read-only mount).
+   OpenScience: `/run/secrets/vibelab_egress_*` read-only mount; в plain-
+   контейнере без такого маунта `install-client.sh` сам создаёт
+   `/run/secrets` в writable rootfs).
 
 4. **Skill** (`skills/egress/SKILL.md`) — устанавливается, если
    environment agent-capable (OpenScience).
