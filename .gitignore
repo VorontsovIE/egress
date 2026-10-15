@@ -11,8 +11,17 @@ build/
 dist/
 
 # --- Go ---
-# (poc/wgserver and poc/mihomo-src are vendored source; their build outputs
-#  are the committed binaries and are kept on purpose — see AGENTS.md)
+# (build outputs are NOT committed; build via the recipes in DEVELOPMENT.md)
+
+# --- Vendor sources / POC binaries: NOT in git (stripped from history 2026-10-15) ---
+# Download on demand: sh scripts/fetch-poc-vendor.sh
+poc/mihomo
+poc/mihomo-gvisor
+poc/mihomo-src/
+poc/mihomo-src.tar.gz
+poc/wgserver/wgserver
+poc/wgserver/third_party/wireguard-go/
+poc/wgserver/third_party/wireguard-go-*.tar.gz
 
 # --- Runtime / generated state ---
 *.sqlite

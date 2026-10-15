@@ -23,7 +23,8 @@
 Корень git-репозитория — корень проекта: репозиторий автономен (GitHub
 `VorontsovIE/egress`), «внешнего» окружения нет. В dev-контейнере корень
 репозитория смонтирован в `/srv/workspace`, на globe —
-`/home/vibelab/openscience/workspace`. Отслеживается 1299 файлов, ~127 МБ.
+`/home/vibelab/openscience/workspace`. Отслеживается 180 файлов, ~1.4 МБ
+(vendor-данные и бинарники — не в git, см. ниже).
 
 ```text
 .
@@ -92,11 +93,10 @@
 │   └── install-backend-host-report.log
 │
 └── poc/                                # Phase 0 PoC (A0): бинарники, исходники, harness'ы
-    ├── mihomo, mihomo-gvisor           # собранные бинарники v1.19.32 (49 МБ / 59 МБ)
-    ├── mihomo.sha256
-    ├── mihomo-src/                     # vendored исходники v1.19.32 (~6 МБ, .git удалён)
-    ├── mihomo-src.tar.gz
+    ├── mihomo.sha256                   # hash бинарника Phase-0 (сам бинарник — не в git)
     ├── wgserver/                       # userspace WireGuard-сервер (Go, wireguard-go + sing-wireguard)
+    │   └── third_party/
+    │       └── wireguard-go-sticky-sockets.patch   # 1-строчный vendor-патч (в git)
     ├── geo/                            # не в git (scripts/fetch-geo-data.sh)
     ├── meta-rules-dat-release/         # не в git (scripts/fetch-geo-data.sh --full)
     ├── fake_node.py                    # фейковые SOCKS5-ноды с JSONL-логом
@@ -106,19 +106,26 @@
     └── results.json                    # итог PoC: 22/22
 ```
 
-Состав по типам: 39 `.py`, 1047 `.go` (vendored mihomo-src), 16 `.sh`, 39 `.yaml`,
-12 `.md`.
+Состав по типам: 39 `.py`, 1 `.go` (poc/wgserver), 17 `.sh`, 39 `.yaml`,
+12 `.md`, 1 `.patch`.
 
-### Зачем в репо такие крупные бинарники и данные
+### Vendor-данные и бинарники — не в git
 
-- `poc/mihomo*`, `poc/wgserver/wgserver` — собраны из исходников, т.к.
-  `objects.githubusercontent.com` / `raw.githubusercontent.com` заблокированы
-  в этой среде (релизы GitHub недоступны). Коммитятся намеренно.
+- `poc/mihomo`, `poc/mihomo-gvisor` (v1.19.32, кастомные сборки: CGO off /
+  `-tags with_gvisor`) и `poc/wgserver/wgserver` **исключены из истории**
+  2026-10-15. Сборка из исходников — рецепт в `DEVELOPMENT.md`,
+  «Сборка (редко)». `poc/mihomo.sha256` хранит hash Phase-0 сборки
+  (`a2b70600…`, референс).
+- Vendor-исходники **не хранятся в git**: `sh scripts/fetch-poc-vendor.sh`
+  (codeload, pinned sha256: mihomo v1.19.32, MetaCubeX/wireguard-go
+  @ a6cecdd7f57f). Единственное изменение вендора — 1-строчный патч
+  `poc/wgserver/third_party/wireguard-go-sticky-sockets.patch`
+  (`StdNetSupportsStickySockets=false` для контейнера без NET_ADMIN) — в git,
+  накладывается скриптом при fetch.
 - GEO-данные (GeoIP/GeoSite/ASN) **не хранятся в git** (исключены из истории
   2026-10-15): скачиваются по требованию `scripts/fetch-geo-data.sh` (источник
   MetaCubeX/meta-rules-dat, те же URL, что `geox-url`; в OpenScience работает
   fallback на `codeload.github.com`).
-- `poc/mihomo-src/` — исходники, чтобы бинарники воспроизводились.
 
 ## Соглашения (обязательные)
 

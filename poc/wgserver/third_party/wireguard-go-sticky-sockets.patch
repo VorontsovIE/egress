@@ -1,0 +1,9 @@
+diff --git a/conn/sticky_linux.go b/conn/sticky_linux.go
+--- a/conn/sticky_linux.go
++++ b/conn/sticky_linux.go
+@@ -109,4 +109,4 @@
+ // offloading control data.
+ var stickyControlSize = unix.CmsgSpace(unix.SizeofInet6Pktinfo)
+ 
+-const StdNetSupportsStickySockets = true
++const StdNetSupportsStickySockets = false // PoC: netlink route socket unavailable in container (no NET_ADMIN); sticky sockets are a kernel optimization only

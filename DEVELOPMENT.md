@@ -37,9 +37,11 @@
   запрещён — TUN/netns не проверяются в этой среде (capability matrix — A6).
 - **Сетевые блокировки:** `objects.githubusercontent.com` и
   `raw.githubusercontent.com` недоступны; работает `codeload.github.com`.
-  Поэтому mihomo собран из исходников (`poc/mihomo-src/`), а не скачан из
-  релизов GitHub. Скачивание GEO — `scripts/fetch-geo-data.sh` (тот же
-  codeload-fallback).
+  Поэтому POC-бинарники собираются из исходников
+  (`scripts/fetch-poc-vendor.sh` + рецепт «Сборка (редко)»); на целевом
+  хосте релизы GitHub доступны, но production-стек использует Docker-образ
+  `metacubex/mihomo:v1.19.32` (`compose.yaml`) и POC-бинарники не требует.
+  Скачивание GEO — `scripts/fetch-geo-data.sh` (тот же codeload-fallback).
 - **Публичные цели для e2e:** доступны `cloudflare.com/cdn-cgi/trace` (200),
   `gstatic.com/generate_204` (204); `api.ipify.org`, `example.com` — нет.
   Для локальных e2e-проверок использовать TEST-NET-3 (`203.0.113.0/24`) —
@@ -53,7 +55,7 @@
 | Python | 3.11.17 (`python3`) |
 | pytest | 9.1.1 (fastapi, httpx, pyyaml, aiosqlite, cryptography установлены) |
 | git | 2.43.0 |
-| Go | 1.27.2 (`/usr/local/go/bin/go`) — для сборки `poc/wgserver/` |
+| Go | 1.27.2 (`/usr/local/go/bin/go`) — для сборки `poc/wgserver/` и mihomo |
 | curl, wget, tar | есть |
 | CPU / RAM | 24 CPU / 256 GiB |
 
@@ -80,7 +82,8 @@ python3 poc/run_a2.py       # A2: providers/GEO на реальном mihomo (8 
 python3 poc/run_a3.py       # A3: /v1 API на реальном mihomo (7 live-проверок)
 ```
 
-Используют бинарники `poc/mihomo` / `poc/mihomo-gvisor` и GEO из `poc/geo/`.
+Используют бинарники `poc/mihomo` / `poc/mihomo-gvisor` (не в git — сборка
+по рецепту ниже) и GEO из `poc/geo/`.
 GEO в git не хранится (с 2026-10-15): `sh scripts/fetch-geo-data.sh`
 (в этой среде автоматически включается codeload-fallback).
 
@@ -110,13 +113,26 @@ egress-run --mode tun <route> -- <command>   # только host (tun_backend=ho
 
 ### Сборка (редко)
 
-```bash
-# wgserver (userspace WireGuard-сервер):
-cd poc/wgserver && /usr/local/go/bin/go build -o wgserver .
+POC-бинарники (`poc/mihomo`, `poc/mihomo-gvisor`, `poc/wgserver/wgserver`)
+не в git (исключены из истории 2026-10-15). Recipe:
 
-# mihomo из исходников (только при смене версии; релизы GitHub недоступны):
-# исходники в poc/mihomo-src/ (v1.19.32), см. POC_REPORT.md §1
+```bash
+# 0. vendor-исходники (mihomo v1.19.32 + wireguard-go @ a6cecdd7f57f +
+#    1-строчный патч; идемпотентно, --check — верификация):
+sh scripts/fetch-poc-vendor.sh
+
+# 1. mihomo v1.19.32 (go.mod: go 1.20; в dev-контейнере /usr/local/go/bin/go 1.27.2):
+cd poc/mihomo-src && CGO_ENABLED=0 go mod download
+cd poc/mihomo-src && CGO_ENABLED=0 go build -o ../mihomo .
+cd poc/mihomo-src && CGO_ENABLED=0 go build -tags with_gvisor -o ../mihomo-gvisor .
+
+# 2. wgserver — userspace WireGuard-сервер (go.mod: go 1.23):
+cd poc/wgserver && go mod download && go build -o wgserver .
 ```
+
+Phase-0 сборка (2026-10-10): `poc/mihomo` — sha256 `a2b70600…`
+(в `poc/mihomo.sha256`), `poc/mihomo-gvisor` — 61 МБ. Хэш пере-сборки
+зависит от версии Go — не фиксируется.
 
 ## Layout и точки входа
 

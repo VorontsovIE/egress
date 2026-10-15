@@ -15,7 +15,9 @@
 ### Готово
 - [x] Структура репо (раздел 44 спеки)
 - [x] Сборка Mihomo v1.19.32 из исходников (релизы GitHub недоступны):
-      `poc/mihomo` (CGO off), `poc/mihomo-gvisor` (tags with_gvisor, userspace WG)
+      `poc/mihomo` (CGO off), `poc/mihomo-gvisor` (tags with_gvisor, userspace WG);
+      бинарники и vendor-исходники исключены из репо 2026-10-15 — рецепт
+      сборки в `DEVELOPMENT.md`, fetch — `scripts/fetch-poc-vendor.sh`
 - [x] Userspace WireGuard-сервер `poc/wgserver/` (wireguard-go + sing-wireguard,
       forward TCP на 127.0.0.1)
 - [x] GEO-данные через codeload: `poc/geo/{GeoIP.dat,GeoSite.dat,asn.mmdb}`
@@ -57,8 +59,9 @@
 
 ## Текущий шаг / Next
  2026-10-15: репозиторий автономен (GitHub `VorontsovIE/egress`), проект =
- корень git; GEO-данные (~370 МБ) исключены из истории — перед оффлайн
- PoC-прогоном: `sh scripts/fetch-geo-data.sh`.
+ корень git. Тяжёлые third-party данные исключены из истории (GEO ~370 МБ +
+ mihomo/wgserver vendor-исходники и бинарники ~127 МБ): перед оффлайн
+ PoC-прогоном — `sh scripts/fetch-geo-data.sh` и `sh scripts/fetch-poc-vendor.sh`.
  Все фазы A0–A8 закрыты в части, реализуемой в этой среде. Остаётся только
  live-часть, требующая целевого хоста с Docker + CAP_NET_ADMIN. Для неё
  подготовлен **готовый к запуску harness + перепроверка** (2026-10-11):
