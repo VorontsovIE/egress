@@ -110,14 +110,28 @@ class ClientRegistry:
         self._token_to_client: dict[str, str] = {}
         self._profiles: dict[str, dict[str, Any]] = {}
         self._creds: dict[str, tuple[str, str]] = {}
-        self._mtime = 0.0
+        self._sig: tuple[int, ...] | None = None
         self.reload()
 
-    def _dir_mtime(self) -> float:
+    def _state_sig(self) -> tuple[int, ...] | None:
+        """Signature of the clients dir: dir mtime + per-file (mtime, size).
+
+        Watching only the dir mtime misses in-place rewrites:
+        scripts/provision-client.sh rotates a token by overwriting the existing
+        <id>.token file, which bumps the file mtime but not the dir mtime -- a
+        running egressd would keep authenticating the OLD token forever.
+        Per-file stats catch rotation of existing clients as well as adding
+        and removing clients. Returns None when the dir is unreadable (the
+        last good registry is kept instead of reload-churning on every call).
+        """
         try:
-            return self.clients_dir.stat().st_mtime
+            parts = [self.clients_dir.stat().st_mtime_ns]
+            for entry in sorted(self.clients_dir.iterdir()):
+                st = entry.stat()
+                parts.extend((st.st_mtime_ns, st.st_size))
+            return tuple(parts)
         except OSError:
-            return 0.0
+            return None
 
     def reload(self) -> None:
         token_to_client: dict[str, str] = {}
@@ -173,11 +187,12 @@ class ClientRegistry:
         self._token_to_client = token_to_client
         self._profiles = profiles
         self._creds = creds
-        self._mtime = self._dir_mtime()
+        self._sig = self._state_sig()
         log.info("client registry loaded", extra={"clients": len(profiles)})
 
     def maybe_reload(self) -> None:
-        if self._dir_mtime() != self._mtime:
+        sig = self._state_sig()
+        if sig is not None and sig != self._sig:
             self.reload()
 
     def resolve(self, token: str) -> dict[str, Any] | None:
