@@ -171,6 +171,21 @@ Linux Docker-демон эту запись **не** создаёт по умо�
 поднимать с `--add-host=host.docker.internal:host-gateway` (или `extra_hosts`
 в compose), иначе `egressctl whoami` упадёт с `Name or service not known`.
 
+**Как перенести bundle в контейнер.** `install-client.sh` читает bundle из
+файловой системы самого контейнера. Копируйте в **свежий** каталог (старый
+сначала удалите):
+
+```bash
+docker exec -u root <container> rm -rf /root/egress-client-bundle
+docker cp <root>/client-bundles/<id> <container>:/root/egress-client-bundle
+```
+
+Нюанс `docker cp`: копирование каталога в **уже существующий** каталог
+контейнера вкладывает его внутрь (`/root/egress-client-bundle/<id>/`), а
+старые файлы верхнего уровня остаются. После ротации токена клиент будет
+авторизоваться старым токеном (`unknown token`), хотя на backend уже новый —
+легко спутать с багом авторизации egressd.
+
 Для каждого client profile:
 
 1. **Одинаковый package** `egressctl` + `egress-run` (stdlib-only,

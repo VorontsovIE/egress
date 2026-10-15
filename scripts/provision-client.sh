@@ -139,9 +139,9 @@ chmod 700 "$SECRETS_DIR" "$CLIENTS_DIR"
 # ---------------------------------------------------------------------------
 # summary — paths + short hashes only, never secret values (spec section 37)
 # ---------------------------------------------------------------------------
-python3 - "$BUNDLE_DIR" "$CLIENTS_DIR" "$CLIENT" <<'PY'
+python3 - "$BUNDLE_DIR" "$CLIENTS_DIR" "$CLIENT" "$ENVIRONMENT" <<'PY'
 import hashlib, json, sys, os
-bundle, clients, client = sys.argv[1], sys.argv[2], sys.argv[3]
+bundle, clients, client, environment = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 def h(p):
     try:
         return hashlib.sha256(open(p, "rb").read()).hexdigest()[:8]
@@ -155,4 +155,12 @@ for p in (f"{bundle}/client.yaml", f"{bundle}/client.token",
     print(f"  {p}  sha256:{h(p)}")
 print("NOTE: proxy-creds stay in the backend secrets dir and are never")
 print("      copied into any client bundle or environment.")
+if environment != "host":
+    print("NOTE: to move this bundle into the target container, remove any old")
+    print("      destination first, then copy (fresh dir, no nesting):")
+    print("      docker exec -u root <container> rm -rf /root/egress-client-bundle")
+    print(f"      docker cp {bundle} <container>:/root/egress-client-bundle")
+    print("      (docker cp of a directory into an EXISTING container dir nests it")
+    print("      under the dir name and leaves the stale token behind -> after a")
+    print("      rotation the client would present the old token: 'unknown token').")
 PY
