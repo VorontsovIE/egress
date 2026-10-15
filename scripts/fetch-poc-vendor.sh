@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-poc-vendor.sh — download POC vendor sources (not in git since 2026-10-15).
+# fetch-poc-vendor.sh — download POC vendor sources (not in git since commit fa65d70).
 #
 # The heavy third-party content was stripped from the repository history to
 # keep the GitHub clone small. This script restores the two vendor sources

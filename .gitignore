@@ -13,7 +13,7 @@ dist/
 # --- Go ---
 # (build outputs are NOT committed; build via the recipes in DEVELOPMENT.md)
 
-# --- Vendor sources / POC binaries: NOT in git (stripped from history 2026-10-15) ---
+# --- Vendor sources / POC binaries: NOT in git (stripped in commit fa65d70) ---
 # Download on demand: sh scripts/fetch-poc-vendor.sh
 poc/mihomo
 poc/mihomo-gvisor
@@ -36,7 +36,7 @@ poc/wgserver/third_party/wireguard-go-*.tar.gz
 *~
 .idea/
 .vscode/
-# --- GEO data: NOT in git (stripped from history 2026-10-15) ---
+# --- GEO data: NOT in git (stripped in commit 1c9d3e3) ---
 # Download on demand: sh scripts/fetch-geo-data.sh
 host/geo/
 poc/geo/

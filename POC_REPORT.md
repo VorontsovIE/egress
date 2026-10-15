@@ -6,7 +6,7 @@
 Дата прогона: 2026-10-10. Команда: `python3 poc/run_poc.py` (идемпотентно,
 убивает и поднимает все процессы сам).
 
-> **Update 2026-10-15:** бинарники и vendor-исходники, описанные в этом
+> **Update (исключение из репозитория — коммит `fa65d70`):** бинарники и vendor-исходники, описанные в этом
 > отчёте (`poc/mihomo*`, `poc/mihomo-src*`, `poc/wgserver/wgserver`,
 > `poc/wgserver/third_party/wireguard-go/`), исключены из репозитория.
 > Восстановление: `sh scripts/fetch-poc-vendor.sh`; рецепт сборки —

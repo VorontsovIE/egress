@@ -41,7 +41,9 @@
   (`scripts/fetch-poc-vendor.sh` + рецепт «Сборка (редко)»); на целевом
   хосте релизы GitHub доступны, но production-стек использует Docker-образ
   `metacubex/mihomo:v1.19.32` (`compose.yaml`) и POC-бинарники не требует.
-  Скачивание GEO — `scripts/fetch-geo-data.sh` (тот же codeload-fallback).
+  Скачивание GEO — `scripts/fetch-geo-data.sh` (только release-ассеты; при
+  блокировке хоста — диагностика + процедура ручного seed в сообщении
+  скрипта).
 - **Публичные цели для e2e:** доступны `cloudflare.com/cdn-cgi/trace` (200),
   `gstatic.com/generate_204` (204); `api.ipify.org`, `example.com` — нет.
   Для локальных e2e-проверок использовать TEST-NET-3 (`203.0.113.0/24`) —
@@ -84,8 +86,9 @@ python3 poc/run_a3.py       # A3: /v1 API на реальном mihomo (7 live-�
 
 Используют бинарники `poc/mihomo` / `poc/mihomo-gvisor` (не в git — сборка
 по рецепту ниже) и GEO из `poc/geo/`.
-GEO в git не хранится (с 2026-10-15): `sh scripts/fetch-geo-data.sh`
-(в этой среде автоматически включается codeload-fallback).
+GEO в git не хранится (с коммита `1c9d3e3`): `sh scripts/fetch-geo-data.sh`
+(только release-ассеты; при блокировке хоста — диагностика + ручное seed
+сообщением скрипта).
 
 ### Host-side (выполняются на хосте, НЕ в контейнере)
 
@@ -114,7 +117,7 @@ egress-run --mode tun <route> -- <command>   # только host (tun_backend=ho
 ### Сборка (редко)
 
 POC-бинарники (`poc/mihomo`, `poc/mihomo-gvisor`, `poc/wgserver/wgserver`)
-не в git (исключены из истории 2026-10-15). Recipe:
+не в git (исключены в коммите `fa65d70`). Recipe:
 
 ```bash
 # 0. vendor-исходники (mihomo v1.19.32 + wireguard-go @ a6cecdd7f57f +

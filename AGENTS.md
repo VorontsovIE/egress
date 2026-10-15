@@ -113,7 +113,7 @@
 
 - `poc/mihomo`, `poc/mihomo-gvisor` (v1.19.32, кастомные сборки: CGO off /
   `-tags with_gvisor`) и `poc/wgserver/wgserver` **исключены из истории**
-  2026-10-15. Сборка из исходников — рецепт в `DEVELOPMENT.md`,
+  (коммит `fa65d70`). Сборка из исходников — рецепт в `DEVELOPMENT.md`,
   «Сборка (редко)». `poc/mihomo.sha256` хранит hash Phase-0 сборки
   (`a2b70600…`, референс).
 - Vendor-исходники **не хранятся в git**: `sh scripts/fetch-poc-vendor.sh`
@@ -122,10 +122,13 @@
   `poc/wgserver/third_party/wireguard-go-sticky-sockets.patch`
   (`StdNetSupportsStickySockets=false` для контейнера без NET_ADMIN) — в git,
   накладывается скриптом при fetch.
-- GEO-данные (GeoIP/GeoSite/ASN) **не хранятся в git** (исключены из истории
-  2026-10-15): скачиваются по требованию `scripts/fetch-geo-data.sh` (источник
-  MetaCubeX/meta-rules-dat, те же URL, что `geox-url`; в OpenScience работает
-  fallback на `codeload.github.com`).
+- GEO-данные (GeoIP/GeoSite/ASN) **не хранятся в git** (исключены в коммите
+  `1c9d3e3`): скачиваются по требованию `scripts/fetch-geo-data.sh` (источник —
+  release-ассеты MetaCubeX/meta-rules-dat, те же URL, что `geox-url`).
+  codeload эти файлы подавать не может (upstream не коммитит `.dat` в git):
+  при блокировке release-хоста скрипт печатает диагностику и процедуру
+  ручного seed в `host/geo/` (или seed можно пропустить — mihomo скачает GEO
+  сам в рантайме по geox-url).
 
 ## Соглашения (обязательные)
 

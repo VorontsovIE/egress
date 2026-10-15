@@ -16,8 +16,8 @@
 - [x] Структура репо (раздел 44 спеки)
 - [x] Сборка Mihomo v1.19.32 из исходников (релизы GitHub недоступны):
       `poc/mihomo` (CGO off), `poc/mihomo-gvisor` (tags with_gvisor, userspace WG);
-      бинарники и vendor-исходники исключены из репо 2026-10-15 — рецепт
-      сборки в `DEVELOPMENT.md`, fetch — `scripts/fetch-poc-vendor.sh`
+      бинарники и vendor-исходники исключены из репо (коммит `fa65d70`) —
+      рецепт сборки в `DEVELOPMENT.md`, fetch — `scripts/fetch-poc-vendor.sh`
 - [x] Userspace WireGuard-сервер `poc/wgserver/` (wireguard-go + sing-wireguard,
       forward TCP на 127.0.0.1)
 - [x] GEO-данные через codeload: `poc/geo/{GeoIP.dat,GeoSite.dat,asn.mmdb}`
