@@ -1,7 +1,7 @@
 #!/bin/sh
 # fetch-geo-data.sh — download GEO datasets (spec 14/41).
 #
-# GEO data is NOT stored in git (stripped from history on 2026-10-15).
+# GEO data is NOT stored in git (stripped from history in commit 1c9d3e3).
 # This script downloads the datasets from the upstream release
 # MetaCubeX/meta-rules-dat into the local (untracked) paths the project
 # expects:
@@ -13,20 +13,23 @@
 #
 # Usage:
 #   sh scripts/fetch-geo-data.sh                # core trio -> host/geo + poc/geo
-#   sh scripts/fetch-geo-data.sh --full         # + complete release bundle ->
+#   sh scripts/fetch-geo-data.sh --full         # + all release assets ->
 #                                               #   poc/meta-rules-dat-release/ (~70 MB)
-#   sh scripts/fetch-geo-data.sh --release TAG  # pin a release tag (codeload URL)
+#   sh scripts/fetch-geo-data.sh --release TAG  # pin a release tag (default: latest)
 #   sh scripts/fetch-geo-data.sh --check        # verify host/geo vs poc/geo sync
 #
 # Exit codes: 0 ok, 2 usage, 3 environment/download error.
 #
-# Source URLs (same as egressd geo_update.py / mihomo geox-url):
-#   https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat
-#   https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
-#   https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb
-# The OpenScience container blocks objects.githubusercontent.com, so when a
-# direct download fails the script falls back to the codeload release
-# tarball: https://codeload.github.com/MetaCubeX/meta-rules-dat/tar.gz/refs/tags/<tag>
+# Source: GitHub release assets ONLY (same URLs as egressd geo_update.py /
+# mihomo geox-url). github.com redirects the download to
+# objects.githubusercontent.com — if that host is blocked on your network
+# there is NO codeload alternative: upstream does not commit the .dat/.mmdb
+# files to git (the only tag `latest` is a 20-file source snapshot without
+# them, verified 2026-10-15). In that case seed manually: place
+# geoip.dat/geosite.dat/GeoLite2-ASN.mmdb into host/geo/ as
+# GeoIP.dat/GeoSite.dat/asn.mmdb and re-run (existing files are kept), or
+# skip seeding entirely — GEO is optional at install time, mihomo downloads
+# it at runtime via geox-url (same host requirement).
 #
 # Snapshot checksums of the last in-repo copy (2026-10-13; provenance only —
 # upstream "latest" moves on; --check compares the local copies against each
@@ -51,12 +54,33 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-UPSTREAM="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest"
-CODELOAD="https://codeload.github.com/MetaCubeX/meta-rules-dat/tar.gz/refs/tags/${RELEASE}"
+UPSTREAM="https://github.com/MetaCubeX/meta-rules-dat/releases/download/${RELEASE}"
 GEO_HOST="$REPO_ROOT/host/geo"
 GEO_POC="$REPO_ROOT/poc/geo"
 
 die() { echo "fetch-geo-data: $*" >&2; exit 3; }
+
+die_download() { # failed_upstream_name
+  cat >&2 <<EOS
+fetch-geo-data: GEO download failed for '${1}'.
+
+  The release assets are served from objects.githubusercontent.com (via the
+  github.com redirect) and that host is unreachable from this machine.
+  There is no codeload fallback: upstream does not commit the .dat/.mmdb
+  files to git, so no git-based mirror of them exists.
+
+  Options:
+    1. seed manually: put the three files into host/geo/ as
+         GeoIP.dat  GeoSite.dat  asn.mmdb
+       and re-run this script (existing files are kept);
+    2. skip seeding: GEO is optional at install time — mihomo downloads it
+       at runtime via geox-url (same host requirement applies).
+
+  Diagnose connectivity with:
+    curl -sIL -o /dev/null -w '%{http_code}\\n' '${UPSTREAM}/${1}'
+EOS
+  exit 3
+}
 
 http_get() { # url dest
   if command -v curl >/dev/null 2>&1; then
@@ -92,8 +116,7 @@ if [ "$CHECK" -eq 1 ]; then
   exit "$rc"
 fi
 
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$GEO_HOST" "$GEO_POC"
 
 fetch_one() { # upstream_name local_name
   if [ -s "$GEO_HOST/$2" ]; then
@@ -106,28 +129,13 @@ fetch_one() { # upstream_name local_name
     return 0
   fi
   rm -f "$GEO_HOST/$2.tmp"
-  echo "  direct release URL failed for $1 (codeload fallback will run)"
-  return 1
+  echo "  direct release URL failed for $1"
+  die_download "$1"
 }
 
-mkdir -p "$GEO_HOST" "$GEO_POC"
-
-missing=0
-fetch_one geoip.dat GeoIP.dat || missing=1
-fetch_one geosite.dat GeoSite.dat || missing=1
-fetch_one GeoLite2-ASN.mmdb asn.mmdb || missing=1
-
-if [ "$missing" -eq 1 ]; then
-  echo "  downloading codeload release tarball (tag: $RELEASE)..."
-  http_get "$CODELOAD" "$TMP/release.tar.gz" || die "codeload download failed"
-  tar -xzf "$TMP/release.tar.gz" -C "$TMP" || die "tarball extraction failed"
-  SRC_DIR="$TMP/meta-rules-dat-${RELEASE}"
-  [ -d "$SRC_DIR" ] || die "tarball has no meta-rules-dat-${RELEASE}/ directory"
-  cp -f "$SRC_DIR/geoip.dat" "$GEO_HOST/GeoIP.dat"
-  cp -f "$SRC_DIR/geosite.dat" "$GEO_HOST/GeoSite.dat"
-  cp -f "$SRC_DIR/GeoLite2-ASN.mmdb" "$GEO_HOST/asn.mmdb"
-  echo "  fetched core trio from codeload tarball"
-fi
+fetch_one geoip.dat GeoIP.dat
+fetch_one geosite.dat GeoSite.dat
+fetch_one GeoLite2-ASN.mmdb asn.mmdb
 
 for f in GeoIP.dat GeoSite.dat asn.mmdb; do
   [ -s "$GEO_HOST/$f" ] || die "host/geo/$f is missing or empty after download"
@@ -140,14 +148,37 @@ if [ "$FULL" -eq 1 ]; then
   if [ -d "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then
     echo "  keep existing full bundle: $OUT"
   else
-    [ -f "$TMP/release.tar.gz" ] || {
-      http_get "$CODELOAD" "$TMP/release.tar.gz" || die "codeload download failed"
-    }
-    tar -xzf "$TMP/release.tar.gz" -C "$TMP" || die "tarball extraction failed"
-    SRC_DIR="$TMP/meta-rules-dat-${RELEASE}"
-    [ -d "$SRC_DIR" ] || die "tarball has no meta-rules-dat-${RELEASE}/ directory"
+    command -v python3 >/dev/null 2>&1 || die "python3 is required for --full"
+    API="https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases"
+    if [ "$RELEASE" = "latest" ]; then
+      API="${API}/latest"
+    else
+      API="${API}/tags/${RELEASE}"
+    fi
+    http_get "$API" "$OUT.api.json.tmp" 2>/dev/null || die_download "release asset list (api.github.com)"
     mkdir -p "$OUT"
-    cp -R "$SRC_DIR/." "$OUT/"
+    python3 - "$OUT.api.json.tmp" "$OUT" <<'PYEOF'
+import json, os, sys, subprocess
+meta_path, out_dir = sys.argv[1], sys.argv[2]
+with open(meta_path, encoding="utf-8") as fh:
+    assets = json.load(fh).get("assets") or []
+if not assets:
+    sys.exit("fetch-geo-data: no assets in the release response")
+for asset in assets:
+    name = asset["name"]
+    url = asset["browser_download_url"]
+    dest = os.path.join(out_dir, name)
+    if os.path.exists(dest) and os.path.getsize(dest) == asset.get("size", 0):
+        print(f"  keep {name}")
+        continue
+    tmp = dest + ".tmp"
+    print(f"  fetching {name} ({asset.get('size', 0)} bytes)")
+    if subprocess.run(["curl", "-fL", "--connect-timeout", "15", "--retry", "2", "-o", tmp, url]).returncode != 0:
+        subprocess.run(["rm", "-f", tmp])
+        sys.exit(f"fetch-geo-data: asset download failed: {url}")
+    os.replace(tmp, dest)
+PYEOF
+    rm -f "$OUT.api.json.tmp"
     echo "  fetched full release bundle -> $OUT"
   fi
 fi
