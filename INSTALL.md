@@ -161,6 +161,11 @@ restarting-контейнера (баг 2026-10-12) прохождения не 
 
 ## B. Client installation in each execution environment
 
+Контейнерные окружения резолвят backend через `host.docker.internal`. На
+Linux Docker-демон эту запись **не** создаёт по умолчанию: контейнер нужно
+поднимать с `--add-host=host.docker.internal:host-gateway` (или `extra_hosts`
+в compose), иначе `egressctl whoami` упадёт с `Name or service not known`.
+
 Для каждого client profile:
 
 1. **Одинаковый package** `egressctl` + `egress-run` (stdlib-only,
