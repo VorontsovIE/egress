@@ -77,12 +77,17 @@ scenario_install() {
       *)   flags+=("$a") ;;
     esac
   done
+  # --skip-firewall by default (the stub ufw is a no-op, but keep the
+  # suite from touching any real firewall state); SCENARIO_WITH_FIREWALL=1
+  # opts into the real step-6 code path for the firewall scenario.
+  local skip_fw="--skip-firewall"
+  [ "${SCENARIO_WITH_FIREWALL:-0}" = "1" ] && skip_fw=""
   ( cd "$REPO"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
       VIBELAB_EGRESS_TEST_MODE=1 \
       bash scripts/install-backend-host.sh \
       --root "$d/root" --secrets-dir "$d/secrets" \
-      --yes --skip-firewall ${flags[@]+"${flags[@]}"} \
+      --yes ${skip_fw} ${flags[@]+"${flags[@]}"} \
       > "$d/install.out" 2> "$d/install.err" )
 }
 
@@ -383,6 +388,24 @@ grep -q "FAIL  published port(s) on unexpected interface" \
 check "verify-public: FAIL line for the bad binds" $?
 grep -q "0.0.0.0" "$d/verify.out" 2>/dev/null
 check "verify-public: 0.0.0.0 binding reported" $?
+
+# 7c. install WITH firewall (stub ufw no-op): docker subnets from the CIDR
+#     artifact are allowed for 9091/1080:1081 (spec 36)
+d="$TMP/fw-subnets"
+make_env "$d"
+if [ "$IS_ROOT" = "1" ]; then
+  SCENARIO_WITH_FIREWALL=1 scenario_install "$d"
+else
+  SCENARIO_WITH_FIREWALL=1 scenario_install "$d" --skip-client
+fi
+rc=$?
+[ "$rc" -eq 0 ]
+check "fw-subnets: install rc=0 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
+logf="$(log_of "$d")"
+grep -q "container subnet" "$logf" 2>/dev/null
+check "fw-subnets: ufw docker-subnet rules logged (spec 36)" $?
+grep -q "allow 172.17.0.0/16 -> 9091,1080:1081" "$logf" 2>/dev/null
+check "fw-subnets: ufw rule for the (stub) bridge subnet" $?
 
 # ---------------------------------------------------------------------------
 # summary

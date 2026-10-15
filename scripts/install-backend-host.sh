@@ -276,6 +276,22 @@ elif command -v ufw >/dev/null; then
   log "firewall (ufw): allow egress ports only from local sources"
   ufw allow in on lo 2>/dev/null || true
   ufw allow from "$DOCKER_GATEWAY" to any port 9091,1080:1081 proto tcp 2>/dev/null || true
+  # Container clients reach the published ports from their own container
+  # IPs, i.e. from the docker subnets — not from the gateway address
+  # (spec 36: allow exactly the needed local subnets). The CIDR artifact
+  # is written by step 5; networks created after install need a manual
+  # `ufw allow from <cidr> to any port 9091,1080:1081 proto tcp`.
+  CIDR_ARTIFACT="$ROOT/generated/docker-cidrs.yaml"
+  if [ -f "$CIDR_ARTIFACT" ]; then
+    for cidr in $(sed -n 's/^[[:space:]]*subnet:[[:space:]]*//p' "$CIDR_ARTIFACT" \
+                 | tr -d "'\"" | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' || true); do
+      if ufw allow from "$cidr" to any port 9091,1080:1081 proto tcp >/dev/null 2>&1; then
+        log "  allow $cidr -> 9091,1080:1081 (container subnet)"
+      fi
+    done
+  else
+    log "  WARNING: $CIDR_ARTIFACT missing — container subnets not allowed; container clients will be blocked by ufw"
+  fi
   ufw deny 9090 2>/dev/null || true   # mihomo admin: never reachable outside compose
   log "  (verify with: ufw status verbose; adjust for your host policy)"
 else
