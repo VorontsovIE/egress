@@ -138,7 +138,14 @@ class EgressConfig:
     #  - container:  "0.0.0.0" (the container netns is isolated; the host-side
     #    publish address in compose.yaml is what enforces "no public binds")
     listener_listen: str = "127.0.0.1"
-    controller: str = "127.0.0.1:9090"
+    # Admin API must be reachable from egressd, which runs in its OWN
+    # container on the compose network: 127.0.0.1 inside the mihomo
+    # container is unreachable from there (2026-10-15 live run: mihomo
+    # unreachable -> no version, all probes failed, selector switches
+    # unverifiable). Port 9090 is never published (compose.yaml) and every
+    # call is Bearer-authenticated with the mihomo secret, so 0.0.0.0 on
+    # the private compose network is safe.
+    controller: str = "0.0.0.0:9090"
     dns_listen: str = "127.0.0.1:1053"
     hard_direct_cidrs: list[str] = field(
         default_factory=lambda: list(DEFAULT_HARD_DIRECT_CIDRS)

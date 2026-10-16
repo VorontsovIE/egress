@@ -106,6 +106,12 @@ services:
       # by the non-root egressd user (uid 1000), so a regenerate() would crash.
       EGRESSD_CONFIG_OUT: /var/lib/egressd/generated/config.yaml
       EGRESSD_LISTEN: 0.0.0.0:9091
+      # Probe engine + benchmark downloads run inside the egressd container
+      # and must reach mihomo's SOCKS listeners across the compose network
+      # (127.0.0.1 would point at nothing there — 2026-10-15 live run:
+      # every probe was proxy_failure). Client-facing capability endpoints
+      # keep reporting the client's own vantage (EGRESSD_PROXY_HOST).
+      EGRESSD_PROBE_HOST: vibelab-egress-mihomo
     # egressd public narrow API: host loopback + container gateway only.
     ports:
       - "127.0.0.1:9091:9091"

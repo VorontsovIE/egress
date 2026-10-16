@@ -437,6 +437,14 @@ def create_app() -> FastAPI:
 
     # data-plane listener addresses (for capability responses + probe engine)
     app.state.proxy_host = os.environ.get("EGRESSD_PROXY_HOST", "127.0.0.1")
+    # Probe engine + benchmark downloads execute INSIDE the egressd
+    # container, where the default proxy_host (127.0.0.1) points at nothing:
+    # mihomo's SOCKS listeners live in the mihomo container. compose.yaml
+    # sets EGRESSD_PROBE_HOST to the mihomo service name. Client-facing
+    # capability endpoints keep reporting proxy_host — each client reaches
+    # the published endpoint from its OWN vantage point.
+    app.state.probe_host = os.environ.get(
+        "EGRESSD_PROBE_HOST", app.state.proxy_host)
     app.state.default_proxy_port = int(os.environ.get("EGRESSD_DEFAULT_PROXY_PORT", "18080"))
     app.state.oneshot_proxy_port = int(os.environ.get("EGRESSD_ONESHOT_PROXY_PORT", "18081"))
     app.state.health_url = os.environ.get(
@@ -489,7 +497,7 @@ def create_app() -> FastAPI:
 
     app.state.engine = ProbeEngine(
         allocator=app.state.allocator,
-        socks_host=app.state.proxy_host,
+        socks_host=app.state.probe_host,
         socks_port=app.state.oneshot_proxy_port,
         point_group=_point_group,
         catalog=app.state.catalog,
@@ -973,7 +981,7 @@ def create_app() -> FastAPI:
                 return {"route": route_id, "ok": False, "mbps": None, "bytes": 0,
                         "error": "selector_not_applied"}
             mbps, got, err = _download_through_socks(
-                app.state.proxy_host, app.state.oneshot_proxy_port,
+                app.state.probe_host, app.state.oneshot_proxy_port,
                 slot.user, slot.password, nbytes)
             ok = err is None
             app.state.metrics.add_benchmark(route_id, cid, mbps, got, ok,

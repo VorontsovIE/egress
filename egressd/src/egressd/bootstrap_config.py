@@ -204,7 +204,7 @@ def generate(root: Path, secrets_dir: Path, oneshot_slots: int = 8,
         oneshot_slots=load_oneshot_slots(secrets_dir, oneshot_slots),
         default_port=18080,
         oneshot_port=18081,
-        controller="127.0.0.1:9090",
+        controller="0.0.0.0:9090",
         listener_listen="0.0.0.0",  # container mode; compose publish binds
     )
     # extend hard-direct with Docker CIDRs (spec 35)
