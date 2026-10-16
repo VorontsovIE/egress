@@ -1045,3 +1045,16 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   host user; `/etc/vibelab-egress` остаётся root-owned 0750 с его группой.
   Root-only harness из non-root live получает честный SKIP. Offline 332 PASS;
   изолированный Docker тест подтвердил чтение token только host user.
+
+- 2026-10-16: первый новый JSON `reports/host_acceptance_report.json` на globe
+  независимо VERIFIED: 11 PASS / 1 FAIL / 16 SKIP, checks hash
+  `d6009ef6f87458d33cf5958dd75cd59026eaa27ecf85a39aaa02ec60d8b37049`.
+  §50.2 доказал caller UID/GID 1082:1083, host cwd и запись в host файл;
+  §50.5 direct без tun0, §50.6 CapEff=0, §50.7 cleanup netns/veth,
+  §50.8 HARD DIRECT и §50.11 no fallback — PASS. Это direct-only результат,
+  proxy/UDP требуют provider routes. Настоящий OpenScience container работает
+  под `runsc`; ручной запуск того же client module из смонтированного repo
+  внутри него дал exit 6 и явный no-fallback. Формальный §50.9 остаётся SKIP,
+  потому что бинарник `egress-run` в контейнере не установлен. Root-only
+  verifier secret scan без sudo пропущен. Исправление host client credential
+  ownership доставлено (`3f4e6fa`), ожидается его root-установка.
