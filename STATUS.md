@@ -1058,3 +1058,17 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   потому что бинарник `egress-run` в контейнере не установлен. Root-only
   verifier secret scan без sudo пропущен. Исправление host client credential
   ownership доставлено (`3f4e6fa`), ожидается его root-установка.
+
+- 2026-10-16: после root переустановки host client token/auth стали
+  `vibelab:root` 0600, каталог остался `root:vibelab` 0750; host
+  `egressctl status` видит Mihomo v1.19.32. Новый live JSON независимо
+  VERIFIED: 16 PASS / 1 FAIL / 11 SKIP, hash
+  `62cbc2c890395d99f03bbd4fd8db16672db6317d9ed9508b6ca295bf8541d43e`,
+  verifier secret scan выполнен. Единственный FAIL — §50.12:
+  `egressctl` отсутствует в настоящем OpenScience `runsc` container
+  (exit 127); §50.9 по той же причине SKIP. Ручной source-module вызов
+  ранее подтвердил exit 6/no fallback, но формальную установку не заменяет.
+  `docker cp` в работающий runsc сообщил успех, однако `/tmp` в sandbox
+  не увидел каталог; проверенная альтернатива — tar stream через
+  `docker exec -i` (несекретный probe появился). Ожидается root-доступ
+  к client bundle для передачи его через stdin и установки в контейнере.
