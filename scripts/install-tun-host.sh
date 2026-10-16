@@ -39,6 +39,13 @@ for tool in docker ip nft iptables setpriv systemctl sha256sum; do
 done
 [ -c /dev/net/tun ] || { echo 'install-tun-host: /dev/net/tun missing' >&2; exit 3; }
 
+# Remove only the retired, exact-name Docker helper. Its container filesystem
+# must never become the workload filesystem, and it must not keep advertising
+# a misleading legacy capability after the native service is installed.
+if docker container inspect vibelab-egress-tun-helper >/dev/null 2>&1; then
+  docker rm -f vibelab-egress-tun-helper >/dev/null
+fi
+
 getent group vibelab-egress-tun >/dev/null || groupadd --system vibelab-egress-tun
 getent group vibelab-egress-worker >/dev/null || groupadd --system vibelab-egress-worker
 id vibelab-egress-worker >/dev/null 2>&1 || \
