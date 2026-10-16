@@ -232,3 +232,57 @@ class TestUsage:
     def test_route_set_requires_arg(self, monkeypatch, cfg_file):
         code, _, _ = run_cli(monkeypatch, cfg_file, "route", "set")
         assert code == egressctl.EXIT_USAGE
+
+class TestCapabilities:
+    def _write_host_cfg(self, tmp_path, **ov):
+        token = tmp_path / "c.token"
+        token.write_text("tok-abc\n")
+        auth = tmp_path / "c.auth"
+        auth.write_text("os-user:os-pass\n")
+        data = {
+            "client_id": "host-main",
+            "control_url": "http://127.0.0.1:9091",
+            "proxy_host": "127.0.0.1",
+            "default_proxy_port": "1080",
+            "oneshot_proxy_port": "1081",
+            "api_token_file": str(token),
+            "default_proxy_auth_file": str(auth),
+            "environment": "host",
+            "tun_backend": "host-helper",
+            "tun_helper_socket": str(tmp_path / "tun.sock"),
+        }
+        data.update(ov)
+        p = tmp_path / "host-client.yaml"
+        p.write_text("\n".join(f"{k}: {v}" for k, v in data.items()) + "\n")
+        return str(p)
+
+    def test_host_helper_socket_present_supported(self, monkeypatch, tmp_path):
+        cfg = self._write_host_cfg(tmp_path)
+        (tmp_path / "tun.sock").write_text("")
+        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
+        assert code == 0
+        data = json.loads(out)
+        assert data["tun"]["status"] == "supported"
+        assert data["tun"]["socket"].endswith("tun.sock")
+        assert data["client_version"]
+        assert data["environment"] == "host"
+
+    def test_host_helper_socket_missing_not_running(self, monkeypatch, tmp_path):
+        cfg = self._write_host_cfg(tmp_path)
+        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
+        assert code == 0
+        data = json.loads(out)
+        assert data["tun"]["status"] == "helper_not_running"
+
+    def test_gvisor_unsupported_in_environment(self, monkeypatch, cfg_file):
+        code, out, _ = run_cli(monkeypatch, cfg_file, "--json", "capabilities")
+        assert code == 0
+        data = json.loads(out)
+        assert data["tun"]["status"] == "unsupported_in_environment"
+
+    def test_none_backend_non_gvisor(self, monkeypatch, tmp_path):
+        cfg = self._write_host_cfg(tmp_path, tun_backend="none")
+        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
+        assert code == 0
+        data = json.loads(out)
+        assert data["tun"]["status"] == "none"

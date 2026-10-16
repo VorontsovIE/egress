@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from .api import ApiError, EgressApi
@@ -325,6 +327,60 @@ def cmd_doctor(args) -> None:
     sys.exit(EXIT_OK if not failed else EXIT_RUNTIME)
 
 
+def _gvisor_kernel() -> bool:
+    """True when running under gVisor ('gvisor' in /proc/version)."""
+    try:
+        return "gvisor" in Path("/proc/version").read_text(
+            encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return False
+
+
+def _tun_capability(cfg: ClientConfig) -> dict:
+    """Local tun capability probe (spec 50.12 / phase A6).
+
+    Purely local: config + environment only, no backend call — the command
+    must work with the control plane down (that is part of what it reports).
+    """
+    from . import __version__
+
+    if cfg.environment == "gvisor-container" or _gvisor_kernel():
+        status = "unsupported_in_environment"
+        reason = (f"gVisor environment (environment={cfg.environment!r}): "
+                  "no /dev/net/tun / CAP_NET_ADMIN")
+    elif cfg.tun_backend != "host-helper":
+        status = "none"
+        reason = f"tun_backend={cfg.tun_backend!r}"
+    else:
+        sock = cfg.tun_helper_socket()
+        if os.path.exists(sock):
+            status = "supported"
+            reason = f"host-helper socket present: {sock}"
+        else:
+            status = "helper_not_running"
+            reason = f"host-helper socket missing: {sock}"
+    return {
+        "client_id": cfg.client_id,
+        "client_version": __version__,
+        "environment": cfg.environment,
+        "tun": {
+            "backend": cfg.tun_backend,
+            "socket": cfg.tun_helper_socket()
+                      if cfg.tun_backend == "host-helper" else None,
+            "status": status,
+            "reason": reason,
+        },
+    }
+
+
+def cmd_capabilities(args) -> None:
+    cfg = _load(args)
+    data = _tun_capability(cfg)
+    _emit(args, data,
+          f"client={cfg.client_id} environment={cfg.environment} "
+          f"tun={data['tun']['status']} ({data['tun']['reason']})")
+
+
 # ---------------------------------------------------------------------------
 # argument parsing
 # ---------------------------------------------------------------------------
@@ -419,6 +475,8 @@ def build_parser() -> argparse.ArgumentParser:
     cv = csub.add_parser("validate", help="validate config + secret files")
     cv.set_defaults(fn=cmd_config_validate)
 
+    add("capabilities", cmd_capabilities,
+         "local capabilities (tun availability, spec 50.12)")
     add("doctor", cmd_doctor, "local + backend health checks")
     return p
 
