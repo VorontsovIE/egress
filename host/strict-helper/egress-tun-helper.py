@@ -598,8 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--socket", default=DEFAULT_SOCKET)
     ap.add_argument("--known-routes", default="",
                     help="comma-separated route ids (or file path) the helper may pin")
-    ap.add_argument("--allowed-upstreams", default="127.0.0.1:18081",
-                    help="comma-separated host:port one-shot listeners")
+    ap.add_argument("--allowed-upstreams", default="127.0.0.1:1081",
+                    help="comma-separated host:port one-shot listeners "
+                         "(clients send their own PUBLISHED one-shot port, "
+                         "not the in-container listener port)")
     ap.add_argument("--probe", action="store_true",
                     help="print the capability probe and exit")
     args = ap.parse_args(argv)

@@ -26,7 +26,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=VIBELAB_EGRESS_REPO=/srv/workspace/vibelab-egress
-# The helper may pin only the configured one-shot listener (127.0.0.1:18081)
+# The helper may pin only the configured one-shot listener (127.0.0.1:1081)
 # and only routes listed in the catalog file it is given.
 # The route catalog is owned by egressd (it validates the route when it
 # creates the one-shot session). The helper enforces the route-id FORMAT and
@@ -35,7 +35,7 @@ Environment=VIBELAB_EGRESS_REPO=/srv/workspace/vibelab-egress
 # updates).
 ExecStart=/usr/bin/env python3 /srv/workspace/vibelab-egress/host/strict-helper/egress-tun-helper.py \
     --socket /run/vibelab-egress/tun-helper.sock \
-    --allowed-upstreams 127.0.0.1:18081
+    --allowed-upstreams 127.0.0.1:1081
 Restart=on-failure
 RestartSec=5
 User=root

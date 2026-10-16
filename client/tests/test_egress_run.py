@@ -197,6 +197,32 @@ class TestProxy:
         assert calls["created"] == ["blanc:FI-Helsinki-1"]
         assert calls["closed"] == ["job-1"]  # closed in finally
 
+    def test_oneshot_uses_client_vantage(self, monkeypatch, cfg_file):
+        """The one-shot SOCKS endpoint comes from the CLIENT's own vantage
+        (published port), not from the backend-reported host/port (which
+        describe egressd's vantage and are unusable inside a container)."""
+        seen = {}
+
+        class Stub:
+            def oneshot_session(self, route):
+                return {"id": "job-4", "capability": {
+                    "host": "127.0.0.1", "port": 18081,
+                    "username": "os_0", "password": "pw-0"}}
+
+            def oneshot_close(self, sid):
+                return {}
+
+        def run_env(env, cmd):
+            seen.update(env)
+            return 0
+        monkeypatch.setattr(egress_run, "_run_local", run_env)
+        code = run_egress_run(monkeypatch, cfg_file,
+                              ["blanc:FI-Helsinki-1", "--", "true"],
+                              api_stub=Stub())
+        assert code == 0
+        # cfg_file: proxy_host=127.0.0.1, oneshot_proxy_port=1081
+        assert "socks5h://os_0:pw-0@127.0.0.1:1081" in seen["all_proxy"]
+
     def test_explicit_route_session_closed_on_child_failure(
             self, monkeypatch, cfg_file):
         calls = {"closed": []}
@@ -365,8 +391,14 @@ class TestTunHelper:
         assert code == 0
         assert calls["created"] == ["blanc:FI-Helsinki-1"]
         assert calls["closed"] == ["job-1"]  # closed in finally
+        # host/port come from the CLIENT's own vantage (the published
+        # one-shot endpoint, cfg port 1081), the credential from the
+        # server capability (whose host/port 127.0.0.1:18081 describe the
+        # backend's vantage and must NOT be used by the client)
         assert calls["helper"]["upstream"]["host"] == "127.0.0.1"
-        assert calls["helper"]["upstream"]["port"] == 18081
+        assert calls["helper"]["upstream"]["port"] == 1081
+        assert calls["helper"]["upstream"]["username"] == "os_0"
+        assert calls["helper"]["upstream"]["password"] == "pw-0"
         assert calls["helper"]["route"] == "blanc:FI-Helsinki-1"
 
     def test_tun_helper_unsupported_env(self, monkeypatch, cfg_file, tmp_path):

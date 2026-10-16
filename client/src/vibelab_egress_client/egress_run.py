@@ -212,9 +212,14 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
                      f"cannot create one-shot session for {route!r}: {e}")
             session_id = sess.get("id")
             cap = sess.get("capability", {})
+            # The capability host/port describe the backend's own vantage
+            # (inside the egressd container). The LOCAL helper reaches the
+            # published endpoint from its own vantage, so take host/port
+            # from the client config and only the credential from the
+            # server capability.
             upstream = {
-                "host": cap.get("host", cfg.proxy_host),
-                "port": int(cap.get("port", cfg.oneshot_proxy_port)),
+                "host": cfg.proxy_host,
+                "port": int(cfg.oneshot_proxy_port),
                 "username": cap.get("username", ""),
                 "password": cap.get("password", ""),
             }
@@ -310,8 +315,14 @@ def main(argv: list[str] | None = None) -> None:
                 _die(EXIT_USAGE, f"cannot create one-shot session for {route!r}: {e}")
             session_id = sess.get("id")
             cap = sess.get("capability", {})
-            host = cap.get("host", cfg.proxy_host)
-            port = int(cap.get("port", cfg.oneshot_proxy_port))
+            # The capability host/port describe the backend's own vantage
+            # (inside the egressd container) — a container client cannot
+            # use them. The client reaches the published endpoint from its
+            # OWN vantage point (compose.yaml publish), so take host/port
+            # from the client config and only the credential from the
+            # server capability.
+            host = cfg.proxy_host
+            port = int(cfg.oneshot_proxy_port)
             user = cap.get("username", "")
             password = cap.get("password", "")
             env = _proxy_env(host, port, user, password)

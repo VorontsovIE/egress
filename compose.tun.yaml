@@ -43,7 +43,9 @@ services:
       - --socket
       - /run/vibelab-egress/tun-helper.sock
       - --allowed-upstreams
-      - 127.0.0.1:18081
+      # the host client's PUBLISHED one-shot port (client-side vantage;
+      # 18081 is the in-container listener port, unreachable from the host)
+      - 127.0.0.1:1081
     # No `ports:` at all — the helper is UNIX-socket only (no TCP exposure).
     volumes:
       # the UNIX socket + state, in a 0700 dir on the host. The host-native
