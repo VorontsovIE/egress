@@ -256,9 +256,13 @@ class TestCapabilities:
         p.write_text("\n".join(f"{k}: {v}" for k, v in data.items()) + "\n")
         return str(p)
 
-    def test_host_helper_socket_present_supported(self, monkeypatch, tmp_path):
+    def test_host_helper_reports_supported(self, monkeypatch, tmp_path):
+        from vibelab_egress_client import egress_run
+
         cfg = self._write_host_cfg(tmp_path)
         (tmp_path / "tun.sock").write_text("")
+        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
+            "ok": True, "capability": {"status": "supported", "reason": "ok"}})
         code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
         assert code == 0
         data = json.loads(out)
@@ -266,6 +270,28 @@ class TestCapabilities:
         assert data["tun"]["socket"].endswith("tun.sock")
         assert data["client_version"]
         assert data["environment"] == "host"
+
+    def test_host_socket_present_but_helper_unsupported(self, monkeypatch, tmp_path):
+        from vibelab_egress_client import egress_run
+
+        cfg = self._write_host_cfg(tmp_path)
+        (tmp_path / "tun.sock").write_text("")
+        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
+            "ok": True, "capability": {
+                "status": "unsupported_in_environment",
+                "reason": "ip netns add requires CAP_SYS_ADMIN"}})
+        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
+        assert code == 0
+        data = json.loads(out)
+        assert data["tun"]["status"] == "unsupported_in_environment"
+        assert "CAP_SYS_ADMIN" in data["tun"]["reason"]
+
+    def test_stale_socket_does_not_report_supported(self, monkeypatch, tmp_path):
+        cfg = self._write_host_cfg(tmp_path)
+        (tmp_path / "tun.sock").write_text("")
+        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
+        assert code == 0
+        assert json.loads(out)["tun"]["status"] == "helper_not_running"
 
     def test_host_helper_socket_missing_not_running(self, monkeypatch, tmp_path):
         cfg = self._write_host_cfg(tmp_path)

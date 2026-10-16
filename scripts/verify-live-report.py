@@ -120,8 +120,9 @@ def rederive_pass(cid, c):
 
     if cid in ("tun_concurrent", "a8_parallel_oneshot"):
         jobs = get("jobs", [])
-        if not jobs:
-            return False, "no jobs"
+        routes = [j.get("route") for j in jobs]
+        if len(jobs) < 3 or routes.count("direct") != 1 or len(set(routes)) != len(routes):
+            return False, "requires direct plus two distinct proxy routes"
         host_ip = get("host_public_ip", "")
         for j in jobs:
             if j.get("exit") != 0 or not is_public_ip(j.get("exit_ip", "")):
@@ -181,13 +182,20 @@ def rederive_pass(cid, c):
         return True, "explicit failure, no fallback"
 
     if cid == "tun_capabilities_accuracy":
+        if get("host", {}).get("exit") != 0:
+            return False, "host capabilities did not exit successfully"
         host_tun = str(get("host", {}).get("tun", "")).lower()
-        if host_tun in UNSUPPORTED_TUN:
-            return False, f"host tun={host_tun!r} (expected supported)"
-        if "openscience" in ev:
-            os_tun = str(ev["openscience"].get("tun", "")).lower()
-            if os_tun not in UNSUPPORTED_TUN:
-                return False, f"openscience tun={os_tun!r} (expected unsupported)"
+        helper = get("helper", {})
+        helper_tun = str(helper.get("status", "")).lower()
+        if helper_tun not in ("supported", "unsupported_in_environment", "helper_not_running"):
+            return False, "missing independent helper capability"
+        if host_tun != helper_tun:
+            return False, f"host tun={host_tun!r} != helper tun={helper_tun!r}"
+        if get("openscience", {}).get("exit") != 0:
+            return False, "openscience capabilities did not exit successfully"
+        os_tun = str(get("openscience", {}).get("tun", "")).lower()
+        if os_tun not in UNSUPPORTED_TUN:
+            return False, f"openscience tun={os_tun!r} (expected unsupported)"
         return True, "capabilities accurate"
 
     if cid == "tun_no_gvisor_weakening":

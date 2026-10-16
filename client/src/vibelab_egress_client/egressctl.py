@@ -339,8 +339,8 @@ def _gvisor_kernel() -> bool:
 def _tun_capability(cfg: ClientConfig) -> dict:
     """Local tun capability probe (spec 50.12 / phase A6).
 
-    Purely local: config + environment only, no backend call — the command
-    must work with the control plane down (that is part of what it reports).
+    Purely local: config + helper UNIX socket only, no backend call. A socket
+    path alone does not prove that the helper can create a network namespace.
     """
     from . import __version__
 
@@ -353,12 +353,21 @@ def _tun_capability(cfg: ClientConfig) -> dict:
         reason = f"tun_backend={cfg.tun_backend!r}"
     else:
         sock = cfg.tun_helper_socket()
-        if os.path.exists(sock):
-            status = "supported"
-            reason = f"host-helper socket present: {sock}"
-        else:
+        if not os.path.exists(sock):
             status = "helper_not_running"
             reason = f"host-helper socket missing: {sock}"
+        else:
+            from .egress_run import _tun_helper_call
+            response = _tun_helper_call(sock, {"op": "capability"}, 2.0)
+            capability = response.get("capability") if response.get("ok") else None
+            if isinstance(capability, dict) and capability.get("status") in (
+                    "supported", "unsupported_in_environment"):
+                status = capability["status"]
+                reason = str(capability.get("reason") or status)
+            else:
+                status = "helper_not_running"
+                reason = ("host-helper capability probe failed: "
+                          f"{response.get('error', 'invalid_response')}")
     return {
         "client_id": cfg.client_id,
         "client_version": __version__,

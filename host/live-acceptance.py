@@ -464,9 +464,49 @@ def check_preflight():
 # section 50 -- Phase 2 TUN
 # ---------------------------------------------------------------------------
 def _tun_ready():
-    if not os.path.exists(CTX["tun_sock"]):
-        return False, f"tun helper socket not present: {CTX['tun_sock']}"
+    cap = _helper_capability()
+    if cap["status"] != "supported":
+        return False, f"tun helper {cap['status']}: {cap['reason']}"
     return True, ""
+
+
+def _helper_capability():
+    """Probe the helper itself, independently of egressctl's status logic."""
+    if "helper_capability" in CTX:
+        return CTX["helper_capability"]
+    import struct
+
+    path = CTX["tun_sock"]
+    result = {"status": "helper_not_running", "reason": f"socket unavailable: {path}"}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(2)
+            conn.connect(path)
+            request = b'{"op":"capability"}'
+            conn.sendall(struct.pack(">I", len(request)) + request)
+
+            def read_exact(n):
+                data = b""
+                while len(data) < n:
+                    chunk = conn.recv(n - len(data))
+                    if not chunk:
+                        raise ValueError("incomplete capability response")
+                    data += chunk
+                return data
+
+            length = struct.unpack(">I", read_exact(4))[0]
+            if not 2 <= length <= 1024 * 1024:
+                raise ValueError("invalid capability response size")
+            response = json.loads(read_exact(length))
+            cap = response.get("capability") if response.get("ok") else None
+            if not isinstance(cap, dict) or cap.get("status") not in (
+                    "supported", "unsupported_in_environment"):
+                raise ValueError("invalid helper capability response")
+            result = {"status": cap["status"], "reason": str(cap.get("reason") or "")}
+    except (OSError, ValueError, TypeError) as exc:
+        result["reason"] = f"capability probe failed: {exc}"
+    CTX["helper_capability"] = result
+    return result
 
 
 def check_tun_tcp():
@@ -511,6 +551,9 @@ def check_tun_local_workload():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
         ready, why = _tun_ready()
         if not ready:
+            cap = _helper_capability()
+            if cap["status"] == "unsupported_in_environment":
+                return ("fail", {"helper_capability": cap}, why)
             return ("skip", {"reason": why}, why)
         route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
         rid = route["id"]
@@ -564,12 +607,15 @@ def check_tun_udp():
 def check_tun_concurrent():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
+        proxies = [r for r in CTX["routes"]
+                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+        if len({r["id"] for r in proxies}) < 2:
+            reason = "two distinct non-direct proxy routes required for 3+ concurrent jobs"
+            return ("skip", {"reason": reason}, reason)
         ready, why = _tun_ready()
         if not ready:
             return ("skip", {"reason": why}, why)
-        proxies = [r for r in CTX["routes"]
-                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
-        proxies = (proxies[:2] if len(proxies) >= 2 else proxies)
+        proxies = proxies[:2]
         jobs = [{"route": p["id"], "expected_country": p.get("country")} for p in proxies]
         jobs.append({"route": "direct", "expected_country": None})
         host_ip = host_public_ip()
@@ -753,8 +799,8 @@ def check_os_tun_unsupported():
 def check_tun_no_fallback():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
-        ready, why = _tun_ready()
-        if not ready:
+        if not os.path.exists(CTX["tun_sock"]):
+            why = f"tun helper socket not present: {CTX['tun_sock']}"
             return ("skip", {"reason": why}, why)
         env = dict(os.environ)
         env["VIBE_EGRESS_MARK"] = "PROXY_PATH_RAN"
@@ -784,21 +830,24 @@ def check_tun_capabilities():
         cap_host = _json(rc_host["stdout"]) or {}
         tun_host = (cap_host.get("tun") or {}).get("status")
         ev = {"host": {"exit": rc_host["rc"], "tun": tun_host,
-                       "raw": rc_host["stdout"][:600]}}
+                       "raw": rc_host["stdout"][:600]},
+              "helper": _helper_capability()}
         if rc_host["rc"] != 0:
             return ("fail", ev, "host capabilities failed")
-        if str(tun_host).lower() in ("unsupported_in_environment", "unsupported",
-                                     "false", "none"):
-            return ("fail", ev, f"host reports tun={tun_host!r} (expected supported)")
+        if tun_host != ev["helper"]["status"]:
+            return ("fail", ev, f"host tun={tun_host!r} != helper={ev['helper']['status']!r}")
         rc_os = os_exec(["egressctl", "--json", "capabilities"], timeout, redact)
         cap_os = _json(rc_os["stdout"]) or {}
         tun_os = (cap_os.get("tun") or {}).get("status")
         ev["openscience"] = {"exit": rc_os["rc"], "tun": tun_os,
                              "raw": rc_os["stdout"][:600]}
         if rc_os["rc"] is None:
-            ev["openscience"] = {"exit": None, "tun": None,
-                                 "note": f"cannot exec in {CTX['os_container']!r}"}
-        elif rc_os["rc"] == 0 and str(tun_os).lower() not in (
+            reason = f"cannot exec in {CTX['os_container']!r}"
+            ev["reason"] = reason
+            return ("skip", ev, reason)
+        if rc_os["rc"] != 0:
+            return ("fail", ev, f"openscience capabilities exit={rc_os['rc']}")
+        if str(tun_os).lower() not in (
                 "unsupported_in_environment", "unsupported", "false", "none"):
             return ("fail", ev, f"openscience reports tun={tun_os!r} (expected unsupported)")
         return ("pass", ev, f"host tun={tun_host!r}; "

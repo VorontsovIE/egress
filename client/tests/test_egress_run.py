@@ -297,6 +297,7 @@ class TestTun:
         cfg = Path(cfg_file)
         text = cfg.read_text().replace("tun_backend: none",
                                        "tun_backend: host-helper")
+        text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
         cfg.write_text(text)
         code = run_egress_run(monkeypatch, str(cfg),
                               ["--mode", "tun", "direct", "--", "true"])
@@ -310,6 +311,7 @@ class TestTun:
         cfg = Path(cfg_file)
         text = cfg.read_text().replace("tun_backend: none",
                                        "tun_backend: host-helper")
+        text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
         cfg.write_text(text)
         err = io.StringIO()
         code = 0

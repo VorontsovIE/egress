@@ -165,13 +165,20 @@ def _tun_helper_call(sock_path: str, req: dict, timeout: float) -> dict:
         if len(hdr) < 4:
             return {"ok": False, "error": "no_response"}
         (length,) = struct.unpack(">I", hdr)
+        if length < 2 or length > 1024 * 1024:
+            return {"ok": False, "error": "invalid_response"}
         data = b""
         while len(data) < length:
             chunk = s.recv(length - len(data))
             if not chunk:
                 break
             data += chunk
-        return json.loads(data.decode("utf-8"))
+        if len(data) != length:
+            return {"ok": False, "error": "no_response"}
+        response = json.loads(data.decode("utf-8"))
+        return response if isinstance(response, dict) else {"ok": False, "error": "invalid_response"}
+    except (ValueError, UnicodeError):
+        return {"ok": False, "error": "invalid_response"}
     except FileNotFoundError:
         return {"ok": False, "error": "helper_not_running",
                 "detail": f"tun helper socket not found: {sock_path}"}

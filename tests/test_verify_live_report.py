@@ -232,5 +232,28 @@ def test_runc_does_not_verify_gvisor_unsupported(tmp_path):
     assert out["verdict"] == "REJECTED"
 
 
+def test_tun_capabilities_must_match_helper(tmp_path):
+    check = make_check("tun_capabilities_accuracy", "spec50.12", "pass",
+                       "egressctl capabilities", {
+                           "host": {"exit": 0, "tun": "supported"},
+                           "helper": {"status": "unsupported_in_environment",
+                                      "reason": "missing CAP_SYS_ADMIN"},
+                           "openscience": {"exit": 0,
+                                           "tun": "unsupported_in_environment"}})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
+    check["evidence"]["host"]["tun"] = "unsupported_in_environment"
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "VERIFIED"
+
+
+def test_tun_concurrent_requires_three_distinct_routes(tmp_path):
+    check = make_check("tun_concurrent", "spec50.4", "pass", "egress-run", {
+        "host_public_ip": "8.8.8.8",
+        "jobs": [{"route": "direct", "exit": 0, "exit_ip": "8.8.8.8"}]})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

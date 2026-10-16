@@ -948,3 +948,20 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   как проверку OpenScience/gVisor.
   Локально: 12 целевых pytest passed, py_compile/bash -n/YAML и
   `git diff --check` чисты. Live-повтор с новым образом ожидается.
+
+- 2026-10-16: четвёртый live-отчёт (11:57 UTC, globe): 14/6/8.
+  Новый helper отвечает явно: `ip netns add requires CAP_SYS_ADMIN; helper
+  has NET_ADMIN only` (exit 6). Это один архитектурный блокер §50.2, от
+  которого зависели остальные пять TUN-падений; расширять привилегии
+  helper без пересмотра модели безопасности нельзя. Наличие UNIX-сокета
+  ошибочно выдавалось `egressctl capabilities` за `tun=supported`: теперь
+  клиент запрашивает локальную capability у helper и отражает её реальный
+  статус; live harness независимо проверяет ответ helper, §50.2 оставляет
+  FAIL, зависимые TUN-проверки дают skip с причиной. §50.4 теперь требует
+  две разные proxy-route плюс direct; одиночный direct больше не запускает
+  «параллельный» тест. Verifier проверяет оба инварианта. SOCKS direct-probe
+  дошёл до TLS/HTTP (301), Mihomo healthy; для §49.20 всё ещё нужны
+  дополнительные маршруты. `egress-verify` запущен под runc, поэтому §50.9
+  остаётся skip до проверки настоящего gVisor-контейнера.
+  Локально: 76 целевых тестов и security gate 54/54 прошли вне песочницы;
+  live-повтор ожидается.
