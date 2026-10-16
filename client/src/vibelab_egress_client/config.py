@@ -83,11 +83,13 @@ class ClientConfig:
         ``VIBELAB_EGRESS_TUN_HELPER_SOCKET`` env var, else the default. Only
         meaningful when ``tun_backend == host-helper``.
         """
-        return (
-            str(self.extra.get("tun_helper_socket"))
-            or os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET")
-            or "/run/vibelab-egress/tun-helper.sock"
-        )
+        val = self.extra.get("tun_helper_socket") or \
+            os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET")
+        # NB: no str() on the possibly-missing key — str(None) == "None" is
+        # truthy and would shadow both the env var and the default (the
+        # client then tried a socket literally named "None", 2026-10-15
+        # live run).
+        return str(val) if val else "/run/vibelab-egress/tun-helper.sock"
 
     @staticmethod
     def _read_secret(path: str, what: str) -> str:

@@ -178,3 +178,33 @@ class TestSecrets:
         (env / "client.token").write_text("tok-x\n\n")
         cfg = load_config(str(env / "client.yaml"))
         assert cfg.api_token() == "tok-x"
+
+# ---------------------------------------------------------------------------
+# tun helper socket resolution (A6; bug of 2026-10-15: str(None) shadowed
+# the env var and the default)
+# ---------------------------------------------------------------------------
+class TestTunHelperSocket:
+    def test_absent_key_falls_back_to_default(self, env, monkeypatch):
+        monkeypatch.delenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", raising=False)
+        cfg = load_config(str(env / "client.yaml"))
+        assert cfg.tun_helper_socket() == "/run/vibelab-egress/tun-helper.sock"
+
+    def test_absent_key_env_wins_over_default(self, env, monkeypatch):
+        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
+        cfg = load_config(str(env / "client.yaml"))
+        assert cfg.tun_helper_socket() == "/tmp/sock"
+
+    def test_config_key_wins_over_env(self, env, monkeypatch):
+        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
+        p = _write_config(env / "client2.yaml", tun_helper_socket="/custom/tun.sock")
+        cfg = load_config(str(p))
+        assert cfg.tun_helper_socket() == "/custom/tun.sock"
+
+    def test_regression_missing_key_must_not_shadow(self, env, monkeypatch):
+        """A config WITHOUT the key must resolve env/default, never the
+        literal string 'None' (the 2026-10-15 live-run bug)."""
+        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
+        cfg = load_config(str(env / "client.yaml"))
+        assert cfg.tun_helper_socket() == "/tmp/sock"
+        monkeypatch.delenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", raising=False)
+        assert cfg.tun_helper_socket() == "/run/vibelab-egress/tun-helper.sock"
