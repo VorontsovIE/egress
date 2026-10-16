@@ -39,6 +39,10 @@ from fastapi import FastAPI, HTTPException, Request
 
 API_VERSION = "v1"
 COMPAT = {"api_version": "v1", "min_client": "0.1.0"}
+# egressd API version, reported by /v1/status for client version
+# negotiation (spec 49.42). Keep in sync with the client package
+# __version__ (client/src/vibelab_egress_client/__init__.py).
+VERSION = "0.1.0"
 
 log = logging.getLogger("egressd")
 
@@ -586,6 +590,10 @@ def create_app() -> FastAPI:
         st, ver = app.state.mihomo.get("/version")
         return {
             "client_id": profile["client_id"],
+            # top-level version: the egressd API version, present even when
+            # mihomo is unreachable (2026-10-15 live run: no version at all
+            # -> client cannot negotiate, spec 49.42 check failed)
+            "version": VERSION,
             "mihomo": {
                 "reachable": st == 200,
                 "version": ver.get("version") if isinstance(ver, dict) else None,

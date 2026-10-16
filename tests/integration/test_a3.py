@@ -307,6 +307,18 @@ def test_secret_redaction(egress):
 
 
 # ===========================================================================
+# 6b. version negotiation (spec 49.42)
+# ===========================================================================
+def test_status_reports_backend_version(egress):
+    """/v1/status must report the egressd version even when mihomo is
+    unreachable — the client needs it for version negotiation (spec 49.42;
+    2026-10-15 live run: mihomo unreachable -> no version -> check fail)."""
+    c, host = egress["client"], egress["host"]
+    data = c.get("/v1/status", headers=host).json()
+    assert data.get("version"), "backend did not report a version"
+
+
+# ===========================================================================
 # 7. per-client fallback to direct
 # ===========================================================================
 def test_per_client_fallback_to_direct(egress):
