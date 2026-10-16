@@ -37,7 +37,6 @@
 ├── POC_REPORT.md                       # отчёт Phase 0 PoC (22/22)
 ├── INSTALL.md                          # установка: A. backend (host), B. client (каждая среда)
 ├── compose.yaml                        # backend stack: mihomo (pinned v1.19.32) + egressd
-├── compose.tun.yaml                    # override: strict/TUN helper (NET_ADMIN, UNIX-socket only)
 │
 ├── mihomo/
 │   ├── config.template.yaml            # референс-шаблон сгенерированного конфига
@@ -65,7 +64,7 @@
 │   ├── egress-devbridge                # dev/test bridge: фиксированные ops, bearer-token, 172.17.0.1:9099
 │   ├── live-acceptance.py              # live acceptance (spec §50, §49) → один JSON-репорт
 │   ├── LIVE_ACCEPTANCE.md
-│   ├── strict-helper/                  # TUN helper (Dockerfile + egress-tun-helper.py, NET_ADMIN)
+│   ├── strict-helper/                  # host-native TUN helper (UNIX socket, per-run netns)
 │   ├── units/                          # systemd: devbridge, tun-helper, cidr-sync (service+timer)
 │   └── geo/                            # качается по требованию (не в git; scripts/fetch-geo-data.sh)
 │

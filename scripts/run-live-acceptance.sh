@@ -6,13 +6,13 @@
 # with sensible defaults and writes the report to reports/host_acceptance_report.json.
 #
 # Prerequisites (all must be true on the host):
-#   * Docker daemon running and the egress stack up (compose.yaml [+ compose.tun.yaml
-#     if TUN is enabled]).
+#   * Docker daemon running and the egress stack up (compose.yaml; optional
+#     host TUN systemd unit for section 50 checks).
 #   * The host client installed (egressctl + egress-run on PATH) with
 #     /etc/vibelab-egress/client.yaml + token + auth.
 #   * The OpenScience container running (its name is auto-detected; override with
 #     VIBELAB_EGRESS_OS_CONTAINER if detection fails).
-#   * The TUN helper socket present for the TUN checks (compose.tun.yaml).
+#   * The TUN helper socket present for the TUN checks (host systemd unit).
 #
 # Usage:
 #   bash scripts/run-live-acceptance.sh                 # default (non-destructive)
@@ -34,7 +34,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${VIBELAB_EGRESS_REPO:-$(cd "$HERE/.." && pwd)}"
-# The producer resolves the repo (for host/egress-host-test + compose.tun.yaml)
+# The producer resolves the repo (for host/egress-host-test + host TUN unit)
 # and the persistent data/secrets roots from these env vars; export them so a
 # bare `bash scripts/run-live-acceptance.sh` works from any checkout location.
 export VIBELAB_EGRESS_REPO="$REPO"

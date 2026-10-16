@@ -24,9 +24,8 @@
 #
 #   --tun-socket: LOCAL path of the TUN helper UNIX socket written to
 #   client.yaml (tun_helper_socket:) when tun_backend=host-helper. Default:
-#   ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/tun-helper/tun-helper.sock
-#   (the host-side end of the compose.tun.yaml bind; the in-container
-#   default /run/vibelab-egress/tun-helper.sock does NOT exist on the host).
+#   /run/vibelab-egress/tun-helper.sock (host systemd unit; never mounted
+#   into OpenScience/gVisor).
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
@@ -40,7 +39,7 @@ PROXY_HOST=""
 DEFAULT_PORT=1080
 ONESHOT_PORT=1081
 TUN_BACKEND=""
-TUN_SOCKET="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/tun-helper/tun-helper.sock"
+TUN_SOCKET="/run/vibelab-egress/tun-helper.sock"
 
 die_usage() { echo "provision-client: $*" >&2; exit 2; }
 die_env()   { echo "provision-client: $*" >&2; exit 3; }
@@ -135,10 +134,8 @@ default_proxy_auth_file: $AUTH_FILE
 environment: $ENVIRONMENT
 tun_backend: $TUN_BACKEND
 EOF
-# the LOCAL TUN helper socket: the client's built-in default
-# (/run/vibelab-egress/tun-helper.sock) is the IN-CONTAINER path and does
-# not exist on the host, so host-helper clients must carry the real host
-# path (the host-side end of the compose.tun.yaml / systemd bind).
+# The host-native helper socket is local to the host. The OpenScience bundle
+# has tun_backend=none and never receives this path or socket mount.
 if [ "$TUN_BACKEND" = "host-helper" ]; then
   printf 'tun_helper_socket: %s\n' "$TUN_SOCKET" >> "$BUNDLE_DIR/client.yaml"
 fi

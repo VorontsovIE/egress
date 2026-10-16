@@ -121,20 +121,39 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
                                            #  --remove-data — удалить)
 ```
 
-### Обновление TUN-helper
+### Установка и обновление host-native TUN-helper
 
-Обычный `docker compose ... up -d` **не пересобирает** локальный образ helper
-после изменения `host/strict-helper/egress-tun-helper.py`. Для загрузки нового
-кода выполните:
+TUN-helper запускается отдельным host systemd unit. Он сохраняет host mount
+namespace для workload, передаёт текущий каталог и окружение клиента, а сетевой
+доступ изолирует в per-run netns. Контейнерный helper удалён: файловая система
+его контейнера не является файловой системой команды, вызванной на host.
+
+На Docker host после установки backend:
 
 ```bash
-docker compose -f compose.yaml -f compose.tun.yaml up -d --build --force-recreate vibelab-egress-tun-helper
+sudo bash scripts/install-tun-host.sh --user vibelab
+systemctl status vibelab-egress-tun-helper.service
 ```
 
-Текущий Compose helper диагностирует отсутствие `CAP_SYS_ADMIN` для `ip netns
-add` и возвращает явную ошибку. Это не означает готовность host-native TUN:
-запуск workload из контейнера helper также не предоставляет файловую систему
-хоста. Права контейнера не расширять без пересмотра дизайна A6.
+Скрипт ставит pinned Mihomo v1.19.32 из Docker image с проверкой SHA256,
+создаёт отдельного непривилегированного worker и локальную группу доступа к
+`/run/vibelab-egress/tun-helper.sock`. После первого добавления пользователя в
+группу нужна новая login-сессия. Повторный запуск скрипта обновляет код и unit.
+`egress-run` внутри OpenScience/gVisor по-прежнему не получает этот сокет.
+
+Перед включением helper нужен host с `/dev/net/tun`, `ip`, `nft`, `iptables`,
+`setpriv` и systemd. Unit ограничен набором CAP_SYS_ADMIN, CAP_NET_ADMIN,
+CAP_SETUID, CAP_SETGID: первый нужен для `ip netns add`; перед exec workload
+все capabilities сбрасываются. Helper слушает только UNIX socket, не получает
+Docker socket. Проверка после установки:
+
+```bash
+egressctl capabilities
+bash scripts/run-live-acceptance.sh
+sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json
+```
+
+Секреты и generated config в отчёт и git не переносить.
 
 ### Логи и диагностика установки
 

@@ -111,6 +111,8 @@ def rederive_pass(cid, c):
             return False, "uid/gid mismatch"
         if get("hostname") != get("expected_hostname"):
             return False, "hostname mismatch"
+        if not get("host_marker_written") or len(get("lines", [])) < 4 or get("lines")[3] != get("expected_cwd"):
+            return False, "host filesystem/cwd not confirmed"
         return True, "ran as caller on host"
 
     if cid == "tun_udp_quic":
@@ -145,12 +147,17 @@ def rederive_pass(cid, c):
             return False, "exit!=0"
         if get("uid") != str(get("expected_uid", "")) or get("gid") != str(get("expected_gid", "")):
             return False, "not caller uid/gid"
+        try:
+            if int(get("effective_capabilities", ""), 16) != 0:
+                return False, "effective capabilities retained"
+        except (TypeError, ValueError):
+            return False, "effective capabilities absent"
         return True, "no escalation"
 
     if cid == "tun_stale_cleanup":
         if get("exit") != 0:
             return False, "exit!=0"
-        if get("new_netns") or get("new_tun_devs"):
+        if get("new_netns") or get("new_tun_devs") or get("new_host_veth"):
             return False, "stale resources"
         return True, "clean"
 

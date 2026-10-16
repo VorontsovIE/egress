@@ -601,9 +601,10 @@ class TestTunHelperPrivilege:
             mod.validate_run({"op": "exec", "command": ["id"]}, set(), set())
 
     def test_helper_drops_privileges(self):
-        """The helper drops to the caller's UID/GID before exec'ing the target."""
-        src = self.HELPER.read_text()
+        """The native backend drops caller UID/GID and all capabilities."""
+        src = (ROOT / "host/strict-helper/native_netns.py").read_text()
         assert "setpriv" in src and "--reuid" in src and "--regid" in src
+        assert "--bounding-set=-all" in src
 
     def test_helper_no_command_in_audit(self):
         """Audit events must not log the command argv or environment."""
@@ -613,18 +614,12 @@ class TestTunHelperPrivilege:
         # the run op logs route/netns/uid/outcome but never command=
         assert "command=" not in src.split("def op_run")[1]
 
-    def test_compose_tun_minimal_capability(self):
-        """compose.tun.yaml grants exactly NET_ADMIN (cap_drop ALL), no
-        privileged, no docker socket, no TCP port, no-new-privileges."""
-        compose = yaml.safe_load((ROOT / "compose.tun.yaml").read_text())
-        svc = compose["services"]["vibelab-egress-tun-helper"]
-        assert svc.get("cap_drop") == ["ALL"]
-        assert svc.get("cap_add") == ["NET_ADMIN"]
-        assert svc.get("privileged") is not True
-        assert "ports" not in svc
-        assert "no-new-privileges:true" in svc.get("security_opt", [])
-        for v in svc.get("volumes", []):
-            assert "docker.sock" not in str(v)
+    def test_host_tun_unit_capability_boundary(self):
+        unit = (ROOT / "host/units/vibelab-egress-tun-helper.service").read_text()
+        assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID" in unit
+        assert "NoNewPrivileges=true" in unit
+        assert "docker.sock" not in unit
+        assert "--socket /run/vibelab-egress/tun-helper.sock" in unit
 
     def test_openscience_client_cannot_reach_helper(self):
         """The OpenScience client config has tun_backend=none and no helper

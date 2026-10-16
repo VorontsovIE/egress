@@ -14,9 +14,8 @@ parts that ARE verifiable here and that carry the security invariants:
   * the UNIX-socket protocol (length-prefixed JSON frames) end to end, with
     SO_PEERCRED identity;
   * stale netns cleanup (file-based, no privileges needed);
-  * compose.tun.yaml static audit: no public binds, cap_add is exactly
-    NET_ADMIN (cap_drop ALL), no privileged, no docker socket,
-    no-new-privileges, /dev/net/tun mounted;
+  * host-native systemd unit audit: bounded capabilities, local UNIX socket,
+    no Docker socket, no-new-privileges;
   * egressd /v1/capabilities reports tun per-client (supported vs
     unsupported_in_environment) consistently with the mode-set check.
 
@@ -25,6 +24,7 @@ Run:  python -m pytest tests/integration/test_a6.py -v
 from __future__ import annotations
 
 import importlib.util
+import array
 import json
 import os
 import socket
@@ -84,7 +84,7 @@ class TestCapability:
         assert isinstance(cap["tun_dev"], bool)
         assert isinstance(cap["cap_net_admin"], bool)
         assert isinstance(cap["netns"], bool)
-        assert cap["backend"] in ("none", "netns+tun")
+        assert cap["backend"] in ("none", "host-netns+mihomo")
 
     def test_probe_is_pure(self):
         """The probe must not mutate the caller's netns (no side effects)."""
@@ -98,7 +98,8 @@ class TestCapability:
 # ---------------------------------------------------------------------------
 class TestValidation:
     def _run(self, **over):
-        req = {"op": "run", "route": "direct", "command": ["true"]}
+        req = {"op": "run", "protocol": 2, "route": "direct", "command": ["true"],
+               "cwd": "/tmp", "env": {}, "umask": 0o022}
         req.update(over)
         return req
 
@@ -179,7 +180,8 @@ class TestValidation:
 class TestUnsupportedRun:
     def test_run_unsupported_explicit(self):
         h = th.Helper(KNOWN, UPS)
-        resp = h.op_run({"op": "run", "route": "direct", "command": ["true"]},
+        resp = h.op_run({"op": "run", "protocol": 2, "route": "direct",
+                         "command": ["true"], "cwd": "/tmp", "env": {}, "umask": 0o022},
                         1000, 1000)
         assert resp["ok"] is False
         assert resp["error"] == "unsupported_in_environment"
@@ -200,10 +202,12 @@ class TestUnsupportedRun:
             def create(self, name):
                 raise subprocess.CalledProcessError(1, ["ip", "netns", "add", name])
 
-        backend = FailingBackend(str(tmp_path))
-        cap = th.Capability(True, True, True, True, "ok", "netns+tun")
+        backend = FailingBackend.__new__(FailingBackend)
+        backend.destroy = lambda name: None
+        cap = th.Capability(True, True, True, True, "ok", "host-netns+mihomo")
         h = th.Helper(KNOWN, UPS, backend=backend, capability=lambda: cap)
-        resp = h.op_run({"op": "run", "route": "direct", "command": ["true"]},
+        resp = h.op_run({"op": "run", "protocol": 2, "route": "direct",
+                         "command": ["true"], "cwd": "/tmp", "env": {}, "umask": 0o022},
                         1000, 1000)
         assert resp["ok"] is False
         assert resp["error"] == "netns_setup_failed"
@@ -214,29 +218,67 @@ class TestUnsupportedRun:
 # stale netns cleanup (file-based, no privileges needed)
 # ---------------------------------------------------------------------------
 class TestStaleCleanup:
-    def test_cleanup_removes_only_stale(self, tmp_path):
-        be = th.NetnsBackend(state_dir=str(tmp_path))
-        netns_dir = tmp_path / "netns"
-        netns_dir.mkdir()
-        now = time.time()
-        for name, age in (("egress-tun-old", 9999), ("egress-tun-new", 5),
-                          ("other-ns-old", 9999)):  # not our prefix
-            (netns_dir / (name + ".ts")).write_text(str(now - age))
-        removed = be.cleanup_stale(ttl=300)
-        assert sorted(removed) == ["egress-tun-old"]
-        # the new one and the non-prefixed one survive
-        assert (netns_dir / "egress-tun-new.ts").exists()
-        assert (netns_dir / "other-ns-old.ts").exists()
+    def test_cleanup_only_owned_stale(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(th.NativeNetnsBackend, "__init__", lambda self, **kw: setattr(self, "state_dir", tmp_path))
+        backend = th.NetnsBackend(state_dir=tmp_path)
+        backend.jobs = {}
+        removed = []
+        monkeypatch.setattr(backend, "destroy", lambda name: removed.append(name))
+        old = tmp_path / "egress-tun-abcdef012345"
+        fresh = tmp_path / "egress-tun-abcdef012346"
+        other = tmp_path / "other-ns"
+        for directory, age in ((old, 9999), (fresh, 5), (other, 9999)):
+            directory.mkdir()
+            (directory / "state.json").write_text(json.dumps({"created": time.time()-age}))
+        assert backend.cleanup_stale(ttl=300) == [old.name]
+        assert removed == [old.name]
 
-    def test_cleanup_empty(self, tmp_path):
-        be = th.NetnsBackend(state_dir=str(tmp_path))
-        assert be.cleanup_stale() == []
+    def test_cleanup_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(th.NativeNetnsBackend, "__init__", lambda self, **kw: setattr(self, "state_dir", tmp_path))
+        backend = th.NetnsBackend(state_dir=tmp_path)
+        backend.jobs = {}
+        assert backend.cleanup_stale() == []
 
 
 # ---------------------------------------------------------------------------
 # UNIX-socket protocol (length-prefixed JSON, SO_PEERCRED identity)
 # ---------------------------------------------------------------------------
 class TestSocketProtocol:
+    def test_protocol_v2_passes_stdio_and_os_identity(self):
+        client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        read_fd, write_fd = os.pipe()
+        null_fd = os.open(os.devnull, os.O_RDONLY)
+        seen = {}
+
+        class RecordingHelper:
+            def op_run(self, req, uid, gid, *, peer_groups, stdio, conn):
+                seen.update(req=req, uid=uid, gid=gid, groups=peer_groups)
+                os.write(stdio[1], b"through-caller-stdout")
+                return {"ok": True, "exit_code": 7}
+
+        thread = threading.Thread(target=th._handle_conn,
+                                  args=(server, RecordingHelper()), daemon=True)
+        thread.start()
+        req = {"op": "run", "protocol": 2, "route": "direct",
+               "command": ["true"], "cwd": "/tmp", "env": {}, "umask": 0o022}
+        body = json.dumps(req).encode()
+        fds = array.array("i", [null_fd, write_fd, write_fd])
+        try:
+            client.sendmsg([struct.pack(">I", len(body)) + body],
+                           [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds.tobytes())])
+            assert th.read_frame(client) == {"ok": True, "exit_code": 7}
+            assert seen["uid"] == os.getuid()
+            assert seen["gid"] == os.getgid()
+            assert seen["req"]["cwd"] == "/tmp"
+            assert os.read(read_fd, 1024) == b"through-caller-stdout"
+        finally:
+            client.close()
+            server.close()
+            os.close(read_fd)
+            os.close(write_fd)
+            os.close(null_fd)
+            thread.join(timeout=2)
+
     def test_frames_roundtrip(self):
         # in-memory socketpair to exercise the frame codec without a server
         a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -344,43 +386,27 @@ class TestSocketProtocol:
         t.join(timeout=5)
 
 
-# ---------------------------------------------------------------------------
-# compose.tun.yaml static audit (spec 21.4 / 46 A8)
-# ---------------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def compose_tun():
-    return yaml.safe_load((ROOT / "compose.tun.yaml").read_text())
+# Host-native unit static audit (spec 21.4 / 46 A8).
+class TestHostTunUnit:
+    @pytest.fixture
+    def unit(self):
+        return (ROOT / "host/units/vibelab-egress-tun-helper.service").read_text()
 
+    def test_local_service_and_bounded_capabilities(self, unit):
+        assert "User=root" in unit
+        assert "Group=vibelab-egress-tun" in unit
+        assert "CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID" in unit
+        assert "NoNewPrivileges=true" in unit
+        assert "--socket /run/vibelab-egress/tun-helper.sock" in unit
+        assert "docker.sock" not in unit
 
-class TestComposeTun:
-
-    def test_helper_service_exists(self, compose_tun):
-        assert "vibelab-egress-tun-helper" in compose_tun["services"]
-
-    def test_no_public_binds(self, compose_tun):
-        """The helper exposes only a UNIX socket: no `ports:` at all."""
-        svc = compose_tun["services"]["vibelab-egress-tun-helper"]
-        assert "ports" not in svc, "TUN helper must not publish any TCP port"
-
-    def test_capability_grant_is_minimal(self, compose_tun):
-        """cap_drop ALL + cap_add exactly [NET_ADMIN]; no privileged."""
-        svc = compose_tun["services"]["vibelab-egress-tun-helper"]
-        assert svc.get("cap_drop") == ["ALL"]
-        assert svc.get("cap_add") == ["NET_ADMIN"]
-        assert svc.get("privileged") is not True
-
-    def test_no_docker_socket(self, compose_tun):
-        for v in compose_tun["services"]["vibelab-egress-tun-helper"].get("volumes", []):
-            assert "docker.sock" not in str(v)
-
-    def test_no_new_privileges(self, compose_tun):
-        svc = compose_tun["services"]["vibelab-egress-tun-helper"]
-        assert "no-new-privileges:true" in svc.get("security_opt", [])
-
-    def test_tun_device_mounted(self, compose_tun):
-        vols = [str(v) for v in
-                compose_tun["services"]["vibelab-egress-tun-helper"].get("volumes", [])]
-        assert any("/dev/net/tun" in v for v in vols)
+    def test_host_namespace_and_drop_before_exec(self, unit):
+        source = (ROOT / "host/strict-helper/native_netns.py").read_text()
+        assert "--reuid={uid}" in source
+        assert "--regid={gid}" in source
+        assert "--bounding-set=-all" in source
+        assert "ProtectHome=false" in unit
+        assert "ProtectSystem=false" in unit
 
 
 def test_oneshot_slots_shared_by_probe_and_config(tmp_path):

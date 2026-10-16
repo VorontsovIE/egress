@@ -145,6 +145,7 @@ def _tun_helper_call(sock_path: str, req: dict, timeout: float) -> dict:
     argv is passed to it but it runs the command LOCALLY as the caller's
     UID/GID after setting up a per-run netns. It is not a remote-exec API.
     """
+    import array
     import json
     import socket
     import struct
@@ -154,7 +155,15 @@ def _tun_helper_call(sock_path: str, req: dict, timeout: float) -> dict:
     try:
         s.connect(sock_path)
         body = json.dumps(req).encode("utf-8")
-        s.sendall(struct.pack(">I", len(body)) + body)
+        frame = struct.pack(">I", len(body)) + body
+        if req.get("op") == "run":
+            stdio = array.array("i", (0, 1, 2))
+            sent = s.sendmsg([frame], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                        stdio.tobytes())])
+            if sent < len(frame):
+                s.sendall(frame[sent:])
+        else:
+            s.sendall(frame)
         # read length-prefixed response
         hdr = b""
         while len(hdr) < 4:
@@ -206,6 +215,16 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
     sock = cfg.tun_helper_socket()
     timeout = timeout or 300.0
 
+    ready = _tun_helper_call(sock, {"op": "capability"}, 10.0)
+    cap_status = (ready.get("capability") or {}).get("status")
+    if not ready.get("ok") or cap_status != "supported" or \
+            (ready.get("capability") or {}).get("protocol") != 2:
+        reason = (ready.get("capability") or {}).get("reason") or \
+                 ready.get("detail") or ready.get("error") or "unknown"
+        _die(EXIT_UNSUPPORTED,
+             f"tun mode is not available in this environment ({reason}); "
+             "there is no silent fallback to proxy")
+
     upstream = None
     session_id = None
     try:
@@ -231,8 +250,23 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
                 "password": cap.get("password", ""),
             }
 
-        req = {"op": "run", "route": route, "command": command,
-               "timeout": timeout}
+        # The helper is native to the host, but a service does not inherit
+        # the invoking shell's working directory or environment. Carry these
+        # as bounded protocol fields. Identity still comes only from
+        # SO_PEERCRED, never from these caller-controlled values.
+        child_env = {k: v for k, v in os.environ.items()
+                     if k not in ("http_proxy", "https_proxy", "all_proxy",
+                                  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                                  "no_proxy", "NO_PROXY")}
+        try:
+            mask = int(next(line.split(":", 1)[1].strip() for line in
+                            open("/proc/self/status", encoding="utf-8")
+                            if line.startswith("Umask:")), 8)
+        except (OSError, StopIteration, ValueError):
+            mask = 0o022
+        req = {"op": "run", "protocol": 2, "route": route,
+               "command": command, "timeout": timeout,
+               "cwd": os.getcwd(), "env": child_env, "umask": mask}
         if upstream is not None:
             req["upstream"] = upstream
         resp = _tun_helper_call(sock, req, timeout + 30.0)

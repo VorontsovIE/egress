@@ -26,7 +26,7 @@ x-secrets: &secrets
 
 services:
   vibelab-egress-mihomo:
-    image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.32}
+    image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e}
     container_name: vibelab-egress-mihomo
     restart: unless-stopped
     command:
@@ -40,9 +40,11 @@ services:
       # host clients (loopback)
       - "127.0.0.1:1080:18080"
       - "127.0.0.1:1081:18081"
+      - "127.0.0.1:1081:18081/udp"
       # container clients (OpenScience etc.) via the Docker bridge gateway
       - "${DOCKER_GATEWAY:-172.17.0.1}:1080:18080"
       - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081"
+      - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081/udp"
     volumes:
       # persistent mihomo state (bbolt cache with stored selections, logs)
       - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/mihomo:/root/.config/mihomo
@@ -80,7 +82,7 @@ services:
       start_period: 15s
     security_opt:
       - no-new-privileges:true
-    # No cap_add / privileged: TUN (if ever enabled) comes via compose.tun.yaml
+    # No cap_add / privileged: TUN (if ever enabled) comes via host TUN systemd unit
     # with an explicit, reviewed privilege grant (spec section 21, phase A6).
 
   vibelab-egress-egressd:

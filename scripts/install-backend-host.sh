@@ -316,7 +316,7 @@ else
     --client host-main --environment host \
     --secrets-dir "$SECRETS_DIR" \
     --out "$ROOT/client-bundles" \
-    --tun-socket "$ROOT/tun-helper/tun-helper.sock"
+    --tun-socket /run/vibelab-egress/tun-helper.sock
   bash "$REPO_ROOT/scripts/install-client.sh" \
     --client host-main --target host \
     --bundle "$ROOT/client-bundles/host-main"

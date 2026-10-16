@@ -1856,7 +1856,8 @@ vibelab-egress/
   README.md
   INSTALL.md
   compose.yaml
-  compose.tun.yaml
+  host/units/vibelab-egress-tun-helper.service
+  scripts/install-tun-host.sh
 
   mihomo/
     config.template.yaml

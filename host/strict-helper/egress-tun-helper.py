@@ -8,12 +8,13 @@ local UNIX socket) to run the command in a dedicated per-run network
 namespace whose egress is pinned to that route.
 
 Why a privileged helper: creating a network namespace + TUN device requires
-CAP_NET_ADMIN (and /dev/net/tun). The helper runs with that privilege, does
+CAP_SYS_ADMIN for the named netns and CAP_NET_ADMIN for networking (plus
+/dev/net/tun). The host systemd helper runs with those privileges, does
 the network setup, then DROPS to the caller's UID/GID before exec'ing the
 target. It is NOT a remote-exec API and is NOT reachable over the network.
 
 Security invariants (spec 21.4) -- each is enforced here and unit-tested:
-  * local only: bound to a UNIX socket in a 0700 dir; no TCP bind.
+  * local only: bound to a group-restricted UNIX socket; no TCP bind.
   * caller identity from OS credentials (SO_PEERCRED), never from the body.
   * fixed protocol of operations only: `capability`, `run`, `cleanup`.
     Any other op / unknown field -> error. There is no free-form command
@@ -37,27 +38,32 @@ Standard library only.
 from __future__ import annotations
 
 import errno
-import fcntl
+import array
 import json
 import os
-import pwd
 import grp
+from pathlib import Path
 import re
 import shutil
 import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from native_netns import (NativeNetnsBackend, NetworkSetupError, MIHOMO_PATH,
+                          _job_name)
+
 # ---------------------------------------------------------------------------
 # configuration
 # ---------------------------------------------------------------------------
 DEFAULT_SOCKET = "/run/vibelab-egress/tun-helper.sock"
-DEFAULT_STATE_DIR = "/run/vibelab-egress/tun-helper"
+DEFAULT_STATE_DIR = "/run/vibelab-egress/jobs"
 NETNS_PREFIX = "egress-tun-"
 # a per-run netns older than this with no live job is stale and gets cleaned
 STALE_TTL_S = 300.0
@@ -78,7 +84,8 @@ ALLOWED_OPS = {"capability", "run", "cleanup"}
 # fields allowed per op, beyond "op" itself (spec 21.4: fixed protocol)
 ALLOWED_FIELDS = {
     "capability": set(),
-    "run": {"route", "upstream", "command", "timeout", "stdout", "stderr"},
+    "run": {"protocol", "route", "upstream", "command", "timeout",
+            "cwd", "env", "umask"},
     "cleanup": {"older_than"},
 }
 
@@ -128,6 +135,7 @@ class Capability:
             "backend": self.backend,
             "reason": self.reason,
             "status": "supported" if self.tun else "unsupported_in_environment",
+            "protocol": 2,
         }
 
 
@@ -160,19 +168,23 @@ def _has_cap_sys_admin() -> bool:
     return False
 
 
+def _has_cap(bit: int) -> bool:
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("CapEff:"):
+                return bool(int(line.split(":", 1)[1].strip(), 16) & (1 << bit))
+    except (OSError, ValueError):
+        pass
+    return False
+
+
 def _tun_dev_present() -> bool:
     return os.path.exists("/dev/net/tun")
 
 
 def _netns_available() -> bool:
-    """Can this backend create named netns with ip netns add?"""
-    if not shutil.which("ip"):
-        return False
-    if not (_has_cap_net_admin() and _has_cap_sys_admin()):
-        return False
-    # a real probe would unshare here; keep it capability-based so we never
-    # mutate the caller's netns during a probe.
-    return True
+    return bool(shutil.which("ip") and _has_cap_net_admin() and
+                _has_cap_sys_admin())
 
 
 def probe_capability() -> Capability:
@@ -180,17 +192,20 @@ def probe_capability() -> Capability:
     tun_dev = _tun_dev_present()
     cap = _has_cap_net_admin()
     netns = _netns_available()
-    tun = tun_dev and cap and netns
+    missing = NativeNetnsBackend.prerequisites(MIHOMO_PATH)
+    tun = tun_dev and cap and netns and _has_cap(6) and _has_cap(7) and not missing
     if tun:
-        reason, backend = "ok", "netns+tun"
+        reason, backend = "ok", "host-netns+mihomo"
     elif not tun_dev:
         reason, backend = "missing /dev/net/tun", "none"
     elif not cap:
         reason, backend = "missing CAP_NET_ADMIN", "none"
     elif not _has_cap_sys_admin():
-        reason, backend = "ip netns add requires CAP_SYS_ADMIN; helper has NET_ADMIN only", "none"
+        reason, backend = "ip netns add requires CAP_SYS_ADMIN", "none"
+    elif not (_has_cap(6) and _has_cap(7)):
+        reason, backend = "missing CAP_SETGID/CAP_SETUID", "none"
     else:
-        reason, backend = "netns unavailable (no ip/CAP_NET_ADMIN)", "none"
+        reason, backend = "missing host TUN prerequisites: " + ", ".join(missing), "none"
     return Capability(tun=tun, tun_dev=tun_dev, cap_net_admin=cap,
                       netns=netns, reason=reason, backend=backend)
 
@@ -226,6 +241,8 @@ def validate_run(req: dict[str, Any], known_routes: set[str],
     * timeout: bounded by MAX_RUN_S.
     """
     _check_shape(req, "run")
+    if req.get("protocol") != 2:
+        raise ValidationError("run requires host-native protocol 2")
 
     route = req.get("route")
     if not isinstance(route, str) or not route:
@@ -278,6 +295,21 @@ def validate_run(req: dict[str, Any], known_routes: set[str],
         if not isinstance(t, (int, float)) or t <= 0 or t > MAX_RUN_S:
             raise ValidationError(f"'timeout' must be in (0, {MAX_RUN_S}]")
 
+    cwd = req.get("cwd")
+    if not isinstance(cwd, str) or not cwd.startswith("/") or len(cwd) > 4096:
+        raise ValidationError("'cwd' must be a bounded absolute path")
+    env = req.get("env")
+    if not isinstance(env, dict) or len(env) > 512:
+        raise ValidationError("'env' must be an object of at most 512 entries")
+    for key, value in env.items():
+        if (not isinstance(key, str) or not isinstance(value, str) or
+                not key or "=" in key or "\x00" in key or "\x00" in value or
+                len(key) > 256 or len(value) > 16384):
+            raise ValidationError("invalid or oversized environment entry")
+    mask = req.get("umask")
+    if not isinstance(mask, int) or mask < 0 or mask > 0o777:
+        raise ValidationError("'umask' must be an integer 0..0777")
+
 
 def _check_shape(req: dict[str, Any], op: str) -> None:
     if not isinstance(req, dict):
@@ -292,144 +324,7 @@ def _check_shape(req: dict[str, Any], op: str) -> None:
 # ---------------------------------------------------------------------------
 # netns backend (the privileged network setup)
 # ---------------------------------------------------------------------------
-class NetnsBackend:
-    """Creates/destroys per-run network namespaces and pins egress.
-
-    The real backend shells out to `unshare`/`ip`/`tun2socks`. It is only
-    reached after `probe_capability()` reports `tun: supported`, so in an
-    unsupported environment the helper never mutates the caller's netns.
-    """
-
-    def __init__(self, state_dir: str = DEFAULT_STATE_DIR):
-        self.state_dir = state_dir
-        os.makedirs(state_dir, exist_ok=True)
-
-    # -- netns lifecycle ----------------------------------------------------
-    def _netns_path(self, name: str) -> str:
-        return os.path.join(self.state_dir, "netns", name)
-
-    def create(self, name: str) -> None:
-        path = self._netns_path(name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        # create a new netns bound to a file so we can enter it later
-        self._run(["ip", "netns", "add", name])
-        # record creation time for stale detection
-        with open(self._netns_path(name) + ".ts", "w") as f:
-            f.write(str(_now()))
-
-    def destroy(self, name: str) -> None:
-        # the netns may already be gone (e.g. it was never really created in an
-        # unsupported env, or the kernel cleaned it); suppress the harmless
-        # "cannot remove namespace file" stderr.
-        try:
-            self._run(["ip", "netns", "del", name], check=False, quiet=True)
-        except OSError:
-            pass
-        for suffix in ("", ".ts"):
-            p = self._netns_path(name) + suffix
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-
-    def list_netns(self) -> list[tuple[str, float]]:
-        """Return [(name, created_ts)] for our netns (by prefix)."""
-        out: list[tuple[str, float]] = []
-        netns_dir = os.path.join(self.state_dir, "netns")
-        if not os.path.isdir(netns_dir):
-            return out
-        for entry in os.listdir(netns_dir):
-            if not entry.endswith(".ts"):
-                continue
-            name = entry[:-3]
-            if not name.startswith(NETNS_PREFIX):
-                continue
-            try:
-                ts = float(open(os.path.join(netns_dir, entry)).read().strip())
-            except (OSError, ValueError):
-                ts = 0.0
-            out.append((name, ts))
-        return out
-
-    def cleanup_stale(self, now: float | None = None,
-                      ttl: float = STALE_TTL_S) -> list[str]:
-        """Destroy netns older than ``ttl``. Returns the names removed."""
-        now = now if now is not None else _now()
-        removed = []
-        for name, ts in self.list_netns():
-            if now - ts > ttl:
-                self.destroy(name)
-                removed.append(name)
-        return removed
-
-    # -- egress pinning -----------------------------------------------------
-    def pin_route(self, name: str, upstream: dict[str, Any]) -> None:
-        """Inside netns ``name``: bring up a TUN device and forward its
-        traffic to the route-specific one-shot SOCKS upstream (tun2socks or
-        equivalent). This is the 'route-specific upstream' of spec 21.2."""
-        host = upstream["host"]
-        port = upstream["port"]
-        user = upstream.get("username", "")
-        password = upstream.get("password", "")
-        # enter the netns and set up the TUN + forwarder. The exact toolchain
-        # (tun2socks / a bundled userspace forwarder) is host-specific; the
-        # contract is: all egress from the netns goes to host:port.
-        cmds = [
-            ["ip", "link", "add", "tun0", "type", "tun"],
-            ["ip", "addr", "add", "10.88.0.1/24", "dev", "tun0"],
-            ["ip", "link", "set", "tun0", "up"],
-            ["ip", "route", "add", "default", "via", "10.88.0.1"],
-        ]
-        for c in cmds:
-            self._run(["ip", "netns", "exec", name, "--"] + c)
-        # start the userspace forwarder (tun2socks) bound to the TUN device,
-        # pointing at the one-shot SOCKS listener.
-        fwd = shutil.which("tun2socks")
-        if fwd:
-            self._run(["ip", "netns", "exec", name, "--", fwd,
-                       "-b", "10.88.0.1/24", "-s", f"{host}:{port}",
-                       "-u", f"{user}:{password}" if user else "",
-                       "-i", "tun0"], background=True)
-
-    def pin_direct(self, name: str) -> None:
-        """direct+tun (spec 21.3): isolated netns with direct NAT, no VPN."""
-        self._run(["ip", "netns", "exec", name, "--", "ip", "link", "set", "lo", "up"])
-        # NAT to the host's default route (isolated direct path, no proxy).
-        self._run(["ip", "netns", "exec", name, "--", "ip", "route", "add",
-                   "default", "via", "10.88.0.254"], check=False)
-
-    # -- exec with privilege drop ------------------------------------------
-    def exec_in(self, name: str, command: list[str], uid: int, gid: int,
-                timeout: float) -> int:
-        """Run ``command`` inside netns ``name`` as the caller's uid/gid.
-
-        The helper (root) drops to the caller's credentials for the target,
-        so the target runs as the local host workload (spec 21.2)."""
-        argv = ["ip", "netns", "exec", name, "--", "setpriv",
-                f"--reuid={uid}", f"--regid={gid}", "--init-groups"] + command
-        try:
-            p = subprocess.run(argv, timeout=timeout)
-            rc = p.returncode
-        except subprocess.TimeoutExpired:
-            rc = 124
-        except FileNotFoundError:
-            rc = 127
-        if rc < 0:
-            rc = 128 + (-rc)
-        return rc
-
-    # -- helpers ------------------------------------------------------------
-    def _run(self, argv: list[str], check: bool = True,
-             background: bool = False, quiet: bool = False) -> subprocess.CompletedProcess:
-        if background:
-            subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-            return subprocess.CompletedProcess(argv, 0)
-        if quiet:
-            return subprocess.run(argv, check=check,
-                                  stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL)
-        return subprocess.run(argv, check=check)
+NetnsBackend = NativeNetnsBackend
 
 
 # ---------------------------------------------------------------------------
@@ -441,8 +336,17 @@ class Helper:
                  capability: Callable[[], Capability] | None = None):
         self.known_routes = set(known_routes)
         self.allowed_upstreams = set(allowed_upstreams)
-        self.backend = backend or NetnsBackend()
+        self.backend = backend
+        self._backend_lock = threading.Lock()
         self._probe = capability or probe_capability
+
+    def _backend(self) -> NetnsBackend:
+        with self._backend_lock:
+            if self.backend is None:
+                self.backend = NetnsBackend(
+                    gateway=os.environ.get("VIBELAB_EGRESS_DOCKER_GATEWAY",
+                                           "172.17.0.1"))
+            return self.backend
 
     # -- ops ----------------------------------------------------------------
     def op_capability(self, req: dict[str, Any]) -> dict[str, Any]:
@@ -451,14 +355,19 @@ class Helper:
         audit("capability", tun=cap.tun, reason=cap.reason)
         return {"ok": True, "capability": cap.to_dict()}
 
-    def op_cleanup(self, req: dict[str, Any]) -> dict[str, Any]:
+    def op_cleanup(self, req: dict[str, Any], peer_uid: int = 0) -> dict[str, Any]:
         validate_cleanup(req)
+        if peer_uid != 0:
+            return {"ok": False, "error": "forbidden"}
         ttl = req.get("older_than", STALE_TTL_S)
-        removed = self.backend.cleanup_stale(ttl=ttl)
+        removed = self._backend().cleanup_stale(ttl=ttl)
         audit("cleanup", removed=len(removed))
         return {"ok": True, "removed": removed}
 
-    def op_run(self, req: dict[str, Any], peer_uid: int, peer_gid: int) -> dict[str, Any]:
+    def op_run(self, req: dict[str, Any], peer_uid: int, peer_gid: int,
+               *, peer_groups: list[int] | None = None,
+               stdio: tuple[int, int, int] | None = None,
+               conn: socket.socket | None = None) -> dict[str, Any]:
         validate_run(req, self.known_routes, self.allowed_upstreams)
         route = req["route"]
         cap = self._probe()
@@ -468,27 +377,31 @@ class Helper:
             return {"ok": False, "error": "unsupported_in_environment",
                     "capability": cap.to_dict()}
 
-        name = f"{NETNS_PREFIX}{os.getpid()}-{int(_now() * 1000)}"
+        name = _job_name()
+        backend = self._backend()
         try:
-            self.backend.create(name)
+            backend.create(name)
             if route == "direct":
-                self.backend.pin_direct(name)
+                backend.pin_direct(name)
             else:
-                self.backend.pin_route(name, req["upstream"])
+                backend.pin_route(name, req["upstream"])
             timeout = req.get("timeout", 300.0)
             audit("run", route=route, netns=name, uid=peer_uid,
                   outcome="started")
-            rc = self.backend.exec_in(name, req["command"], peer_uid, peer_gid,
-                                      timeout)
+            rc = backend.exec_in(
+                name, req["command"], peer_uid, peer_gid, timeout,
+                groups=peer_groups or [], env=req["env"], cwd=req["cwd"],
+                umask=req["umask"], stdio=stdio or (0, 1, 2),
+                cancel_sock=conn)
             audit("run", route=route, netns=name, outcome="done", exit_code=rc)
             return {"ok": True, "exit_code": rc}
-        except (OSError, subprocess.CalledProcessError) as e:
+        except (OSError, subprocess.CalledProcessError, NetworkSetupError) as e:
             audit("run", route=route, netns=name, outcome="error",
                   error=str(e)[:200])
             return {"ok": False, "error": "netns_setup_failed",
                     "detail": str(e)[:200]}
         finally:
-            self.backend.destroy(name)
+            backend.destroy(name)
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +419,49 @@ def read_frame(sock: socket.socket) -> dict[str, Any] | None:
     if body is None:
         return None
     return json.loads(body.decode("utf-8"))
+
+
+def read_frame_with_fds(sock: socket.socket) -> tuple[dict[str, Any] | None, list[int]]:
+    """Read the fixed request frame and at most stdin/stdout/stderr FDs."""
+    head, ancillary, flags, _ = sock.recvmsg(4, socket.CMSG_SPACE(16 * 4))
+    if not head:
+        return None, []
+    fds: list[int] = []
+    for level, typ, payload in ancillary:
+        if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+            values = array.array("i")
+            values.frombytes(payload[:len(payload) - len(payload) % values.itemsize])
+            fds.extend(values)
+    if flags & socket.MSG_CTRUNC:
+        for fd in fds:
+            os.close(fd)
+        raise ValidationError("too many passed file descriptors")
+    if len(fds) > 3:
+        for fd in fds:
+            os.close(fd)
+        raise ValidationError("expected at most three stdio descriptors")
+    header = head + (_recv_exact(sock, 4 - len(head)) or b"")
+    if len(header) != 4:
+        for fd in fds:
+            os.close(fd)
+        return None, []
+    (length,) = struct.unpack(">I", header)
+    if length < 2 or length > 1_000_000:
+        for fd in fds:
+            os.close(fd)
+        raise ValidationError("invalid request frame size")
+    body = _recv_exact(sock, length)
+    if body is None:
+        for fd in fds:
+            os.close(fd)
+        return None, []
+    try:
+        req = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        for fd in fds:
+            os.close(fd)
+        raise ValidationError("invalid JSON request") from None
+    return req, fds
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
@@ -531,35 +487,63 @@ def peer_credentials(sock: socket.socket) -> tuple[int, int]:
     return uid, gid
 
 
+def peer_groups(sock: socket.socket) -> list[int]:
+    """Read the connecting process's actual supplementary groups."""
+    data = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    pid, uid, gid = struct.unpack("iii", data)
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("Groups:"):
+            return [int(item) for item in line.split(":", 1)[1].split()]
+    raise ValidationError("cannot read caller groups")
+
+
 def serve(sock_path: str, known_routes: set[str],
           allowed_upstreams: set[str],
           helper: Helper | None = None) -> None:
     d = os.path.dirname(sock_path)
     if d:
         os.makedirs(d, exist_ok=True)
-        os.chmod(d, 0o700)
+        group_id = grp.getgrnam("vibelab-egress-tun").gr_gid
+        os.chown(d, 0, group_id)
+        os.chmod(d, 0o755)
     if os.path.exists(sock_path):
         os.unlink(sock_path)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
-    os.chmod(sock_path, 0o600)
+    os.chown(sock_path, 0, group_id)
+    os.chmod(sock_path, 0o660)
     server.listen(16)
     audit("listen", socket=sock_path)
+    instance = helper or Helper(known_routes, allowed_upstreams)
+    active = threading.BoundedSemaphore(16)
+    if probe_capability().tun:
+        instance._backend().cleanup_stale(ttl=0)
+
+    def worker(conn: socket.socket) -> None:
+        try:
+            _handle_conn(conn, instance)
+        except (ValidationError, OSError, subprocess.CalledProcessError,
+                NetworkSetupError, json.JSONDecodeError) as e:
+            try:
+                write_frame(conn, {"ok": False, "error": "bad_request",
+                                   "detail": str(e)[:200]})
+            except OSError:
+                pass
+        finally:
+            conn.close()
+            active.release()
+
     try:
         while True:
             conn, _ = server.accept()
-            try:
-                _handle_conn(conn, helper or Helper(known_routes,
-                                                    allowed_upstreams))
-            except (ValidationError, OSError, subprocess.CalledProcessError,
-                    json.JSONDecodeError) as e:
+            if not active.acquire(blocking=False):
                 try:
-                    write_frame(conn, {"ok": False, "error": "bad_request",
-                                       "detail": str(e)[:200]})
+                    write_frame(conn, {"ok": False, "error": "busy"})
                 except OSError:
                     pass
-            finally:
                 conn.close()
+                continue
+            threading.Thread(target=worker, args=(conn,), daemon=True).start()
     finally:
         server.close()
         try:
@@ -571,19 +555,33 @@ def serve(sock_path: str, known_routes: set[str],
 def _handle_conn(conn: socket.socket, helper: Helper) -> None:
     uid, gid = peer_credentials(conn)
     while True:
-        req = read_frame(conn)
+        req, fds = read_frame_with_fds(conn)
         if req is None:
             return
-        op = req.get("op")
-        if op == "capability":
-            resp = helper.op_capability(req)
-        elif op == "cleanup":
-            resp = helper.op_cleanup(req)
-        elif op == "run":
-            resp = helper.op_run(req, uid, gid)
-        else:
-            resp = {"ok": False, "error": "unknown_op",
-                    "allowed": sorted(ALLOWED_OPS)}
+        try:
+            if not isinstance(req, dict):
+                raise ValidationError("request must be an object")
+            op = req.get("op")
+            if op == "capability":
+                if fds:
+                    raise ValidationError("capability accepts no descriptors")
+                resp = helper.op_capability(req)
+            elif op == "cleanup":
+                if fds:
+                    raise ValidationError("cleanup accepts no descriptors")
+                resp = helper.op_cleanup(req, uid)
+            elif op == "run":
+                if len(fds) != 3:
+                    raise ValidationError("run requires stdin/stdout/stderr descriptors")
+                resp = helper.op_run(req, uid, gid,
+                                     peer_groups=peer_groups(conn),
+                                     stdio=(fds[0], fds[1], fds[2]), conn=conn)
+            else:
+                resp = {"ok": False, "error": "unknown_op",
+                        "allowed": sorted(ALLOWED_OPS)}
+        finally:
+            for fd in fds:
+                os.close(fd)
         write_frame(conn, resp)
         if op != "capability":
             # run/cleanup are one-shot for this connection in the thin-client

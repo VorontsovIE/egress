@@ -44,18 +44,16 @@ evidence supports it.
 
 1. Docker daemon running; the egress stack is up:
    - `docker compose -f compose.yaml up -d` (always)
-   - `docker compose -f compose.yaml -f compose.tun.yaml up -d` (for the TUN checks)
+   - `sudo bash scripts/install-tun-host.sh --user vibelab` (for host TUN checks)
 2. The **host** client is installed: `egressctl` and `egress-run` on `PATH`,
    with `/etc/vibelab-egress/client.yaml`, `client.token`, `default-proxy.auth`.
 3. The **OpenScience** container is running and has the client installed
    (`/usr/local/bin/egressctl` inside it). Its name is auto-detected; override
    with `VIBELAB_EGRESS_OS_CONTAINER` if detection fails.
-4. For the TUN checks: the TUN helper socket is present at the path written
-   into the host client's `client.yaml` (`tun_helper_socket:` —
-   `install-backend-host.sh` writes `<VIBELAB_EGRESS_ROOT>/tun-helper/tun-helper.sock`;
-   `compose.tun.yaml` binds that dir to the helper's
-   `/run/vibelab-egress/`). The harness resolves it from the host client
-   config automatically; override with `VIBELAB_EGRESS_TUN_HELPER_SOCKET`
+4. For the TUN checks: `install-tun-host.sh` creates the helper socket at
+   `/run/vibelab-egress/tun-helper.sock` via a host systemd unit. The harness
+   resolves the path from the host client's `client.yaml` automatically;
+   override with `VIBELAB_EGRESS_TUN_HELPER_SOCKET`
    or `--tun-helper-sock`.
 
 ## Run it (one command)

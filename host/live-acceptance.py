@@ -61,6 +61,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from datetime import datetime, timezone
 
@@ -557,14 +558,28 @@ def check_tun_local_workload():
             return ("skip", {"reason": why}, why)
         route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
         rid = route["id"]
-        r = egress_run(["--mode", "tun", rid, "--",
-                        "sh", "-c", "id -u; id -g; hostname; echo VIBE=$VIBE_EGRESS_MARK"],
-                       cfg, timeout, redact)
+        marker_fd, marker = tempfile.mkstemp(prefix="egress-tun-acceptance-")
+        os.close(marker_fd)
+        os.unlink(marker)
+        try:
+            r = egress_run(["--mode", "tun", rid, "--", "python3", "-c",
+                            "import os,pathlib; p=pathlib.Path(os.environ['VIBE_TUN_MARKER']); "
+                            "p.write_text('host-native'); "
+                            "print(os.getuid()); print(os.getgid()); "
+                            "print(os.uname().nodename); print(os.getcwd())"],
+                           cfg, timeout, redact,
+                           env={**os.environ, "VIBE_TUN_MARKER": marker})
+            marker_ok = os.path.isfile(marker) and open(marker).read() == "host-native"
+        finally:
+            if os.path.exists(marker):
+                os.unlink(marker)
         lines = [l for l in r["stdout"].splitlines() if l.strip()]
         ev = {"route": rid, "exit": r["rc"], "lines": lines,
               "stdout": r["stdout"], "stderr": r["stderr"],
+              "host_marker_written": marker_ok,
               "expected_uid": os.getuid(), "expected_gid": os.getgid(),
-              "expected_hostname": socket.gethostname()}
+              "expected_hostname": socket.gethostname(),
+              "expected_cwd": os.getcwd()}
         if r["rc"] != 0 or len(lines) < 4:
             return ("fail", ev, f"tun workload exit={r['rc']} lines={len(lines)}")
         ev["uid"], ev["gid"], ev["hostname"] = lines[0], lines[1], lines[2]
@@ -572,6 +587,8 @@ def check_tun_local_workload():
             return ("fail", ev, "workload did not run as caller UID/GID")
         if lines[2].strip() != socket.gethostname():
             return ("fail", ev, "workload hostname != host hostname")
+        if lines[3].strip() != os.getcwd() or not marker_ok:
+            return ("fail", ev, "workload did not retain host cwd/filesystem")
         return ("pass", ev, f"tun workload ran as caller {lines[0]}:{lines[1]} on host")
     run_check("tun_local_workload", "spec50.2",
               "egress-run --mode tun ROUTE -- id/hostname (caller UID/GID, host fs)", fn)
@@ -590,8 +607,13 @@ def check_tun_udp():
         r = egress_run(["--mode", "tun", rid, "--",
                         "python3", "-c",
                         "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);"
-                        "s.settimeout(15);s.sendto(b'\\x0',('1.1.1.1',53));"
-                        "d,_=s.recvfrom(512);print(d[:16].hex())"],
+                        "s.settimeout(15);"
+                        "q=bytes.fromhex('123401000001000000000000')+"
+                        "b'\\x07example\\x03com\\x00'+bytes.fromhex('00010001');"
+                        "s.sendto(q,('1.1.1.1',53));"
+                        "d,_=s.recvfrom(512);"
+                        "assert len(d)>=12 and d[:2]==q[:2] and d[2]&128 and d[3]&15==0;"
+                        "print(d[:16].hex())"],
                        cfg, timeout, redact)
         ev = {"route": rid, "exit": r["rc"], "udp_reply_hex": r["stdout"].strip(),
               "stdout": r["stdout"], "stderr": r["stderr"]}
@@ -677,25 +699,22 @@ def check_tun_no_root():
         ready, why = _tun_ready()
         if not ready:
             return ("skip", {"reason": why}, why)
-        r = egress_run(["--mode", "tun", "direct", "--", "id"], cfg, timeout, redact)
-        lines = [l for l in r["stdout"].splitlines() if l.strip()]
-        uid = gid = None
-        if lines:
-            m_uid = re.search(r"uid=(\d+)", lines[0])
-            m_gid = re.search(r"gid=(\d+)", lines[0])
-            uid = m_uid.group(1) if m_uid else None
-            gid = m_gid.group(1) if m_gid else None
-        cap = _run(["docker", "inspect", "--format",
-                    "{{.HostConfig.CapAdd}}|{{.HostConfig.Privileged}}",
-                    "vibelab-egress-tun-helper"], 15, redact)
-        capadd, priv = (cap["stdout"].strip().split("|") + ["", ""])[:2]
+        r = egress_run(["--mode", "tun", "direct", "--", "python3", "-c",
+                        "import os; print(os.getuid()); print(os.getgid()); "
+                        "print(next(x.split(':')[1].strip() for x in "
+                        "open('/proc/self/status') if x.startswith('CapEff:')))"],
+                       cfg, timeout, redact)
+        lines = [l.strip() for l in r["stdout"].splitlines() if l.strip()]
+        uid, gid, caps = (lines + [None, None, None])[:3]
         ev = {"exit": r["rc"], "uid": uid, "gid": gid, "stdout": r["stdout"],
               "expected_uid": str(os.getuid()), "expected_gid": str(os.getgid()),
-              "helper_cap_add": capadd.strip(), "helper_privileged": priv.strip()}
+              "effective_capabilities": caps}
         if r["rc"] != 0:
             return ("fail", ev, f"id via tun exit={r['rc']}")
         if uid != str(os.getuid()) or gid != str(os.getgid()):
             return ("fail", ev, "tun command did not run as caller (possible escalation)")
+        if not caps or int(caps, 16) != 0:
+            return ("fail", ev, "tun command retained effective capabilities")
         return ("pass", ev, f"tun command ran as caller {uid}:{gid}; no root escalation")
     run_check("tun_no_root_escalation", "spec50.6",
               "egress-run --mode tun direct -- id (caller UID/GID, no root)", fn)
@@ -710,20 +729,25 @@ def check_tun_stale_cleanup():
         route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
         before_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
         before_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
+        before_links = _run(["ip", "-o", "link", "show"], 15, redact)["stdout"].splitlines()
         r = egress_run(["--mode", "tun", route["id"], "--",
                         "python3", "-c", IP_FETCH],
                        cfg, timeout, redact)
         after_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
         after_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
+        after_links = _run(["ip", "-o", "link", "show"], 15, redact)["stdout"].splitlines()
         new_ns = [l for l in after_ns if l not in before_ns]
         new_tun = [l for l in after_tun if l not in before_tun]
+        new_veth = [l for l in after_links if l not in before_links and
+                    re.search(r"\beh[0-9a-f]{10}(?:@|:)", l)]
         ev = {"route": route["id"], "exit": r["rc"],
               "new_netns": new_ns, "new_tun_devs": new_tun,
+              "new_host_veth": new_veth,
               "before_ns_count": len(before_ns), "after_ns_count": len(after_ns)}
         if r["rc"] != 0:
             return ("fail", ev, f"tun run exit={r['rc']}")
-        if new_ns or new_tun:
-            return ("fail", ev, f"stale resources left: ns={new_ns} tun={new_tun}")
+        if new_ns or new_tun or new_veth:
+            return ("fail", ev, f"stale resources left: ns={new_ns} tun={new_tun} veth={new_veth}")
         return ("pass", ev, "no stale netns/tun after run")
     run_check("tun_stale_cleanup", "spec50.7",
               "ip netns / tun device list before+after a tun run", fn)
@@ -799,24 +823,32 @@ def check_os_tun_unsupported():
 def check_tun_no_fallback():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
-        if not os.path.exists(CTX["tun_sock"]):
-            why = f"tun helper socket not present: {CTX['tun_sock']}"
-            return ("skip", {"reason": why}, why)
-        env = dict(os.environ)
-        env["VIBE_EGRESS_MARK"] = "PROXY_PATH_RAN"
-        r = egress_run(["--mode", "tun", "direct", "--",
-                        "sh", "-c", "echo MARK=$VIBE_EGRESS_MARK; hostname"],
-                       cfg, timeout, redact, env=env)
+        # Deliberately make only the local helper unavailable. A strict run
+        # must fail before the target executes or a proxy path is considered.
+        source = open(cfg, encoding="utf-8").read()
+        bogus = os.path.join(tempfile.gettempdir(), "egress-no-helper-" + str(os.getpid()))
+        replacement = "tun_helper_socket: " + bogus
+        if re.search(r"^tun_helper_socket:.*$", source, re.M):
+            source = re.sub(r"^tun_helper_socket:.*$", replacement, source, flags=re.M)
+        else:
+            source += "\n" + replacement + "\n"
+        fd, path = tempfile.mkstemp(prefix="egress-tun-config-", suffix=".yaml")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write(source)
+            r = egress_run(["--mode", "tun", "direct", "--",
+                            "sh", "-c", "echo PROXY_PATH_RAN"],
+                           path, timeout, redact)
+        finally:
+            os.unlink(path)
         ev = {"exit": r["rc"], "stdout": r["stdout"], "stderr": r["stderr"]}
-        if r["rc"] == 0:
-            return ("fail", ev, "tun run unexpectedly succeeded")
         if "PROXY_PATH_RAN" in r["stdout"]:
-            return ("fail", ev, "marker shows the proxy path ran (silent fallback)")
+            return ("fail", ev, "target ran despite unavailable strict helper")
         if r["rc"] != 6:
-            return ("fail", ev, f"tun failure exit={r['rc']} (expected 6, not a proxy run)")
-        return ("pass", ev, "tun failure is explicit (exit 6); no silent proxy fallback")
+            return ("fail", ev, f"tun failure exit={r['rc']} (expected 6)")
+        return ("pass", ev, "unavailable helper causes explicit exit 6; no fallback")
     run_check("tun_no_silent_fallback", "spec50.11",
-              "egress-run --mode tun (marker env) -> explicit failure, no proxy fallback", fn)
+              "egress-run --mode tun with unavailable helper -> explicit failure", fn)
 
 
 def check_tun_capabilities():
@@ -873,56 +905,38 @@ def _yaml_lines(path):
 
 def check_tun_static():
     def fn():
-        comp = os.path.join(REPO, "compose.tun.yaml")
-        lines = _yaml_lines(comp)
-        if lines is None:
-            return ("skip", {"reason": f"compose.tun.yaml not found: {comp}"},
-                    "no compose.tun.yaml")
-        text = "\n".join(t for _, t in lines)
+        unit = os.path.join(REPO, "host/units/vibelab-egress-tun-helper.service")
+        try:
+            text = open(unit, encoding="utf-8").read()
+        except OSError as exc:
+            return ("fail", {"unit": unit, "error": str(exc)}, "host TUN unit missing")
         issues = []
-        # privileged: true (real YAML, not a comment)
-        if re.search(r"privileged:\s*true", text):
-            issues.append("privileged:true present")
-        # docker.sock in an actual volume mount
-        for _, t in lines:
-            if "docker.sock" in t and (t.startswith("-") or ":" in t):
-                issues.append(f"docker.sock volume: {t}")
-        # cap_add block: collect the list items under it
-        caps = []
-        in_cap = False
-        cap_indent = None
-        for ind, t in lines:
-            if t.startswith("cap_add:"):
-                in_cap = True
-                cap_indent = ind
-                continue
-            if in_cap:
-                if ind > cap_indent and t.startswith("-"):
-                    caps.append(t.lstrip("- ").strip())
-                elif ind <= cap_indent:
-                    in_cap = False
-        if caps and any(c != "NET_ADMIN" for c in caps):
-            issues.append(f"cap_add beyond NET_ADMIN: {caps}")
-        if "no-new-privileges" not in text:
-            issues.append("no-new-privileges missing")
-        # OpenScience config: if present it must never get the tun socket.
+        required = (
+            "User=root", "Group=vibelab-egress-tun",
+            "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID",
+            "NoNewPrivileges=true", "ProtectHome=false", "ProtectSystem=false",
+            "--socket /run/vibelab-egress/tun-helper.sock",
+        )
+        for item in required:
+            if item not in text:
+                issues.append(f"unit missing {item}")
+        if "docker.sock" in text or "--privileged" in text:
+            issues.append("Docker privilege/socket in host helper unit")
         osconfig = CTX["osconfig"]
         os_tun = _flat_yaml_get(osconfig, "tun_backend") if osconfig else None
         os_sock = _flat_yaml_get(osconfig, "tun_helper_socket") if osconfig else None
-        ev = {"compose_tun": comp, "cap_add": caps, "issues": issues,
+        if os_tun and os_tun != "none":
+            issues.append(f"openscience tun_backend={os_tun!r}")
+        if os_sock:
+            issues.append("openscience config contains helper socket")
+        ev = {"host_unit": unit, "issues": issues,
               "os_config_present": bool(osconfig and os.path.exists(osconfig)),
               "os_tun_backend": os_tun, "os_tun_helper_socket": os_sock}
-        if osconfig and os.path.exists(osconfig):
-            if os_tun and os_tun != "none":
-                issues.append(f"openscience tun_backend={os_tun!r} (expected none)")
-            if os_sock:
-                issues.append(f"openscience has tun_helper_socket={os_sock!r} (must not)")
         if issues:
             return ("fail", ev, "; ".join(issues))
-        return ("pass", ev, "tun privilege grant is minimal (cap_add NET_ADMIN only); "
-                            "no privileged/docker.sock; openscience tun_backend=none")
+        return ("pass", ev, "host unit capabilities bounded; OpenScience has no helper access")
     run_check("tun_no_gvisor_weakening", "spec50.10",
-              "static audit of compose.tun.yaml + openscience config", fn)
+              "static audit of host helper unit + OpenScience config", fn)
 
 
 # ---------------------------------------------------------------------------

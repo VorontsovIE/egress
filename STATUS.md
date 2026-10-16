@@ -121,15 +121,11 @@
          offline 314 passed в контейнере (python 3.11, root). Live
          acceptance 23:35 → 9 pass / 7 fail / 12 skip; ВСЕ 7 fail —
          найденные root causes, серия фиксов 2026-10-16 (журнал ниже).
-         На globe дальше: `git pull` →
-         `sudo bash scripts/install-backend-host.sh --yes` (новый egressd,
-         mihomo-конфиг c 0.0.0.0:9090, host client.yaml c `tun_helper_socket`)
-         → переустановка контейнерного клиента (fresh-dir bundle) →
-         `sudo docker compose -f compose.yaml -f compose.tun.yaml up -d`
-         (пересборка helper с новым allowlist 127.0.0.1:1081) → повтор
-         live acceptance + отчёт.
-   - [ ] **Поднять TUN-стек**: `docker compose -f compose.yaml -f compose.tun.yaml up -d`
-         (иначе 10 TUN-чексов останутся skip).
+         Дальнейший план для этого отчёта заменён host-native A6 ниже.
+   - [ ] **Установить host-native TUN-helper на globe**:
+         `sudo bash scripts/install-tun-host.sh --user vibelab`, обновить
+         Compose backend, открыть новую login-сессию для группы socket,
+         затем запустить §50 acceptance. Контейнерный helper удалить как orphan.
    - [ ] **Клиент в OpenScience-контейнере** (бандл из `INSTALL.md`, шаг B) —
          иначе `openscience_tun_unsupported` / `a8_client_same_release` skip.
    - [ ] **Запустить на хосте**: `bash scripts/run-live-acceptance.sh`
@@ -977,3 +973,26 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   а не gVisor. §49.39 остаётся SKIP: проверен restart, не recreate.
   При запуске verifier без root его отдельный secret scan был пропущен;
   producer-чек `a8_secrets_absent` завершился PASS.
+
+- 2026-10-16: A6 host-native PoC начат. В одноразовом Ubuntu 24.04 контейнере
+  с `CAP_SYS_ADMIN` + `CAP_NET_ADMIN` проверены named netns, veth, TUN,
+  Mihomo v1.19.32 под непривилегированным UID, `direct + tun` через NAT и
+  TCP через per-run Mihomo → фиктивный SOCKS5. Результаты и границы проверки
+  записаны в `poc/A6_POC.md`. Это НЕ host-native live-приёмка globe; UDP,
+  systemd, host filesystem и cleanup ещё не подтверждены. Для SOCKS5
+  outbound обязательно явное `interface-name` veth, иначе Mihomo выбирает
+  tun0 и зацикливает upstream.
+
+- 2026-10-16: реализован кандидат host-native A6. Контейнерный helper и
+  `compose.tun.yaml` заменены на host systemd helper с ограниченным набором
+  capabilities и UNIX socket; протокол v2 передаёт stdio, cwd/env/umask,
+  peer UID/GID/группы берутся из OS. Per-run netns/veth/nft/TUN, прямой NAT,
+  отдельный Mihomo без capabilities для proxy, точечные host firewall rules,
+  cleanup и pinned binary installer добавлены. §50.2 теперь проверяет запись
+  в host файл и cwd; §50.11 проверяет ошибку отсутствующего helper. Offline
+  suite: 332 PASS с `EGRESSD_METRICS_DB` в `/tmp`. Изолированный Docker PoC
+  проверил direct create/exec/cleanup (UID 65534, cwd `/tmp`, RC 0) и proxy
+  TUN → фиктивный SOCKS5 CONNECT (`VIA_PROXY`, RC 0). Результаты не заменяют
+  live acceptance: sudo на globe без пароля недоступен, host unit там не
+  установлен, provider/UDP/host firewall и фактический gVisor не проверены.
+  A6 остаётся открытой. Handoff для агентов: `handoff.md`.

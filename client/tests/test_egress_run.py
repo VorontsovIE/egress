@@ -352,6 +352,8 @@ class TestTunHelper:
         seen = {}
 
         def fake_call(sock_path, req, timeout):
+            if req["op"] == "capability":
+                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
             seen.update(sock=sock_path, req=req)
             return {"ok": True, "exit_code": 7}
         monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
@@ -384,6 +386,8 @@ class TestTunHelper:
                 calls["closed"].append(sid)
                 return {}
         def fake_call(sock_path, req, timeout):
+            if req["op"] == "capability":
+                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
             calls["helper"] = req
             return {"ok": True, "exit_code": 0}
         monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
@@ -416,8 +420,10 @@ class TestTunHelper:
     def test_tun_helper_error_runtime(self, monkeypatch, cfg_file, tmp_path):
         """A netns setup failure is a runtime error (exit 1), not a fallback."""
         cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
-        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
-            "ok": False, "error": "netns_setup_failed", "detail": "boom"})
+        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda sock, req, timeout: (
+            {"ok": True, "capability": {"status": "supported", "protocol": 2}}
+            if req["op"] == "capability" else
+            {"ok": False, "error": "netns_setup_failed", "detail": "boom"}))
         code = run_egress_run(monkeypatch, cfg,
                               ["--mode", "tun", "direct", "--", "true"])
         assert code == egress_run.EXIT_RUNTIME
@@ -439,6 +445,8 @@ class TestTunHelper:
             def oneshot_close(self, sid):
                 return {}
         def fake_call(sock_path, req, timeout):
+            if req["op"] == "capability":
+                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
             calls["helper"] = req
             return {"ok": True, "exit_code": 0}
         monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
