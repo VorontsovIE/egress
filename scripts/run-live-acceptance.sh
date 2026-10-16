@@ -25,7 +25,7 @@
 #
 # Optional environment overrides:
 #   VIBELAB_EGRESS_OS_CONTAINER   OpenScience container name (default: auto-detect)
-#   VIBELAB_EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health)
+#   VIBELAB_EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health/liveliness)
 #   VIBELAB_EGRESS_OS_CONFIG      OpenScience bundle client.yaml (for static checks)
 #   VIBELAB_EGRESS_TUN_HELPER_SOCKET  TUN helper socket (default /run/vibelab-egress/tun-helper.sock)
 #   VIBELAB_EGRESS_REPO           repo root (default: this script's repo)
@@ -85,7 +85,7 @@ OS_CONTAINER="$(detect_os_container)"
 echo "[run-live-acceptance] repo=$REPO"
 echo "[run-live-acceptance] out=$OUT"
 echo "[run-live-acceptance] openscience container=$OS_CONTAINER"
-echo "[run-live-acceptance] litellm=${VIBELAB_EGRESS_LITELLM_URL:-http://127.0.0.1:4000/health}"
+echo "[run-live-acceptance] litellm=${VIBELAB_EGRESS_LITELLM_URL:-http://127.0.0.1:4000/health/liveliness}"
 
 mkdir -p "$(dirname "$OUT")"
 

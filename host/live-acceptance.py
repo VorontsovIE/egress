@@ -30,11 +30,13 @@ Options:
     --osconfig PATH       OpenScience client config (default
                           $VIBELAB_EGRESS_OS_CONFIG or
                           /home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml)
-    --tun-helper-sock P   TUN helper UNIX socket (default
-                          $VIBELAB_EGRESS_TUN_HELPER_SOCKET or
-                          /run/vibelab-egress/tun-helper.sock)
+    --tun-helper-sock P   TUN helper UNIX socket (default:
+                          $VIBELAB_EGRESS_TUN_HELPER_SOCKET, then
+                          tun_helper_socket from the host client config,
+                          then /run/vibelab-egress/tun-helper.sock)
     --litellm-url URL     LiteLLM endpoint to probe (default
-                          $VIBELAB_EGRESS_LITELLM_URL or http://127.0.0.1:4000/health)
+                          $VIBELAB_EGRESS_LITELLM_URL or
+                          http://127.0.0.1:4000/health/liveliness)
     --os-container NAME   OpenScience container name (default
                           $VIBELAB_EGRESS_OS_CONTAINER or openscience)
     --no-recreate         skip the destructive OpenScience recreate check
@@ -67,7 +69,11 @@ from datetime import datetime, timezone
 DEFAULT_CONFIG = "/etc/vibelab-egress/client.yaml"
 DEFAULT_OS_CONFIG = "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml"
 DEFAULT_TUN_SOCK = "/run/vibelab-egress/tun-helper.sock"
-DEFAULT_LITELLM = "http://127.0.0.1:4000/health"
+# /health/liveliness: 200 while the process is up. /health also reports
+# provider health and answers 503 when no provider is configured, which
+# is not a LiteLLM reachability failure (2026-10-15 live run: skip with
+# "not reachable" although the container was up and healthy).
+DEFAULT_LITELLM = "http://127.0.0.1:4000/health/liveliness"
 DEFAULT_OS_CONTAINER = "openscience"
 SECRETS_DIR = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
 ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
@@ -75,6 +81,19 @@ REPO = os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress")
 HOST_TEST = os.path.join(REPO, "host", "egress-host-test")
 PROBE_DOMAIN = "cloudflare.com"
 IP_SERVICES = ("https://api.ipify.org", "https://ifconfig.co/ip")
+# python -c snippet for checks that need the exit IP: tries every service
+# from IP_SERVICES (like host_public_ip) so a single blocked service cannot
+# fail a check (2026-10-15 live run: one direct job died on one service
+# while host_public_ip — which loops over both — succeeded).
+IP_FETCH = (
+    "import urllib.request\n"
+    "for _u in %s:\n"
+    "    try:\n"
+    "        print(urllib.request.urlopen(_u, timeout=15).read().decode().strip())\n"
+    "        break\n"
+    "    except Exception:\n"
+    "        pass\n" % repr(IP_SERVICES)
+)
 EGRESS_PORTS = (1080, 1081, 9091)
 MIHOMO_ADMIN_PORT = 9090
 MAX_OUT = 8000
@@ -461,9 +480,7 @@ def check_tun_tcp():
                     "no proxy route")
         rid = route["id"]
         r = egress_run(["--mode", "tun", rid, "--",
-                        "python3", "-c",
-                        "import urllib.request;print(urllib.request.urlopen("
-                        "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                        "python3", "-c", IP_FETCH],
                        cfg, timeout, redact)
         ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
         ev = {"route": rid, "expected_country": route.get("country"),
@@ -558,9 +575,7 @@ def check_tun_concurrent():
 
         def run_job(j):
             r = egress_run(["--mode", "tun", j["route"], "--",
-                            "python3", "-c",
-                            "import urllib.request;print(urllib.request.urlopen("
-                            "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                            "python3", "-c", IP_FETCH],
                            cfg, timeout, redact)
             ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
             return {"route": j["route"], "exit": r["rc"], "exit_ip": ip,
@@ -649,9 +664,7 @@ def check_tun_stale_cleanup():
         before_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
         before_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
         r = egress_run(["--mode", "tun", route["id"], "--",
-                        "python3", "-c",
-                        "import urllib.request;urllib.request.urlopen("
-                        "'https://api.ipify.org',timeout=15).read()"],
+                        "python3", "-c", IP_FETCH],
                        cfg, timeout, redact)
         after_ns = _run(["ip", "netns", "list"], 15, redact)["stdout"].splitlines()
         after_tun = _run(["ip", "-o", "link", "show", "type", "tun"], 15, redact)["stdout"].splitlines()
@@ -913,7 +926,22 @@ def check_a8_recreate():
         before = os_exec(["egressctl", "--json", "whoami"], timeout, redact)
         before_id = (_json(before["stdout"]) or {}).get("client_id")
         if before["rc"] != 0 or not before_id:
-            return ("skip", {"reason": f"cannot whoami in {cname}: {before['stderr'][:200]}"},
+            # Self-diagnosis: which config does the container client ACTUALLY
+            # use? Install-vs-bundle drift shows up here (2026-10-15 live
+            # run: the container presented a HOST control URL, i.e. its
+            # installed config was not the container's bundle).
+            diag = {}
+            diag["installed_client_yaml"] = os_exec(
+                ["cat", "/etc/vibelab-egress/client.yaml"],
+                timeout, redact)["stdout"][:800]
+            diag["installed_egressctl_config_show"] = os_exec(
+                ["egressctl", "config", "show"], timeout, redact)["stdout"][:800]
+            ins = _run(["docker", "inspect", "--format", "{{json .Mounts}}",
+                        cname], 15, redact)
+            diag["container_mounts"] = ins["stdout"][:800]
+            return ("skip",
+                    {"reason": f"cannot whoami in {cname}: {before['stderr'][:200]}",
+                     "diagnostics": diag},
                     "openscience container not reachable")
         re_ = _run(["docker", "restart", cname], 120, redact)
         if re_["rc"] != 0:
@@ -966,18 +994,21 @@ def check_a8_parallel_oneshot():
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
         proxies = [r for r in CTX["routes"]
                    if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+        if not proxies:
+            return ("skip",
+                    {"reason": "no non-direct proxy route (parallel one-shot "
+                               "needs distinct routes to run in parallel)"},
+                    "no proxy route")
         proxies = proxies[:2]
         jobs = [{"route": p["id"]} for p in proxies] + [{"route": "direct"}]
         host_ip = host_public_ip()
 
         def run_job(j):
-            r = egress_run([j["route"], "--",
-                            "python3", "-c",
-                            "import urllib.request;print(urllib.request.urlopen("
-                            "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+            r = egress_run([j["route"], "--", "python3", "-c", IP_FETCH],
                            cfg, timeout, redact)
             ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
-            return {"route": j["route"], "exit": r["rc"], "exit_ip": ip}
+            return {"route": j["route"], "exit": r["rc"], "exit_ip": ip,
+                    "stderr": r["stderr"][:300]}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
             results = list(ex.map(run_job, jobs))
@@ -1264,6 +1295,8 @@ def check_a8_best_domain():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
+        if not select_proxy_route(CTX["routes"]):
+            return ("skip", {"reason": "no non-direct proxy route"}, "no proxy route")
         r = egressctl(["best", "--domain", PROBE_DOMAIN], cfg, timeout, redact)
         data = _json(r["stdout"]) or {}
         routes = data.get("candidates", data.get("routes",
@@ -1327,8 +1360,11 @@ def main(argv=None):
     ap.add_argument("--osconfig",
                     default=os.environ.get("VIBELAB_EGRESS_OS_CONFIG", DEFAULT_OS_CONFIG))
     ap.add_argument("--tun-helper-sock",
-                    default=os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET",
-                                           DEFAULT_TUN_SOCK))
+                    default=None,
+                    help="TUN helper UNIX socket (default: "
+                         "$VIBELAB_EGRESS_TUN_HELPER_SOCKET, then "
+                         "tun_helper_socket from the host client config, "
+                         "then /run/vibelab-egress/tun-helper.sock)")
     ap.add_argument("--litellm-url",
                     default=os.environ.get("VIBELAB_EGRESS_LITELLM_URL", DEFAULT_LITELLM))
     ap.add_argument("--os-container",
@@ -1342,10 +1378,17 @@ def main(argv=None):
     ap.add_argument("--timeout", type=float, default=90.0)
     args = ap.parse_args(argv)
 
+    # flag > env > host client config key > default (the provisioned host
+    # client.yaml carries the REAL host path — $ROOT/tun-helper/... — not
+    # the in-container /run/vibelab-egress default)
+    tun_sock = (args.tun_helper_sock
+                or os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET")
+                or _flat_yaml_get(args.config, "tun_helper_socket")
+                or DEFAULT_TUN_SOCK)
     CTX.update({
         "config": args.config,
         "osconfig": args.osconfig,
-        "tun_sock": args.tun_helper_sock,
+        "tun_sock": tun_sock,
         "litellm": args.litellm_url,
         "os_container": args.os_container,
         "timeout": args.timeout,
@@ -1376,7 +1419,7 @@ def main(argv=None):
         "python": sys.version.split()[0],
         "config": args.config,
         "osconfig": args.osconfig,
-        "tun_helper_socket": args.tun_helper_sock,
+        "tun_helper_socket": tun_sock,
         "litellm_url": args.litellm_url,
         "os_container": args.os_container,
         "redactions": redact_count["n"],
