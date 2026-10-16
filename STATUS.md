@@ -1023,3 +1023,11 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   CAP_KILL для cleanup чужого UID и CAP_SETPCAP для сброса bounding set;
   они добавлены в ограниченный набор. Запрошен root journal для подтверждения
   точной ошибки; после обновления unit нужна live-приёмка.
+
+- 2026-10-16: root journal globe подтвердил отказ `os.chown` для
+  `/run/vibelab-egress/jobs` при старте helper: CAP_CHOWN действительно
+  отсутствовал в установленном unit. Исправление `d9c98ca` доставлено в
+  checkout globe, но установленный unit пока старый. В одноразовом Docker
+  PoC с точным новым набором capabilities helper стартовал, создал netns,
+  запустил `id` под UID/GID 65534 и очистил ресурсы (RC 0). Ожидается
+  повтор `sudo bash scripts/install-tun-host.sh --user vibelab` на globe.
