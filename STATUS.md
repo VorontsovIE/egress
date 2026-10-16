@@ -1031,3 +1031,17 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   PoC с точным новым набором capabilities helper стартовал, создал netns,
   запустил `id` под UID/GID 65534 и очистил ресурсы (RC 0). Ожидается
   повтор `sudo bash scripts/install-tun-host.sh --user vibelab` на globe.
+
+- 2026-10-16: после повторной установки unit на globe socket доступен
+  `root:vibelab-egress-tun` 0660, `egressctl capabilities` сообщает
+  `tun=supported`. Первый host-native live-прогон от UID 1082: §50.2 PASS
+  (host cwd/файл и caller UID/GID); direct isolation, no-root-capabilities,
+  cleanup, HARD DIRECT, no fallback — PASS. Общий результат 11 PASS / 1 FAIL /
+  16 SKIP: host CLI не мог читать `/etc/vibelab-egress/client.token`
+  (`root:root` 0600 после root install), из-за чего preflight и зависимые
+  проверки дали SKIP; host harness упал на root-only persistent dir и был
+  отмечен FAIL. Исправлен `install-client.sh`: при sudo host-установке
+  клиентские token/auth остаются 0600, владельцем становится вызывающий
+  host user; `/etc/vibelab-egress` остаётся root-owned 0750 с его группой.
+  Root-only harness из non-root live получает честный SKIP. Offline 332 PASS;
+  изолированный Docker тест подтвердил чтение token только host user.

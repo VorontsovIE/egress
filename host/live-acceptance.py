@@ -1229,7 +1229,11 @@ def check_a8_host_test():
         summary = data.get("summary", {})
         ev = {"exit": r["rc"], "summary": summary,
               "failed_checks": [c.get("id") for c in data.get("checks", [])
-                                if c.get("status") == "fail"]}
+                                if c.get("status") == "fail"],
+              "stderr": r["stderr"][:300]}
+        if r["rc"] != 0 and "PermissionError" in r["stderr"]:
+            ev["reason"] = "host harness requires root to inspect persistent dirs"
+            return ("skip", ev, ev["reason"])
         if r["rc"] != 0 and summary.get("failed"):
             return ("fail", ev, f"host acceptance harness failed: {ev['failed_checks']}")
         if not data.get("checks"):

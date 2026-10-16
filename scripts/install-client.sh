@@ -108,6 +108,21 @@ case "$TARGET" in
   host)
     install_package "$INSTALL_ROOT"
     install_config /etc/vibelab-egress
+    # The host CLI is invoked by the human who ran sudo, not by root. Give
+    # only that account access to its two 0600 client credentials. Keep the
+    # directory root-owned so the user cannot replace backend secrets below
+    # /etc/vibelab-egress/secrets or redirect other config paths.
+    HOST_USER="${VIBELAB_EGRESS_HOST_USER:-${SUDO_USER:-}}"
+    if [ -n "$HOST_USER" ] && [ "$HOST_USER" != root ]; then
+      id -u -- "$HOST_USER" >/dev/null 2>&1 || die_env "unknown host user: $HOST_USER"
+      HOST_GROUP="$(id -gn -- "$HOST_USER")"
+      chgrp -- "$HOST_GROUP" /etc/vibelab-egress
+      chmod 750 /etc/vibelab-egress
+      chown -- "$HOST_USER" /etc/vibelab-egress/client.token \
+        /etc/vibelab-egress/default-proxy.auth
+      chmod 600 /etc/vibelab-egress/client.token \
+        /etc/vibelab-egress/default-proxy.auth
+    fi
     echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/vibelab-egress"
     ;;
   gvisor-container)

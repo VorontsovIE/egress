@@ -121,6 +121,12 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
                                            #  --remove-data — удалить)
 ```
 
+Host client, установленный через `sudo` от имени `vibelab`, получает
+доступ к своим `client.token` и `default-proxy.auth`: файлы остаются 0600,
+владельцем становится `vibelab`; каталог `/etc/vibelab-egress` остаётся
+root-owned (0750). Backend secrets в подкаталоге `secrets/` сохраняют
+собственные ограничения доступа.
+
 ### Установка и обновление host-native TUN-helper
 
 TUN-helper запускается отдельным host systemd unit. Он сохраняет host mount
