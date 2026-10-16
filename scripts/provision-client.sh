@@ -20,7 +20,13 @@
 #   provision-client.sh --client <id> --environment <host|gvisor-container> \
 #       [--out <bundle-root>] [--secrets-dir <dir>] [--control-url <url>] \
 #       [--proxy-host <host>] [--default-port <p>] [--oneshot-port <p>] \
-#       [--tun-backend <none|host-helper>]
+#       [--tun-backend <none|host-helper>] [--tun-socket <path>]
+#
+#   --tun-socket: LOCAL path of the TUN helper UNIX socket written to
+#   client.yaml (tun_helper_socket:) when tun_backend=host-helper. Default:
+#   ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/tun-helper/tun-helper.sock
+#   (the host-side end of the compose.tun.yaml bind; the in-container
+#   default /run/vibelab-egress/tun-helper.sock does NOT exist on the host).
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
@@ -34,6 +40,7 @@ PROXY_HOST=""
 DEFAULT_PORT=1080
 ONESHOT_PORT=1081
 TUN_BACKEND=""
+TUN_SOCKET="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/tun-helper/tun-helper.sock"
 
 die_usage() { echo "provision-client: $*" >&2; exit 2; }
 die_env()   { echo "provision-client: $*" >&2; exit 3; }
@@ -49,6 +56,7 @@ while [ $# -gt 0 ]; do
     --default-port)  DEFAULT_PORT="${2:?}"; shift 2 ;;
     --oneshot-port)  ONESHOT_PORT="${2:?}"; shift 2 ;;
     --tun-backend)   TUN_BACKEND="${2:?}"; shift 2 ;;
+    --tun-socket)    TUN_SOCKET="${2:?}"; shift 2 ;;
     -h|--help)       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die_usage "unknown argument: $1" ;;
   esac
@@ -127,6 +135,13 @@ default_proxy_auth_file: $AUTH_FILE
 environment: $ENVIRONMENT
 tun_backend: $TUN_BACKEND
 EOF
+# the LOCAL TUN helper socket: the client's built-in default
+# (/run/vibelab-egress/tun-helper.sock) is the IN-CONTAINER path and does
+# not exist on the host, so host-helper clients must carry the real host
+# path (the host-side end of the compose.tun.yaml / systemd bind).
+if [ "$TUN_BACKEND" = "host-helper" ]; then
+  printf 'tun_helper_socket: %s\n' "$TUN_SOCKET" >> "$BUNDLE_DIR/client.yaml"
+fi
 chmod 644 "$BUNDLE_DIR/client.yaml"
 chmod 700 "$BUNDLE_DIR"
 

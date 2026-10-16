@@ -50,9 +50,13 @@ evidence supports it.
 3. The **OpenScience** container is running and has the client installed
    (`/usr/local/bin/egressctl` inside it). Its name is auto-detected; override
    with `VIBELAB_EGRESS_OS_CONTAINER` if detection fails.
-4. For the TUN checks: the TUN helper socket is present at
-   `/run/vibelab-egress/tun-helper.sock` (created by the `compose.tun.yaml`
-   service).
+4. For the TUN checks: the TUN helper socket is present at the path written
+   into the host client's `client.yaml` (`tun_helper_socket:` —
+   `install-backend-host.sh` writes `<VIBELAB_EGRESS_ROOT>/tun-helper/tun-helper.sock`;
+   `compose.tun.yaml` binds that dir to the helper's
+   `/run/vibelab-egress/`). The harness resolves it from the host client
+   config automatically; override with `VIBELAB_EGRESS_TUN_HELPER_SOCKET`
+   or `--tun-helper-sock`.
 
 ## Run it (one command)
 
