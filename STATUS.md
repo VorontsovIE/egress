@@ -965,3 +965,15 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   остаётся skip до проверки настоящего gVisor-контейнера.
   Локально: 76 целевых тестов и security gate 54/54 прошли вне песочницы;
   live-повтор ожидается.
+
+- 2026-10-16: пятый live-отчёт (13:31 UTC, globe): 14/1/13,
+  `verify-live-report.py` — VERIFIED, hash OK, 14 PASS подтверждены.
+  Единственный FAIL — §50.2: host helper сообщает отсутствие CAP_SYS_ADMIN
+  для `ip netns add`; связанные TUN-проверки теперь честно SKIP.
+  `egressctl capabilities` совпадает с независимым ответом helper:
+  `unsupported_in_environment`. Backend/Mihomo и проверки §49, доступные
+  с одним direct route, проходят; provider-зависимые проверки SKIP.
+  §50.9 остаётся SKIP, поскольку тестовый контейнер имеет runtime runc,
+  а не gVisor. §49.39 остаётся SKIP: проверен restart, не recreate.
+  При запуске verifier без root его отдельный secret scan был пропущен;
+  producer-чек `a8_secrets_absent` завершился PASS.
