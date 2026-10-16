@@ -39,7 +39,8 @@ Options:
                           http://127.0.0.1:4000/health/liveliness)
     --os-container NAME   OpenScience container name (default
                           $VIBELAB_EGRESS_OS_CONTAINER or openscience)
-    --no-recreate         skip the destructive OpenScience recreate check
+    --recreate            enable the OpenScience restart observation;
+                          full container recreation is not automated
     --no-tun              skip the TUN (section 50) checks
     --check ID[,ID...]    run only the named check(s)
     --timeout N           per-command timeout seconds (default 90)
@@ -720,8 +721,12 @@ def check_os_tun_unsupported():
         cname = CTX["os_container"]
         r = os_exec(["egress-run", "--mode", "tun", "direct", "--", "true"],
                     timeout, redact)
+        ir = _run(["docker", "inspect", "--format", "{{.HostConfig.Runtime}}",
+                   cname], 15, redact)
+        runtime = ir["stdout"].strip()
         ev = {"container": cname, "exit": r["rc"],
-              "stdout": r["stdout"], "stderr": r["stderr"]}
+              "stdout": r["stdout"], "stderr": r["stderr"],
+              "runtime": runtime}
         if r["rc"] is None:
             return ("skip", ev, f"cannot exec in container {cname!r}: {r['stderr'][:120]}")
         # a missing in-container client is a prerequisite gap, not a product
@@ -737,6 +742,9 @@ def check_os_tun_unsupported():
             return ("fail", ev, f"openscience tun exit={r['rc']} (expected 6 unsupported)")
         if "no silent fallback" not in (r["stderr"] + r["stdout"]).lower():
             return ("fail", ev, "missing explicit no-fallback message")
+        if not any(s in runtime.lower() for s in ("runsc", "gvisor")):
+            ev["reason"] = f"container runtime {runtime!r} is not gVisor"
+            return ("skip", ev, ev["reason"])
         return ("pass", ev, "openscience tun -> explicit unsupported (exit 6), no fallback")
     run_check("openscience_tun_unsupported", "spec50.9",
               "egress-run --mode tun (openscience config) -> explicit unsupported", fn)
@@ -962,7 +970,10 @@ def check_a8_recreate():
               "token_sha16": tok_hash, "restart_rc": re_["rc"]}
         if after_id != before_id:
             return ("fail", ev, f"client identity changed: {before_id} -> {after_id}")
-        return ("pass", ev, f"openscience client persisted across recreate ({before_id})")
+        # docker restart keeps the same writable layer. It cannot establish
+        # that an install survives docker rm + docker run / Compose recreate.
+        ev["reason"] = "docker restart passed; container recreation not exercised"
+        return ("skip", ev, ev["reason"])
     run_check("a8_openscience_recreate_persists", "spec49.39",
               "docker exec whoami -> docker restart -> whoami (identity persists)", fn)
 
@@ -1260,6 +1271,8 @@ def check_a8_probe_all():
             return ("fail", ev, f"probe-domain --all exit={r['rc']}")
         if not results:
             return ("fail", ev, "no probe results")
+        if ev["errors"] and all(e == "proxy_failure" for e in ev["errors"]):
+            return ("fail", ev, "all probes failed at proxy infrastructure")
         if len(results) < 2:
             ev["reason"] = "only direct route; multiple routes required by spec49.20"
             return ("skip", ev, ev["reason"])
@@ -1267,8 +1280,6 @@ def check_a8_probe_all():
             return ("fail", ev, "direct route not included in --all probe")
         if not ev["has_stages"]:
             return ("fail", ev, "results do not distinguish DNS/TCP/TLS/HTTP stages")
-        if ev["errors"] and all(e == "proxy_failure" for e in ev["errors"]):
-            return ("fail", ev, "all probes failed at proxy infrastructure")
         return ("pass", ev, f"probe-domain --all: {len(results)} routes incl. direct, staged")
     run_check("a8_probe_domain_all", "spec49.20",
               f"egressctl probe-domain {PROBE_DOMAIN} --all", fn)
@@ -1379,8 +1390,8 @@ def main(argv=None):
                     default=os.environ.get("VIBELAB_EGRESS_OS_CONTAINER",
                                            DEFAULT_OS_CONTAINER))
     ap.add_argument("--recreate", action="store_true",
-                    help="enable the destructive OpenScience recreate check "
-                         "(restarts the container; off by default)")
+                    help="restart the OpenScience container to observe client "
+                         "identity; full recreation is not automated")
     ap.add_argument("--no-tun", action="store_true", help="skip the TUN checks")
     ap.add_argument("--check", help="comma-separated check ids to run")
     ap.add_argument("--timeout", type=float, default=90.0)

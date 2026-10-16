@@ -95,6 +95,10 @@ services:
       MIHOMO_API_URL: http://vibelab-egress-mihomo:9090
       MIHOMO_SECRET_FILE: /etc/vibelab-egress/secrets/mihomo_api_secret
       EGRESSD_CLIENTS_DIR: /etc/vibelab-egress/secrets/clients
+      # The allocator, probe engine, and config generator must use the SAME
+      # persisted one-shot passwords created by bootstrap_config. Without this
+      # path they choose different fallback passwords and SOCKS auth fails.
+      EGRESSD_ONESHOT_SLOTS_FILE: /etc/vibelab-egress/secrets/clients/oneshot-slots.json
       EGRESSD_PROVIDERS_DIR: /etc/vibelab-egress/secrets/providers
       EGRESSD_DATA_DIR: /var/lib/egressd
       EGRESSD_GENERATED_DIR: /var/lib/egressd/generated

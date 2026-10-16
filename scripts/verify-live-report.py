@@ -164,6 +164,8 @@ def rederive_pass(cid, c):
         return True, "hard direct ok"
 
     if cid == "openscience_tun_unsupported":
+        if not any(s in str(get("runtime", "")).lower() for s in ("runsc", "gvisor")):
+            return False, "container runtime is not gVisor"
         if get("exit") != 6:
             return False, f"exit={get('exit')} (expected 6)"
         blob = (get("stderr", "") + get("stdout", "")).lower()
@@ -203,9 +205,7 @@ def rederive_pass(cid, c):
         return True, "no egress port on a public NIC"
 
     if cid == "a8_openscience_recreate_persists":
-        if not get("before_client_id") or get("before_client_id") != get("after_client_id"):
-            return False, "identity changed or missing"
-        return True, "persisted"
+        return False, "docker restart does not prove persistence across recreation"
 
     if cid == "a8_litellm_reachable":
         if not (get("pre") and get("post")):

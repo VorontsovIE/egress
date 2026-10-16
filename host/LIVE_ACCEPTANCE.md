@@ -67,12 +67,16 @@ bash scripts/run-live-acceptance.sh
 
 This writes the single report to `reports/host_acceptance_report.json`.
 
-To also run the **destructive** OpenScience recreate check (it restarts the
-OpenScience container — do this only if you can afford the brief interruption):
+To run the **restart** observation (it restarts the OpenScience container — do
+this only if you can afford the brief interruption):
 
 ```bash
 bash scripts/run-live-acceptance.sh --recreate
 ```
+
+This check reports `skip` for spec 49.39 even when the restart succeeds:
+`docker restart` keeps the writable layer and cannot prove that a client
+installation survives container removal and recreation.
 
 Optional environment overrides:
 

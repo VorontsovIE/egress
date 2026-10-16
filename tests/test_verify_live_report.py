@@ -192,7 +192,8 @@ def test_pass_rules_supported(tmp_path):
                    {"exit": 0, "exit_ip": "1.1.1.1",
                     "host_public_ip": "1.1.1.1", "tun_device_present": False}),
         make_check("openscience_tun_unsupported", "spec50.9", "pass", "egress-run",
-                   {"exit": 6, "stdout": "", "stderr": "no silent fallback"}),
+                   {"exit": 6, "stdout": "", "stderr": "no silent fallback",
+                    "runtime": "runsc"}),
         make_check("a8_probe_domain_all", "spec49.20", "pass", "probe-domain",
                    {"exit": 0, "n_results": 3, "has_direct": True,
                     "has_stages": True, "errors": [None, None, "timeout"]}),
@@ -213,6 +214,22 @@ def test_hard_direct_requires_successful_connect_ex(tmp_path):
     check["evidence"]["docker_gateway_connect_errno"] = "0"
     out, _ = verifier.verify(write(tmp_path, make_report([check])))
     assert out["verdict"] == "VERIFIED"
+
+
+def test_restart_cannot_prove_recreate_persistence(tmp_path):
+    check = make_check("a8_openscience_recreate_persists", "spec49.39", "pass",
+                       "docker restart", {"before_client_id": "openscience-main",
+                       "after_client_id": "openscience-main", "restart_rc": 0})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
+
+
+def test_runc_does_not_verify_gvisor_unsupported(tmp_path):
+    check = make_check("openscience_tun_unsupported", "spec50.9", "pass",
+                       "egress-run", {"exit": 6, "stdout": "",
+                       "stderr": "no silent fallback", "runtime": "runc"})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
 
 
 if __name__ == "__main__":

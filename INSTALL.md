@@ -121,6 +121,21 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
                                            #  --remove-data — удалить)
 ```
 
+### Обновление TUN-helper
+
+Обычный `docker compose ... up -d` **не пересобирает** локальный образ helper
+после изменения `host/strict-helper/egress-tun-helper.py`. Для загрузки нового
+кода выполните:
+
+```bash
+docker compose -f compose.yaml -f compose.tun.yaml up -d --build --force-recreate vibelab-egress-tun-helper
+```
+
+Текущий Compose helper диагностирует отсутствие `CAP_SYS_ADMIN` для `ip netns
+add` и возвращает явную ошибку. Это не означает готовность host-native TUN:
+запуск workload из контейнера helper также не предоставляет файловую систему
+хоста. Права контейнера не расширять без пересмотра дизайна A6.
+
 ### Логи и диагностика установки
 
 **Где лежат логи.**

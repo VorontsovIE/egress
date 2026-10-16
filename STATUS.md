@@ -58,6 +58,20 @@
 показывает полный путь tunnel → gVisor → echo → tunnel.
 
 ## Текущий шаг / Next
+ 2026-10-16: третий live-отчёт с globe (09:32 UTC) — 15 pass / 1 fail /
+ 12 skip. OpenScience `whoami` и HARD DIRECT теперь проходят; Mihomo admin
+ доступен. Оставшийся FAIL `tun_local_workload` снова `no_response`: запуск
+ `docker compose ... up -d` оставил старый образ helper (`Running`, без
+ build/recreate). Нужен явный `--build --force-recreate`; после него текущая
+ A6-архитектура должна честно сообщить `unsupported_in_environment`, но
+ полноценный host-native TUN пока не реализован. Direct probe всё ещё
+ `auth rejected`: egressd не получал `EGRESSD_ONESHOT_SLOTS_FILE` и применял
+ другие пароли слотов, чем bootstrap/Mihomo. Исправлено в Compose, а оба
+ loader'а используют общий валидирующий reader. Чек §49.39 с `docker
+ restart` ошибочно выдавал PASS за recreate; теперь это skip с причиной.
+ `egress-verify` запущен с runtime `runc`, поэтому проверка его client
+ package не подтверждает поведение OpenScience/gVisor §50.9; PASS для этого
+ пункта теперь требует runtime `runsc`/gVisor.
  2026-10-16: повторный live-отчёт с globe — **14 pass / 2 fail / 12 skip**.
  `tun_local_workload` получил `no_response`, после чего helper socket исчез;
  `a8_internal_hard_direct` ложнопадал из-за `connect_ex(...) < 0` вместо
@@ -919,3 +933,18 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   сравнение нескольких routes (§49.20). Локально: py_compile и
   `git diff --check` чисты, 13 точечных pytest passed; offline install suite
   71/71. Полный live-прогон ожидает globe.
+
+- 2026-10-16: третий live-отчёт (09:32 UTC, globe): 15/1/12. Исправлена
+  связка one-shot credentials: в Compose добавлен путь к постоянному
+  `oneshot-slots.json` для egressd; probe allocator и config generator
+  читают его одним кодом и падают явно, если заданный файл отсутствует,
+  вместо молчаливой подмены паролей. `probe-domain --all` теперь считает
+  сплошной `proxy_failure` инфраструктурной ошибкой даже при одной direct
+  route. `--recreate` фактически делал только `docker restart`, поэтому
+  §49.39 больше не получает ложный PASS: результат skip до настоящей
+  проверки воспроизводимого контейнера. Старый helper image на globe
+  остался после `up -d`; нужен явный rebuild/recreate для диагностики A6.
+  `egress-verify` работает под `runc`, так что §50.9 нельзя засчитывать
+  как проверку OpenScience/gVisor.
+  Локально: 12 целевых pytest passed, py_compile/bash -n/YAML и
+  `git diff --check` чисты. Live-повтор с новым образом ожидается.

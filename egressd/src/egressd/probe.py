@@ -136,22 +136,31 @@ def load_slots(count: int, slots_file: str | None) -> list[Slot]:
     so the allocator is still constructible; the live deployment always has the
     real file.
     """
-    import json
-    import os
-    from pathlib import Path
-
-    passwords: dict[str, str] = {}
-    if slots_file and Path(slots_file).is_file():
-        try:
-            passwords = json.loads(Path(slots_file).read_text())
-        except (json.JSONDecodeError, OSError):
-            passwords = {}
+    passwords = load_slot_passwords(count, slots_file)
     slots: list[Slot] = []
     for i in range(count):
         user = f"os_{i}"
-        pw = passwords.get(user) or os.environ.get(f"EGRESSD_ONESHOT_PW_{i}") or f"pw-{i}"
-        slots.append(Slot(index=i, user=user, password=pw))
+        slots.append(Slot(index=i, user=user, password=passwords[user]))
     return slots
+
+
+def load_slot_passwords(count: int, slots_file: str | None) -> dict[str, str]:
+    """Read the shared slot credentials; fail closed for a configured file."""
+    import json
+    from pathlib import Path
+
+    if slots_file is None:
+        # Offline tests do not provide backend secrets. Both the allocator and
+        # config generator use these same placeholders in that mode.
+        return {f"os_{i}": f"pw-{i}" for i in range(count)}
+    data = json.loads(Path(slots_file).read_text())
+    if not isinstance(data, dict):
+        raise ValueError("oneshot slots file must contain an object")
+    for i in range(count):
+        user = f"os_{i}"
+        if not isinstance(data.get(user), str) or not data[user]:
+            raise ValueError(f"oneshot slots file missing password for {user}")
+    return data
 
 
 # ---------------------------------------------------------------------------

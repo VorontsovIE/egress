@@ -16,8 +16,9 @@
 #
 # Usage:
 #   bash scripts/run-live-acceptance.sh                 # default (non-destructive)
-#   bash scripts/run-live-acceptance.sh --recreate      # also run the destructive
-#                                                       # OpenScience recreate check
+#   bash scripts/run-live-acceptance.sh --recreate      # observe OpenScience
+#                                                       # identity after restart;
+#                                                       # full recreate is not automated
 #   bash scripts/run-live-acceptance.sh --out PATH      # write the report to PATH
 #                                                       # (default: reports/host_acceptance_report.json)
 # Any other flag (--no-tun, --check, --timeout, ...) is forwarded to

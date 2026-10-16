@@ -383,6 +383,28 @@ class TestComposeTun:
         assert any("/dev/net/tun" in v for v in vols)
 
 
+def test_oneshot_slots_shared_by_probe_and_config(tmp_path):
+    """The live Compose path feeds the same persisted credentials to both."""
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    env = compose["services"]["vibelab-egress-egressd"]["environment"]
+    assert env["EGRESSD_ONESHOT_SLOTS_FILE"] == (
+        "/etc/vibelab-egress/secrets/clients/oneshot-slots.json")
+    slot_file = tmp_path / "oneshot-slots.json"
+    slot_file.write_text(json.dumps({"os_0": "secret-0", "os_1": "secret-1"}))
+    from egressd.probe import load_slots
+    from egressd.configctl import load_oneshot_slots
+    probe = load_slots(2, str(slot_file))
+    config = load_oneshot_slots(str(slot_file), 2)
+    assert [(s.user, s.password) for s in probe] == [
+        (s.user, s.password) for s in config]
+    assert [(s.user, s.password) for s in load_slots(2, None)] == [
+        (s.user, s.password) for s in load_oneshot_slots(None, 2)]
+    with pytest.raises(FileNotFoundError):
+        load_slots(2, str(tmp_path / "missing.json"))
+    with pytest.raises(FileNotFoundError):
+        load_oneshot_slots(str(tmp_path / "missing.json"), 2)
+
+
 # ---------------------------------------------------------------------------
 # egressd /v1/capabilities tun reporting (per-client, spec 21.5)
 # ---------------------------------------------------------------------------

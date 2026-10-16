@@ -26,7 +26,6 @@ egressd is layout-agnostic:
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -80,19 +79,13 @@ def load_clients(clients_dir: str) -> list[ClientDef]:
 
 
 def load_oneshot_slots(slots_file: str | None, count: int) -> list[OneShotSlot]:
-    import secrets as _secrets
+    from .probe import load_slot_passwords
 
-    passwords: dict[str, str] = {}
-    if slots_file and Path(slots_file).is_file():
-        try:
-            passwords = json.loads(Path(slots_file).read_text())
-        except (json.JSONDecodeError, OSError):
-            passwords = {}
+    passwords = load_slot_passwords(count, slots_file)
     slots: list[OneShotSlot] = []
     for i in range(count):
         user = f"os_{i}"
-        pw = passwords.get(user) or _secrets.token_urlsafe(24)
-        slots.append(OneShotSlot(index=i, user=user, password=pw))
+        slots.append(OneShotSlot(index=i, user=user, password=passwords[user]))
     return slots
 
 
