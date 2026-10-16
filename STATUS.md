@@ -87,6 +87,19 @@
    - [x] **Установить бэкенд на хосте**: `bash scripts/install-backend-host.sh`
          (GEO опционален; 2026-10-12: стек поднят на globe — mihomo healthy,
          egressd up; harness-фиксы из этого же дня, см. журнал решений).
+
+   - [x] **Live-проверка на globe (2026-10-15/16)**: бэкенд + host-клиент
+         + контейнерный клиент (`openscience-main` в `egress-verify`),
+         offline 314 passed в контейнере (python 3.11, root). Live
+         acceptance 23:35 → 9 pass / 7 fail / 12 skip; ВСЕ 7 fail —
+         найденные root causes, серия фиксов 2026-10-16 (журнал ниже).
+         На globe дальше: `git pull` →
+         `sudo bash scripts/install-backend-host.sh --yes` (новый egressd,
+         mihomo-конфиг c 0.0.0.0:9090, host client.yaml c `tun_helper_socket`)
+         → переустановка контейнерного клиента (fresh-dir bundle) →
+         `sudo docker compose -f compose.yaml -f compose.tun.yaml up -d`
+         (пересборка helper с новым allowlist 127.0.0.1:1081) → повтор
+         live acceptance + отчёт.
    - [ ] **Поднять TUN-стек**: `docker compose -f compose.yaml -f compose.tun.yaml up -d`
          (иначе 10 TUN-чексов останутся skip).
    - [ ] **Клиент в OpenScience-контейнере** (бандл из `INSTALL.md`, шаг B) —
@@ -834,3 +847,43 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   скачиваются по требованию `scripts/fetch-geo-data.sh` (--full/--release/
   --check, codeload-fallback для OpenScience). SHAs переписаны
   (git filter-repo); ветка `main`; force-push на GitHub.
+
+- 2026-10-16: Live (globe) — live-acceptance 9/7/12: ВСЕ 7 fail получили
+  root cause и фикс (серия 2026-10-16):
+  (1) mihomo admin API был привязан к 127.0.0.1 ВНУТРИ контейнера mihomo —
+  egressd (другой контейнер) не мог его достать: mihomo.reachable=false,
+  все пробы proxy_failure, версия не отчитывалась, селекторы не
+  верифицировались → `controller: 0.0.0.0:9090` (порт 9090 нигде не
+  публикуется; доступ — только Bearer-secret в приватной compose-сети);
+  (2) ProbeEngine/benchmark смотрели на 127.0.0.1:18081 ВНУТРИ egressd
+  (там ничего не слушает) → `EGRESSD_PROBE_HOST=vibelab-egress-mihomo`
+  (compose.yaml); capability-ответы клиентам не меняются (клиент ходит
+  в свой published endpoint);
+  (3) клиентский one-shot брал host/port из capability бэкенда (его
+  viewpoint 127.0.0.1:18081 — из контейнерного клиента недоступен) →
+  клиент берёт host/port из СВОЕГО конфига (published порт 1081),
+  credentials — из capability; allowlist tun-helper тоже published порт
+  (127.0.0.1:1081; прежние 18081 с хоста недостижимы);
+  (4) `/v1/status` не имел версии egressd при недоступном mihomo (49.42)
+  → топ-левое `version` (0.1.0, синхронно с client `__version__`);
+  (5) `tun_helper_socket()`: `str(None)` == `"None"` — truthy — маскировал
+  env и default (в репорте "socket not found: None", spec 50.9) →
+  резолв config-key > env > default; host client.yaml при этом НИКДА не
+  содержал ключа (default — контейнерный путь, на хосте нет) →
+  `provision-client.sh --tun-socket` (host: `$ROOT/tun-helper/tun-helper.sock`),
+  harness резолвит flag > env > host client.yaml > default;
+  (6) secrets-скан ложно срабатывал: `clients/*.profile.json` —
+  детерминированная НЕ-секретная метаданные (одинаковая строка в
+  fixture/PoC) → исключены из множества секретов; `generated/config.yaml`
+  легитимно содержит mihomo-secret + client/oneshot credentials → в
+  generated/-скане исключаются значения этих origin'ов (значения
+  подписаны origin'ом, в leaks видно, что именно);
+  (7) litellm: `/health` отвечает 503, пока не настроен provider
+  (контейнер при этом up) → `/health/liveliness`; parallel-oneshot и
+  `best --domain` — skip без proxy-роутов (с одним direct-роутом чек
+  вырождается); recreate-чек — self-диагностика в skip (installed
+  client.yaml + `config show` + mounts: в прогоне 23:35 контейнер
+  предъявлял HOST control URL — следующий репорт покажет, куда ушло
+  контейнерное конфигование).
+  Offline: новые тесты (capabilities 4, one-shot vantage 2, str(None) 4,
+  backend version 1), security gate 54/54, install-свит без изменений.
