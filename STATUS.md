@@ -1006,3 +1006,10 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   root-установка у пользователя. Дополнительно cleanup теперь завершает
   фоновые PID в конкретном named netns; в изолированном PoC `sleep` после
   выхода parent завершён, named netns исчез. 97 целевых тестов PASS.
+
+- 2026-10-16: независимая проверка сохранённого старого JSON на globe после
+  доставки кода: VERIFIED, hash OK, 14 подтверждённых PASS / 1 FAIL / 13
+  SKIP; secret scan verifier без root снова `skipped_no_secrets_on_verifier_host`.
+  Это прежний отчёт, не новая приёмка. §50.5 исправлен: direct проверяет
+  отсутствие `tun0` внутри собственного netns, а не отсутствие любого host
+  TUN device; verifier проверяет сырые строки. 56 целевых тестов PASS.

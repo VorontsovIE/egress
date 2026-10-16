@@ -136,6 +136,9 @@ def rederive_pass(cid, c):
     if cid == "tun_direct_isolated":
         if get("exit") != 0:
             return False, "exit!=0"
+        lines = get("lines", [])
+        if len(lines) < 2 or lines[0] != get("exit_ip") or lines[1] != "False":
+            return False, "direct netns interface evidence missing"
         if get("host_public_ip") and get("exit_ip") != get("host_public_ip"):
             return False, "direct ip != host ip"
         if get("tun_device_present"):

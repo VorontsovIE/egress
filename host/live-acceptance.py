@@ -674,16 +674,20 @@ def check_tun_direct_isolated():
         host_ip = host_public_ip()
         r = egress_run(["--mode", "tun", "direct", "--",
                         "python3", "-c",
-                        "import urllib.request;print(urllib.request.urlopen("
-                        "'https://api.ipify.org',timeout=15).read().decode().strip())"],
+                        "import os,urllib.request;print(urllib.request.urlopen("
+                        "'https://api.ipify.org',timeout=15).read().decode().strip());"
+                        "print('tun0' in os.listdir('/sys/class/net'))"],
                        cfg, timeout, redact)
-        ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
-        tun_dev = _run(["ip", "-o", "link", "show"], 15, redact)
-        has_tun = "tun" in tun_dev["stdout"]
+        lines = [line.strip() for line in r["stdout"].splitlines() if line.strip()]
+        ip = lines[0] if lines else ""
+        has_tun = len(lines) > 1 and lines[1] == "True"
         ev = {"exit": r["rc"], "exit_ip": ip, "host_public_ip": host_ip,
+              "lines": lines,
               "tun_device_present": has_tun, "stdout": r["stdout"], "stderr": r["stderr"]}
         if r["rc"] != 0:
             return ("fail", ev, f"direct+tun exit={r['rc']}")
+        if len(lines) < 2:
+            return ("fail", ev, "direct run did not report netns interfaces")
         if host_ip and ip != host_ip:
             return ("fail", ev, f"direct+tun exit {ip} != host ip {host_ip}")
         if has_tun:
