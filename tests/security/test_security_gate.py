@@ -616,7 +616,7 @@ class TestTunHelperPrivilege:
 
     def test_host_tun_unit_capability_boundary(self):
         unit = (ROOT / "host/units/vibelab-egress-tun-helper.service").read_text()
-        assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID" in unit
+        assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL CAP_SETPCAP" in unit
         assert "NoNewPrivileges=true" in unit
         assert "docker.sock" not in unit
         assert "--socket /run/vibelab-egress/tun-helper.sock" in unit

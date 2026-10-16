@@ -395,7 +395,7 @@ class TestHostTunUnit:
     def test_local_service_and_bounded_capabilities(self, unit):
         assert "User=root" in unit
         assert "Group=vibelab-egress-tun" in unit
-        assert "CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID" in unit
+        assert "CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL CAP_SETPCAP" in unit
         assert "NoNewPrivileges=true" in unit
         assert "--socket /run/vibelab-egress/tun-helper.sock" in unit
         assert "docker.sock" not in unit

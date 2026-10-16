@@ -1013,3 +1013,13 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   Это прежний отчёт, не новая приёмка. §50.5 исправлен: direct проверяет
   отсутствие `tun0` внутри собственного netns, а не отсутствие любого host
   TUN device; verifier проверяет сырые строки. 56 целевых тестов PASS.
+
+- 2026-10-16: пользователь выполнил root bootstrap на globe. Backend install
+  завершился: host harness 19 PASS / 0 FAIL / 3 SKIP, Mihomo/egressd healthy,
+  1081 TCP+UDP опубликованы на loopback и Docker gateway; installer скопировал
+  pinned binary и включил host unit, старый Docker helper удалён. Новый SSH
+  вход видит группу `vibelab-egress-tun`, но unit уходит в auto-restart до
+  создания socket. По коду unit не хватало CAP_CHOWN для worker job-файлов,
+  CAP_KILL для cleanup чужого UID и CAP_SETPCAP для сброса bounding set;
+  они добавлены в ограниченный набор. Запрошен root journal для подтверждения
+  точной ошибки; после обновления unit нужна live-приёмка.
