@@ -26,7 +26,7 @@ case "${1:-}" in
         exit "${STUB_DOCKER_BUILD_RC:-0}"
         ;;
       up)
-        echo "stub: compose up -d"
+        echo "stub: compose up $*"
         if [ "${STUB_DOCKER_UP_RC:-0}" != "0" ]; then
           echo "Error: stubbed compose up failure (injected by STUB_DOCKER_UP_RC)" >&2
           exit "${STUB_DOCKER_UP_RC}"

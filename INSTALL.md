@@ -170,6 +170,14 @@ restarting-контейнера (баг 2026-10-12) прохождения не 
 Linux Docker-демон эту запись **не** создаёт по умолчанию: контейнер нужно
 поднимать с `--add-host=host.docker.internal:host-gateway` (или `extra_hosts`
 в compose), иначе `egressctl whoami` упадёт с `Name or service not known`.
+`docker cp` и повторная установка клиента эту запись не добавляют. Проверить
+существующий контейнер можно командой
+`docker exec <container> python3 -c "import socket; print(socket.gethostbyname('host.docker.internal'))"`; при отсутствии
+записи пересоздать контейнер с указанным `--add-host`/`extra_hosts`. Если
+пересоздание пока невозможно, можно заново подготовить bundle с явным
+`--control-url http://<docker-gateway>:9091 --proxy-host <docker-gateway>`
+и установить его; это ротирует клиентские секреты и требует обычной
+регенерации backend-конфига.
 
 **Как перенести bundle в контейнер.** `install-client.sh` читает bundle из
 файловой системы самого контейнера. Копируйте в **свежий** каталог (старый

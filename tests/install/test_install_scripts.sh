@@ -155,6 +155,8 @@ PY
 check "success: harness report 0 failed" $?
 grep -q '"summary"' "$logf" 2>/dev/null
 check "success: harness JSON report teed into install log" $?
+grep -q "docker compose up -d --force-recreate" "$logf" 2>/dev/null
+check "success: regenerated config forces container recreate" $?
 
 # ---------------------------------------------------------------------------
 # 2. fail A: compose up fails

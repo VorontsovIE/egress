@@ -698,16 +698,17 @@ def check_tun_hard_direct():
         r_dg = egress_run(["--mode", "tun", "direct", "--",
                            "python3", "-c",
                            "import socket;s=socket.socket();s.settimeout(3);"
-                           "print('ok' if s.connect_ex(('172.17.0.1',9091))<0 else 'no')"],
+                           "print(s.connect_ex(('172.17.0.1',9091)))"],
                           cfg, timeout, redact)
         dg = r_dg["stdout"].strip().splitlines()[-1].strip() if r_dg["stdout"].strip() else ""
         ev = {"localhost_ip": lo_ip, "localhost_exit": r_lo["rc"],
-              "docker_gateway_reachable": dg == "ok", "dg_exit": r_dg["rc"],
+              "docker_gateway_reachable": dg == "0" and r_dg["rc"] == 0,
+              "docker_gateway_connect_errno": dg, "dg_exit": r_dg["rc"],
               "lo_stdout": r_lo["stdout"], "dg_stdout": r_dg["stdout"]}
         if r_lo["rc"] != 0 or not is_local_bind(lo_ip):
             return ("fail", ev, f"localhost not direct (ip={lo_ip!r})")
-        if dg != "ok":
-            return ("fail", ev, "docker bridge gateway not directly reachable")
+        if not ev["docker_gateway_reachable"]:
+            return ("fail", ev, f"docker bridge gateway connect_ex={dg!r}")
         return ("pass", ev, "HARD DIRECT enforced: localhost + docker gateway direct")
     run_check("tun_hard_direct", "spec50.8",
               "egress-run --mode tun direct -- localhost/docker-gateway (HARD DIRECT)", fn)
@@ -1060,16 +1061,17 @@ def check_a8_internal_direct():
         r_dg = egress_run(["direct", "--",
                            "python3", "-c",
                            "import socket;s=socket.socket();s.settimeout(3);"
-                           "print('ok' if s.connect_ex(('172.17.0.1',9091))<0 else 'no')"],
+                           "print(s.connect_ex(('172.17.0.1',9091)))"],
                           cfg, timeout, redact)
         dg = r_dg["stdout"].strip().splitlines()[-1].strip() if r_dg["stdout"].strip() else ""
         ev = {"host_public_ip": host_ip, "localhost_ip": lo_ip,
-              "docker_gateway_reachable": dg == "ok",
+              "docker_gateway_reachable": dg == "0" and r_dg["rc"] == 0,
+              "docker_gateway_connect_errno": dg,
               "lo_exit": r_lo["rc"], "dg_exit": r_dg["rc"]}
         if r_lo["rc"] != 0 or not is_local_bind(lo_ip):
             return ("fail", ev, f"localhost not direct (ip={lo_ip!r})")
-        if dg != "ok":
-            return ("fail", ev, "docker internal not directly reachable")
+        if not ev["docker_gateway_reachable"]:
+            return ("fail", ev, f"docker internal connect_ex={dg!r}")
         return ("pass", ev, "Docker-internal + localhost stay DIRECT")
     run_check("a8_internal_hard_direct", "spec49.27",
               "egress-run direct -- localhost/docker-gateway (internal stays direct)", fn)
@@ -1252,15 +1254,21 @@ def check_a8_probe_all():
                                 if isinstance(x, dict)),
               "has_stages": any(isinstance(x, dict)
                                 and any(k in x for k in stage_keys) for x in results),
+              "errors": [x.get("error") for x in results if isinstance(x, dict)],
               "sample": results[:3]}
         if r["rc"] != 0:
             return ("fail", ev, f"probe-domain --all exit={r['rc']}")
         if not results:
             return ("fail", ev, "no probe results")
+        if len(results) < 2:
+            ev["reason"] = "only direct route; multiple routes required by spec49.20"
+            return ("skip", ev, ev["reason"])
         if not ev["has_direct"]:
             return ("fail", ev, "direct route not included in --all probe")
         if not ev["has_stages"]:
             return ("fail", ev, "results do not distinguish DNS/TCP/TLS/HTTP stages")
+        if ev["errors"] and all(e == "proxy_failure" for e in ev["errors"]):
+            return ("fail", ev, "all probes failed at proxy infrastructure")
         return ("pass", ev, f"probe-domain --all: {len(results)} routes incl. direct, staged")
     run_check("a8_probe_domain_all", "spec49.20",
               f"egressctl probe-domain {PROBE_DOMAIN} --all", fn)

@@ -157,7 +157,9 @@ def rederive_pass(cid, c):
         lo = get("localhost_ip", "")
         if not is_local_bind(lo):
             return False, "localhost not direct"
-        if not get("docker_gateway_reachable"):
+        if (not get("docker_gateway_reachable") or
+                get("docker_gateway_connect_errno") != "0" or
+                get("dg_exit") != 0):
             return False, "docker gateway not direct"
         return True, "hard direct ok"
 
@@ -252,10 +254,13 @@ def rederive_pass(cid, c):
         return True, "version present"
 
     if cid == "a8_probe_domain_all":
-        if get("exit") != 0 or not get("n_results"):
-            return False, "no probe results"
+        if get("exit") != 0 or get("n_results", 0) < 2:
+            return False, "multiple probe results required"
         if not get("has_direct") or not get("has_stages"):
             return False, "missing direct or stages"
+        errors = get("errors", [])
+        if len(errors) != get("n_results") or all(e == "proxy_failure" for e in errors):
+            return False, "missing errors or proxy infrastructure failure"
         return True, "probe ok"
 
     if cid == "a8_benchmark_bounded":

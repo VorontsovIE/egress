@@ -363,8 +363,12 @@ cd "$REPO_ROOT"
 run_logged "docker compose build vibelab-egress-egressd" \
   docker compose build vibelab-egress-egressd \
   || die_env "docker compose build failed (full log: $LOG_FILE)"
-run_logged "docker compose up -d" docker compose up -d \
-  || die_env "docker compose up -d failed (full log: $LOG_FILE)"
+# The generated config and client credentials are bind-mounted files. Compose
+# does not recreate a container when their contents change, so an existing
+# mihomo could keep its old controller bind and SOCKS credentials indefinitely.
+# Restart both services on install to load the freshly generated inputs.
+run_logged "docker compose up -d --force-recreate" docker compose up -d --force-recreate \
+  || die_env "docker compose up -d --force-recreate failed (full log: $LOG_FILE)"
 log "waiting for services to become healthy (3 consecutive polls, 2s interval, 90s timeout)"
 # Require EVERY service to be healthy, not just any one. The old check
 # (grep '"healthy"') broke out as soon as mihomo was healthy, so it reported

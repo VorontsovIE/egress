@@ -148,15 +148,27 @@ def _has_cap_net_admin() -> bool:
     return False
 
 
+def _has_cap_sys_admin() -> bool:
+    """ip netns add uses mount/unshare and needs CAP_SYS_ADMIN (bit 21)."""
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("CapEff:"):
+                    return bool(int(line.split(":", 1)[1].strip(), 16) & (1 << 21))
+    except (OSError, ValueError):
+        pass
+    return False
+
+
 def _tun_dev_present() -> bool:
     return os.path.exists("/dev/net/tun")
 
 
 def _netns_available() -> bool:
-    """Can we create a network namespace? Requires unshare + CAP_NET_ADMIN."""
-    if not shutil.which("unshare"):
+    """Can this backend create named netns with ip netns add?"""
+    if not shutil.which("ip"):
         return False
-    if not _has_cap_net_admin():
+    if not (_has_cap_net_admin() and _has_cap_sys_admin()):
         return False
     # a real probe would unshare here; keep it capability-based so we never
     # mutate the caller's netns during a probe.
@@ -175,8 +187,10 @@ def probe_capability() -> Capability:
         reason, backend = "missing /dev/net/tun", "none"
     elif not cap:
         reason, backend = "missing CAP_NET_ADMIN", "none"
+    elif not _has_cap_sys_admin():
+        reason, backend = "ip netns add requires CAP_SYS_ADMIN; helper has NET_ADMIN only", "none"
     else:
-        reason, backend = "netns unavailable (no unshare/CAP_NET_ADMIN)", "none"
+        reason, backend = "netns unavailable (no ip/CAP_NET_ADMIN)", "none"
     return Capability(tun=tun, tun_dev=tun_dev, cap_net_admin=cap,
                       netns=netns, reason=reason, backend=backend)
 
@@ -468,7 +482,7 @@ class Helper:
                                       timeout)
             audit("run", route=route, netns=name, outcome="done", exit_code=rc)
             return {"ok": True, "exit_code": rc}
-        except OSError as e:
+        except (OSError, subprocess.CalledProcessError) as e:
             audit("run", route=route, netns=name, outcome="error",
                   error=str(e)[:200])
             return {"ok": False, "error": "netns_setup_failed",
@@ -537,7 +551,8 @@ def serve(sock_path: str, known_routes: set[str],
             try:
                 _handle_conn(conn, helper or Helper(known_routes,
                                                     allowed_upstreams))
-            except (ValidationError, OSError, json.JSONDecodeError) as e:
+            except (ValidationError, OSError, subprocess.CalledProcessError,
+                    json.JSONDecodeError) as e:
                 try:
                     write_frame(conn, {"ok": False, "error": "bad_request",
                                        "detail": str(e)[:200]})

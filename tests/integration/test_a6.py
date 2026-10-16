@@ -29,6 +29,7 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -63,6 +64,15 @@ UPS = {"127.0.0.1:18081"}
 # capability probe
 # ---------------------------------------------------------------------------
 class TestCapability:
+    def test_named_netns_requires_sys_admin(self, monkeypatch):
+        monkeypatch.setattr(th, "_tun_dev_present", lambda: True)
+        monkeypatch.setattr(th, "_has_cap_net_admin", lambda: True)
+        monkeypatch.setattr(th, "_has_cap_sys_admin", lambda: False)
+        monkeypatch.setattr(th.shutil, "which", lambda name: "/usr/sbin/ip")
+        cap = th.probe_capability().to_dict()
+        assert cap["status"] == "unsupported_in_environment"
+        assert "CAP_SYS_ADMIN" in cap["reason"]
+
     def test_probe_reports_environment(self):
         cap = th.probe_capability().to_dict()
         # in this sandbox: no CAP_NET_ADMIN -> unsupported, with a reason
@@ -183,6 +193,21 @@ class TestUnsupportedRun:
         with pytest.raises(th.ValidationError):
             h.op_run({"op": "run", "route": "nope", "command": ["true"]},
                      1000, 1000)
+
+    def test_netns_setup_error_returns_response(self, tmp_path):
+        """A failed ip netns add must not kill the socket server."""
+        class FailingBackend(th.NetnsBackend):
+            def create(self, name):
+                raise subprocess.CalledProcessError(1, ["ip", "netns", "add", name])
+
+        backend = FailingBackend(str(tmp_path))
+        cap = th.Capability(True, True, True, True, "ok", "netns+tun")
+        h = th.Helper(KNOWN, UPS, backend=backend, capability=lambda: cap)
+        resp = h.op_run({"op": "run", "route": "direct", "command": ["true"]},
+                        1000, 1000)
+        assert resp["ok"] is False
+        assert resp["error"] == "netns_setup_failed"
+        assert "ip" in resp["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,20 @@
 показывает полный путь tunnel → gVisor → echo → tunnel.
 
 ## Текущий шаг / Next
+ 2026-10-16: повторный live-отчёт с globe — **14 pass / 2 fail / 12 skip**.
+ `tun_local_workload` получил `no_response`, после чего helper socket исчез;
+ `a8_internal_hard_direct` ложнопадал из-за `connect_ex(...) < 0` вместо
+ `== 0`. Контейнерный `egress-verify` имеет правильный gVisor client.yaml,
+ но не резолвит `host.docker.internal`; его надо запускать с
+ `--add-host=host.docker.internal:host-gateway` (или `extra_hosts`).
+ Исправления в текущем дереве: helper возвращает ошибку setup без падения
+ процесса и честно показывает отсутствие CAP_SYS_ADMIN для `ip netns add`;
+ TCP-чек сохраняет errno; повторная установка принудительно пересоздаёт
+ backend-контейнеры для загрузки обновлённого generated config. TUN остаётся
+ **не подтверждённым live**: текущая Compose-модель даёт только NET_ADMIN,
+ а host-native command внутри helper-контейнера не имеет host filesystem.
+ Не расширять права контейнера без отдельного пересмотра дизайна A6.
+ `a8_probe_domain_all` при единственном direct теперь skip по §49.20.
  2026-10-15: репозиторий автономен (GitHub `VorontsovIE/egress`), проект =
  корень git. Тяжёлые third-party данные исключены из истории (GEO ~370 МБ +
  mihomo/wgserver vendor-исходники и бинарники ~127 МБ): перед оффлайн
@@ -887,3 +901,21 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   контейнерное конфигование).
   Offline: новые тесты (capabilities 4, one-shot vantage 2, str(None) 4,
   backend version 1), security gate 54/54, install-свит без изменений.
+
+- 2026-10-16: второй live-отчёт (08:48 UTC, globe): 14/2/12. Для
+  `a8_internal_hard_direct` найдено условие `connect_ex < 0` (код успеха
+ равен 0); producer/verifier теперь сохраняют и проверяют сырой errno.
+  `tun_local_workload`: helper закрыл сокет без ответа; `ip netns add` бросает
+  `CalledProcessError`, который прежний сервер не ловил. Теперь ошибка
+  возвращается клиенту, а capability проверяет обязательный для этого
+  backend CAP_SYS_ADMIN. Это диагностический фикс, не реализация TUN.
+  `egress-verify` не имеет DNS-записи `host.docker.internal` (подтверждено
+  `Name or service not known` и installed client.yaml), поэтому install-client
+  не может исправить его без пересоздания контейнера с `--add-host`.
+  Mihomo остался `reachable=false` и SOCKS probe вернул `auth rejected`:
+  bind-mounted generated config не вызывает Compose recreate; install теперь
+  использует `up -d --force-recreate`, затем нужен новый live-отчёт.
+  `probe-domain --all` с одной direct-строкой больше не выдаёт PASS за
+  сравнение нескольких routes (§49.20). Локально: py_compile и
+  `git diff --check` чисты, 13 точечных pytest passed; offline install suite
+  71/71. Полный live-прогон ожидает globe.

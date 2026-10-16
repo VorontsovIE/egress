@@ -195,12 +195,24 @@ def test_pass_rules_supported(tmp_path):
                    {"exit": 6, "stdout": "", "stderr": "no silent fallback"}),
         make_check("a8_probe_domain_all", "spec49.20", "pass", "probe-domain",
                    {"exit": 0, "n_results": 3, "has_direct": True,
-                    "has_stages": True}),
+                    "has_stages": True, "errors": [None, None, "timeout"]}),
     ]
     report = make_report(checks)
     out, _ = verifier.verify(write(tmp_path, report))
     assert out["verdict"] == "VERIFIED", out
     assert out["verified_pass"] == 4
+
+
+def test_hard_direct_requires_successful_connect_ex(tmp_path):
+    check = make_check("a8_internal_hard_direct", "spec49.27", "pass",
+                       "egress-run direct", {"localhost_ip": "127.0.0.1",
+                       "docker_gateway_reachable": True,
+                       "docker_gateway_connect_errno": "111", "dg_exit": 0})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
+    check["evidence"]["docker_gateway_connect_errno"] = "0"
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "VERIFIED"
 
 
 if __name__ == "__main__":
