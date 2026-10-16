@@ -996,3 +996,13 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   live acceptance: sudo на globe без пароля недоступен, host unit там не
   установлен, provider/UDP/host firewall и фактический gVisor не проверены.
   A6 остаётся открытой. Handoff для агентов: `handoff.md`.
+
+- 2026-10-16: источник A6 доставлен на globe: `31d16df`, затем installer
+  исправлен в `9cddf57` для удаления только старого exact-name Docker helper.
+  `git pull --ff-only` завершился, локально на globe Compose config и syntax
+  host unit корректны; `reports/host_acceptance_report.json` сохранён как
+  локально изменённый файл. Старый helper пока продолжает работать:
+  host socket отсутствует, `sudo -n` для `vibelab` требует пароль. Запрошена
+  root-установка у пользователя. Дополнительно cleanup теперь завершает
+  фоновые PID в конкретном named netns; в изолированном PoC `sleep` после
+  выхода parent завершён, named netns исчез. 97 целевых тестов PASS.

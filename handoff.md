@@ -5,7 +5,7 @@
 ## Что реализовано
 
 - Вместо контейнерного helper — host systemd unit `vibelab-egress-tun-helper.service`, локальный UNIX socket с проверкой `SO_PEERCRED`, фиксированный протокол v2 с передачей stdin/stdout/stderr через `SCM_RIGHTS`. Вызов из host сохраняет host mount namespace, cwd, env, umask, UID/GID и дополнительные группы. Программа запускается без capabilities.
-- Per-run named netns, veth, отдельные адреса, nft filter, точечные host firewall rules, TUN и непривилегированный Mihomo для proxy route; direct использует NAT. One-shot endpoint доступен через опубликованный Docker gateway `:1081`; client передаёт credentials только в закрытом request, helper пишет закрытый config в `/run`. Данные работы и сетевые объекты очищаются при завершении, startup чистит остатки.
+- Per-run named netns, veth, отдельные адреса, nft filter, точечные host firewall rules, TUN и непривилегированный Mihomo для proxy route; direct использует NAT. One-shot endpoint доступен через опубликованный Docker gateway `:1081`; client передаёт credentials только в закрытом request, helper пишет закрытый config в `/run`. Данные работы и сетевые объекты очищаются при завершении (включая фоновые PID в netns), startup чистит остатки.
 - OpenScience/gVisor не получает socket, `/dev/net/tun`, Docker socket или host namespace. Отсутствие helper/возможностей даёт явный `unsupported_in_environment`, без перехода в proxy.
 - Offline: 332 PASS (`EGRESSD_METRICS_DB=/tmp/... pytest tests/ client/tests/`); systemd unit syntax `systemd-analyze verify` без ошибок. Изолированный Docker PoC: direct create/exec/cleanup RC 0 с UID 65534 и cwd `/tmp`; proxy TUN через Mihomo → фиктивный SOCKS5 подтвердил CONNECT, клиент получил `VIA_PROXY`, RC 0. Это не host acceptance.
 

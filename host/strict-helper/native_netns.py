@@ -325,14 +325,23 @@ class NativeNetnsBackend:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-        else:
-            # A restarted helper must not trust a stale PID from state.json:
-            # it may have been recycled. Query membership in OUR named netns.
-            pids = _run(["ip", "netns", "pids", name], check=False)
-            for item in pids.stdout.split():
+        # Background children of the workload may outlive its initial PID.
+        # A restarted helper also must not trust a saved PID (PID reuse).
+        # Kill only processes still inside OUR randomly named namespace.
+        pids = _run(["ip", "netns", "pids", name], check=False)
+        for item in pids.stdout.split():
+            if item.isdecimal():
+                try:
+                    os.kill(int(item), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        if pids.stdout.strip():
+            time.sleep(0.2)
+            remaining = _run(["ip", "netns", "pids", name], check=False)
+            for item in remaining.stdout.split():
                 if item.isdecimal():
                     try:
-                        os.kill(int(item), signal.SIGTERM)
+                        os.kill(int(item), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
         host_if = state.get("host_if")
