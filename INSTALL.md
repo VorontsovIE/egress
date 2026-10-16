@@ -234,6 +234,23 @@ docker cp <root>/client-bundles/<id> <container>:/root/egress-client-bundle
 авторизоваться старым токеном (`unknown token`), хотя на backend уже новый —
 легко спутать с багом авторизации egressd.
 
+В работающем OpenScience под `runsc` проверен случай, когда `docker cp`
+сообщил об успехе, но файлы в `/tmp` не появились внутри контейнера.
+Передавайте bundle через stdin контейнера и проверяйте его там до установки:
+
+```bash
+sudo tar -C <root>/client-bundles/<id> -cf - . |
+  docker exec -i <container> sh -c \
+  'mkdir -p /tmp/vibelab-egress-client && tar -C /tmp/vibelab-egress-client -xf -'
+docker exec <container> test -s /tmp/vibelab-egress-client/client.token
+docker exec <container> bash /srv/workspace/vibelab-egress/scripts/install-client.sh \
+  --client <id> --target gvisor-container --bundle /tmp/vibelab-egress-client
+docker exec <container> rm -rf /tmp/vibelab-egress-client
+```
+
+Путь к `install-client.sh` должен указывать на актуальную версию checkout
+в контейнере: смонтированный `/srv/workspace` может отставать от host.
+
 Для каждого client profile:
 
 1. **Одинаковый package** `egressctl` + `egress-run` (stdlib-only,

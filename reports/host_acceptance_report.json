@@ -1,22 +1,22 @@
 {
   "report": "vibelab-egress live acceptance",
-  "generated_at": "2026-10-13T08:53:49Z",
+  "generated_at": "2026-10-16T16:30:40Z",
   "host": "globe",
   "user": "vibelab",
   "python": "3.12.3",
   "config": "/etc/vibelab-egress/client.yaml",
   "osconfig": "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml",
   "tun_helper_socket": "/run/vibelab-egress/tun-helper.sock",
-  "litellm_url": "http://127.0.0.1:4000/health",
+  "litellm_url": "http://127.0.0.1:4000/health/liveliness",
   "os_container": "openscience-container-openscience-1",
   "redactions": 0,
   "checks": [
     {
       "id": "preflight",
       "spec": "env",
-      "status": "skip",
+      "status": "pass",
       "command": "preflight",
-      "detail": "preflight: docker_ok=True egressctl_ok=False; egressctl not installed on the host (python -m fallback failed); run scripts/install-client.sh --target host first. detail: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n",
+      "detail": "host ready; 1 routes; host_public_ip=85.89.112.155",
       "evidence": {
         "hostname": "globe",
         "kernel": "6.8.0-139-generic",
@@ -25,20 +25,27 @@
         "gid": 1083,
         "python": "3.12.3",
         "tun_helper_socket": "/run/vibelab-egress/tun-helper.sock",
-        "tun_helper_socket_exists": false,
+        "tun_helper_socket_exists": true,
         "docker": {
           "rc": 0,
           "stdout": "28.1.1\n",
           "stderr": ""
         },
         "egressctl": {
-          "rc": 1,
-          "stdout": "",
-          "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n"
+          "rc": 0,
+          "stdout": "{\n  \"catalog\": {\n    \"providers\": [],\n    \"routes\": 1\n  },\n  \"client_id\": \"host-main\",\n  \"mihomo\": {\n    \"reachable\": true,\n    \"version\": \"v1.19.32\"\n  },\n  \"version\": \"0.1.0\"\n}\n",
+          "stderr": ""
         },
         "host_public_ip": "85.89.112.155",
-        "routes": [],
-        "reason": "preflight: docker_ok=True egressctl_ok=False; egressctl not installed on the host (python -m fallback failed); run scripts/install-client.sh --target host first. detail: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'vibelab_egress_client.egressctl'\n"
+        "routes": [
+          {
+            "id": "direct",
+            "provider": "builtin",
+            "country": null,
+            "healthy": null,
+            "protocol": "direct"
+          }
+        ]
       }
     },
     {
@@ -46,19 +53,36 @@
       "spec": "spec50.1",
       "status": "skip",
       "command": "egress-run --mode tun ROUTE -- <proxy-unaware tcp client>",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "no proxy route",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "reason": "no non-direct proxy route available"
       }
     },
     {
       "id": "tun_local_workload",
       "spec": "spec50.2",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run --mode tun ROUTE -- id/hostname (caller UID/GID, host fs)",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "tun workload ran as caller 1082:1083 on host",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "route": "direct",
+        "exit": 0,
+        "lines": [
+          "1082",
+          "1083",
+          "globe",
+          "/home/vibelab/openscience/workspace"
+        ],
+        "stdout": "1082\n1083\nglobe\n/home/vibelab/openscience/workspace\n",
+        "stderr": "",
+        "host_marker_written": true,
+        "expected_uid": 1082,
+        "expected_gid": 1083,
+        "expected_hostname": "globe",
+        "expected_cwd": "/home/vibelab/openscience/workspace",
+        "uid": "1082",
+        "gid": "1083",
+        "hostname": "globe"
       }
     },
     {
@@ -66,9 +90,9 @@
       "spec": "spec50.3",
       "status": "skip",
       "command": "egress-run --mode tun ROUTE -- <udp client>",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "no proxy route",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "reason": "no non-direct proxy route"
       }
     },
     {
@@ -76,96 +100,135 @@
       "spec": "spec50.4",
       "status": "skip",
       "command": "3+ concurrent egress-run --mode tun (different routes + direct)",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "two distinct non-direct proxy routes required for 3+ concurrent jobs",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "reason": "two distinct non-direct proxy routes required for 3+ concurrent jobs"
       }
     },
     {
       "id": "tun_direct_isolated",
       "spec": "spec50.5",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run --mode tun direct -- ... (isolated direct, no tun device)",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "direct+tun isolated -> 85.89.112.155, no tun device",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "exit": 0,
+        "exit_ip": "85.89.112.155",
+        "host_public_ip": "85.89.112.155",
+        "lines": [
+          "85.89.112.155",
+          "False"
+        ],
+        "tun_device_present": false,
+        "stdout": "85.89.112.155\nFalse\n",
+        "stderr": ""
       }
     },
     {
       "id": "tun_no_root_escalation",
       "spec": "spec50.6",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run --mode tun direct -- id (caller UID/GID, no root)",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "tun command ran as caller 1082:1083; no root escalation",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "exit": 0,
+        "uid": "1082",
+        "gid": "1083",
+        "stdout": "1082\n1083\n0000000000000000\n",
+        "expected_uid": "1082",
+        "expected_gid": "1083",
+        "effective_capabilities": "0000000000000000"
       }
     },
     {
       "id": "tun_stale_cleanup",
       "spec": "spec50.7",
-      "status": "skip",
+      "status": "pass",
       "command": "ip netns / tun device list before+after a tun run",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "no stale netns/tun after run",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "route": "direct",
+        "exit": 0,
+        "new_netns": [],
+        "new_tun_devs": [],
+        "new_host_veth": [],
+        "before_ns_count": 0,
+        "after_ns_count": 0
       }
     },
     {
       "id": "tun_hard_direct",
       "spec": "spec50.8",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run --mode tun direct -- localhost/docker-gateway (HARD DIRECT)",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "detail": "HARD DIRECT enforced: localhost + docker gateway direct",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "localhost_ip": "127.0.0.1",
+        "localhost_exit": 0,
+        "docker_gateway_reachable": true,
+        "docker_gateway_connect_errno": "0",
+        "dg_exit": 0,
+        "lo_stdout": "127.0.0.1\n",
+        "dg_stdout": "0\n"
       }
     },
     {
       "id": "openscience_tun_unsupported",
       "spec": "spec50.9",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run --mode tun (openscience config) -> explicit unsupported",
-      "detail": "egress-run not installed in container 'openscience-container-openscience-1' (install the client bundle first)",
+      "detail": "openscience tun -> explicit unsupported (exit 6), no fallback",
       "evidence": {
         "container": "openscience-container-openscience-1",
-        "exit": 127,
-        "stdout": "OCI runtime exec failed: executing processes for container: executing command \"egress-run --mode tun direct -- true\" in sandbox: error finding executable \"egress-run\" in PATH [/opt/venv/bin /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin]: no such file or directory: unknown\n",
-        "stderr": "",
-        "reason": "egress-run not installed in container 'openscience-container-openscience-1' (install the client bundle first)"
+        "exit": 6,
+        "stdout": "",
+        "stderr": "egress-run: tun mode is not available in environment 'gvisor-container' (tun_backend=none); use --mode proxy. There is no silent fallback to proxy.\n",
+        "runtime": "runsc"
       }
     },
     {
       "id": "tun_no_silent_fallback",
       "spec": "spec50.11",
-      "status": "skip",
-      "command": "egress-run --mode tun (marker env) -> explicit failure, no proxy fallback",
-      "detail": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock",
+      "status": "pass",
+      "command": "egress-run --mode tun with unavailable helper -> explicit failure",
+      "detail": "unavailable helper causes explicit exit 6; no fallback",
       "evidence": {
-        "reason": "tun helper socket not present: /run/vibelab-egress/tun-helper.sock"
+        "exit": 6,
+        "stdout": "",
+        "stderr": "egress-run: tun mode is not available in this environment (tun helper socket not found: /tmp/egress-no-helper-1099073); there is no silent fallback to proxy\n"
       }
     },
     {
       "id": "tun_capabilities_accuracy",
       "spec": "spec50.12",
-      "status": "skip",
+      "status": "pass",
       "command": "egressctl capabilities (host + openscience) report tun accurately",
-      "detail": "no live backend",
+      "detail": "host tun='supported'; openscience tun='unsupported_in_environment'",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "host": {
+          "exit": 0,
+          "tun": "supported",
+          "raw": "{\n  \"client_id\": \"host-main\",\n  \"client_version\": \"0.1.0\",\n  \"environment\": \"host\",\n  \"tun\": {\n    \"backend\": \"host-helper\",\n    \"reason\": \"ok\",\n    \"socket\": \"/run/vibelab-egress/tun-helper.sock\",\n    \"status\": \"supported\"\n  }\n}\n"
+        },
+        "helper": {
+          "status": "supported",
+          "reason": "ok"
+        },
+        "openscience": {
+          "exit": 0,
+          "tun": "unsupported_in_environment",
+          "raw": "{\n  \"client_id\": \"openscience-main\",\n  \"client_version\": \"0.1.0\",\n  \"environment\": \"gvisor-container\",\n  \"tun\": {\n    \"backend\": \"none\",\n    \"reason\": \"gVisor environment (environment='gvisor-container'): no /dev/net/tun / CAP_NET_ADMIN\",\n    \"socket\": null,\n    \"status\": \"unsupported_in_environment\"\n  }\n}\n"
+        }
       }
     },
     {
       "id": "tun_no_gvisor_weakening",
       "spec": "spec50.10",
       "status": "pass",
-      "command": "static audit of compose.tun.yaml + openscience config",
-      "detail": "tun privilege grant is minimal (cap_add NET_ADMIN only); no privileged/docker.sock; openscience tun_backend=none",
+      "command": "static audit of host helper unit + OpenScience config",
+      "detail": "host unit capabilities bounded; OpenScience has no helper access",
       "evidence": {
-        "compose_tun": "/home/vibelab/openscience/workspace/vibelab-egress/compose.tun.yaml",
-        "cap_add": [
-          "NET_ADMIN"
-        ],
+        "host_unit": "/home/vibelab/openscience/workspace/host/units/vibelab-egress-tun-helper.service",
         "issues": [],
         "os_config_present": false,
         "os_tun_backend": null,
@@ -327,22 +390,21 @@
       "spec": "spec49.39",
       "status": "skip",
       "command": "docker exec whoami -> docker restart -> whoami (identity persists)",
-      "detail": "openscience container not reachable",
+      "detail": "recreate check disabled by default",
       "evidence": {
-        "reason": "cannot whoami in openscience-container-openscience-1: "
+        "reason": "destructive: restarts the OpenScience container; run with --recreate to enable"
       }
     },
     {
       "id": "a8_litellm_reachable",
       "spec": "spec49.29",
-      "status": "skip",
-      "command": "GET http://127.0.0.1:4000/health",
-      "detail": "LiteLLM not reachable at http://127.0.0.1:4000/health (set --litellm-url)",
+      "status": "pass",
+      "command": "GET http://127.0.0.1:4000/health/liveliness",
+      "detail": "LiteLLM reachable before+after (http://127.0.0.1:4000/health/liveliness)",
       "evidence": {
-        "url": "http://127.0.0.1:4000/health",
-        "pre": false,
-        "post": false,
-        "reason": "LiteLLM not reachable at http://127.0.0.1:4000/health (set --litellm-url)"
+        "url": "http://127.0.0.1:4000/health/liveliness",
+        "pre": true,
+        "post": true
       }
     },
     {
@@ -350,51 +412,69 @@
       "spec": "spec49.23",
       "status": "skip",
       "command": "3 parallel egress-run one-shot (different routes + direct)",
-      "detail": "no live backend",
+      "detail": "no proxy route",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "reason": "no non-direct proxy route (parallel one-shot needs distinct routes to run in parallel)"
       }
     },
     {
       "id": "a8_egress_run_local",
       "spec": "spec49.25",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run direct -- hostname/id (local exec, not remote)",
-      "detail": "no live backend",
+      "detail": "egress-run executes the command locally (host fs/env/uid)",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "exit": 0,
+        "hostname": "globe",
+        "uid": "1082",
+        "expected_hostname": "globe",
+        "expected_uid": "1082",
+        "stdout": "globe\n1082\n"
       }
     },
     {
       "id": "a8_internal_hard_direct",
       "spec": "spec49.27",
-      "status": "skip",
+      "status": "pass",
       "command": "egress-run direct -- localhost/docker-gateway (internal stays direct)",
-      "detail": "no live backend",
+      "detail": "Docker-internal + localhost stay DIRECT",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "host_public_ip": "85.89.112.155",
+        "localhost_ip": "127.0.0.1",
+        "docker_gateway_reachable": true,
+        "docker_gateway_connect_errno": "0",
+        "lo_exit": 0,
+        "dg_exit": 0
       }
     },
     {
       "id": "a8_secrets_absent",
       "spec": "spec49.34",
-      "status": "skip",
+      "status": "pass",
       "command": "scan repo + generated artifacts + docker logs for secret values",
-      "detail": "no secrets to scan",
+      "detail": "no provider/client secrets in repo/artifacts/logs",
       "evidence": {
-        "reason": "no secret values available to scan against"
+        "scanned": [
+          "repo",
+          "generated",
+          "docker-logs"
+        ],
+        "leaks": [],
+        "leak_count": 0
       }
     },
     {
       "id": "a8_host_test_report",
       "spec": "spec49.41",
-      "status": "fail",
+      "status": "skip",
       "command": "python3 host/egress-host-test (fixed host harness report)",
-      "detail": "host harness produced no checks",
+      "detail": "host harness requires root to inspect persistent dirs",
       "evidence": {
         "exit": 1,
         "summary": {},
-        "failed_checks": []
+        "failed_checks": [],
+        "stderr": "Traceback (most recent call last):\n  File \"/home/vibelab/openscience/workspace/host/egress-host-test\", line 1006, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/vibelab/openscience/workspace/host/egress-host-test\", line 957, in main\n    check_persistent_dirs_permissions()\n  File ",
+        "reason": "host harness requires root to inspect persistent dirs"
       }
     },
     {
@@ -421,24 +501,25 @@
     {
       "id": "a8_client_same_release",
       "spec": "spec49.7",
-      "status": "skip",
+      "status": "pass",
       "command": "compare installed client __version__ (host vs container)",
-      "detail": "could not read installed client __version__ on host and/or in the container",
+      "detail": "same client release installed: 0.1.0",
       "evidence": {
-        "host_version": null,
-        "os_version": null,
-        "os_container": "openscience-container-openscience-1",
-        "reason": "could not read installed client __version__ on host and/or in the container"
+        "host_version": "0.1.0",
+        "os_version": "0.1.0",
+        "os_container": "openscience-container-openscience-1"
       }
     },
     {
       "id": "a8_version_negotiation",
       "spec": "spec49.42",
-      "status": "skip",
+      "status": "pass",
       "command": "egressctl status (backend version present for negotiation)",
-      "detail": "no live backend",
+      "detail": "backend reports version 'v1.19.32' (negotiable)",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "backend_version": "v1.19.32",
+        "raw": "{\n  \"catalog\": {\n    \"providers\": [],\n    \"routes\": 1\n  },\n  \"client_id\": \"host-main\",\n  \"mihomo\": {\n    \"reachable\": true,\n    \"version\": \"v1.19.32\"\n  },\n  \"version\": \"0.1.0\"\n}\n",
+        "compatible": true
       }
     },
     {
@@ -446,9 +527,35 @@
       "spec": "spec49.20",
       "status": "skip",
       "command": "egressctl probe-domain cloudflare.com --all",
-      "detail": "no live backend",
+      "detail": "only direct route; multiple routes required by spec49.20",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "domain": "cloudflare.com",
+        "exit": 0,
+        "n_results": 1,
+        "has_direct": true,
+        "has_stages": true,
+        "errors": [
+          "redirect"
+        ],
+        "sample": [
+          {
+            "asn": null,
+            "detail": {},
+            "dns_ok": true,
+            "error": "redirect",
+            "exit_country": null,
+            "exit_ip": null,
+            "http_ok": true,
+            "latency_ms": 219,
+            "reachable": false,
+            "resolved_ip": "104.16.132.229",
+            "route": "direct",
+            "status": 301,
+            "tcp_ok": true,
+            "tls_ok": true
+          }
+        ],
+        "reason": "only direct route; multiple routes required by spec49.20"
       }
     },
     {
@@ -456,9 +563,9 @@
       "spec": "spec49.35",
       "status": "skip",
       "command": "egressctl benchmark ROUTE --bytes 1M (bounded bytes/time)",
-      "detail": "no live backend",
+      "detail": "no proxy route",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "reason": "no non-direct proxy route"
       }
     },
     {
@@ -466,17 +573,17 @@
       "spec": "spec49.36",
       "status": "skip",
       "command": "egressctl best --domain cloudflare.com",
-      "detail": "no live backend",
+      "detail": "no proxy route",
       "evidence": {
-        "reason": "backend/client not reachable"
+        "reason": "no non-direct proxy route"
       }
     }
   ],
   "summary": {
-    "passed": 4,
-    "failed": 1,
-    "skipped": 23,
+    "passed": 19,
+    "failed": 0,
+    "skipped": 9,
     "total": 28
   },
-  "checks_hash": "1845c913d6768094cd0eefe79382ac209a376e4f43790aaa7f58fd375b8f7bcb"
+  "checks_hash": "1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca"
 }

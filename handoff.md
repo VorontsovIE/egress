@@ -1,33 +1,81 @@
 # Handoff: A6 host-native strict/TUN
 
-Дата: 2026-10-16. Исходный live-отчёт globe (13:31 UTC): 14 PASS / 1 FAIL / 13 SKIP. Этот отчёт подтверждён verifier, но §50.2 ещё не принят. После изменений ниже нового live-отчёта пока нет.
+Дата: 2026-10-16. Последний live-отчёт globe от 16:30:40 UTC:
+**19 PASS / 0 FAIL / 9 SKIP**. Независимая проверка на globe: `VERIFIED`,
+checks hash `1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca`,
+все 19 PASS подтверждены, secret scan выполнен. Отчёт:
+`reports/host_acceptance_report.json`. A6 **открыта**: proxy routes ещё нет.
 
-## Что реализовано
+## Реализовано и проверено
 
-- Вместо контейнерного helper — host systemd unit `vibelab-egress-tun-helper.service`, локальный UNIX socket с проверкой `SO_PEERCRED`, фиксированный протокол v2 с передачей stdin/stdout/stderr через `SCM_RIGHTS`. Вызов из host сохраняет host mount namespace, cwd, env, umask, UID/GID и дополнительные группы. Программа запускается без capabilities.
-- Per-run named netns, veth, отдельные адреса, nft filter, точечные host firewall rules, TUN и непривилегированный Mihomo для proxy route; direct использует NAT. One-shot endpoint доступен через опубликованный Docker gateway `:1081`; client передаёт credentials только в закрытом request, helper пишет закрытый config в `/run`. Данные работы и сетевые объекты очищаются при завершении (включая фоновые PID в netns), startup чистит остатки.
-- OpenScience/gVisor не получает socket, `/dev/net/tun`, Docker socket или host namespace. Отсутствие helper/возможностей даёт явный `unsupported_in_environment`, без перехода в proxy.
-- Offline: 332 PASS (`EGRESSD_METRICS_DB=/tmp/... pytest tests/ client/tests/`); systemd unit syntax `systemd-analyze verify` без ошибок. Изолированный Docker PoC: direct create/exec/cleanup RC 0 с UID 65534 и cwd `/tmp`; proxy TUN через Mihomo → фиктивный SOCKS5 подтвердил CONNECT, клиент получил `VIA_PROXY`, RC 0. Это не host acceptance.
+- Host systemd helper заменил контейнерный. UNIX socket 0660
+  `root:vibelab-egress-tun`, `SO_PEERCRED` и проверка групп, фиксированный
+  протокол v2 и `SCM_RIGHTS` для stdio. Запущенная с host команда сохраняет
+  host filesystem, cwd, env, umask и UID/GID вызывающего; capabilities команды
+  сброшены. Helper имеет только указанные unit capabilities.
+- Для каждой команды создаются netns/veth, ограниченные firewall rules и TUN;
+  direct использует NAT, proxy — отдельный непривилегированный Mihomo и
+  опубликованный gateway `:1081` с one-shot credentials. Startup и завершение
+  очищают ресурсы, включая фоновые процессы в netns. Изолированный PoC
+  проверил direct и proxy TCP через фиктивный SOCKS5 (`poc/A6_POC.md`).
+- На globe §50.2 прошёл: UID/GID 1082:1083, host cwd и запись файла на host.
+  §50.5 direct без tun0, §50.6 `CapEff=0`, §50.7 cleanup, §50.8 HARD DIRECT,
+  §50.9 настоящий OpenScience `runsc`, §50.11 отказ без helper и §50.12
+  capability accuracy прошли. Прочие доступные A8 проверки прошли.
+- OpenScience client установлен внутри `runsc`. `egressctl status` видит
+  backend; `egressctl capabilities` сообщает `unsupported_in_environment`,
+  `egress-run --mode tun direct -- true` завершается кодом 6 без fallback.
+  Socket helper и host namespace туда не предоставлены. Bundle был передан
+  через `tar | docker exec -i`: `docker cp` в этом окружении дал невидимый
+  внутри контейнера каталог `/tmp`. Временные файлы внутри runsc удалены;
+  оставшиеся в Docker overlay token/auth от первоначального `docker cp`
+  обнулены и проверены обратным копированием.
+- Offline suite: 332 PASS с `EGRESSD_METRICS_DB` в `/tmp`. На globe
+  backend installer ранее дал host harness 19 PASS / 0 FAIL / 3 SKIP.
 
 ## Имплементирующему агенту
 
-1. Перед включением на globe проверь `git diff`, `TECH_SPEC.md` §21/§50, `poc/A6_POC.md`, `INSTALL.md` и последние записи `STATUS.md`. Не передавай secrets, bundles, generated config, `/run` state. Обнови backend и host client через `sudo bash scripts/install-backend-host.sh --yes`, затем код и unit через `sudo bash scripts/install-tun-host.sh --user vibelab` из проверенного checkout. Не добавляй Docker socket и не меняй runtime gVisor.
-2. На globe сначала проверь, что старый `vibelab-egress-tun-helper` контейнер остановлен/удалён как orphan; новый helper работает только через systemd. Обнови backend Compose для публикации `1081/udp` на loopback и Docker gateway. После установки нужна новая login-сессия пользователя для группы `vibelab-egress-tun`.
-3. Если в live-проверке proxy path не подключается, исследуй порядок Docker DNAT, UFW и host FORWARD для veth. Правила должны оставаться привязаны к случайному interface и original destination `gateway:1081`; не открывай общий FORWARD и не ослабляй namespace nft filter. Проверь DNS и SOCKS5 UDP ASSOCIATE на настоящем one-shot listener.
-4. Проверь signal/cancel, timeout, параллельные job, restart helper и остатки netns/veth/iptables/`/etc/netns`/`/run`. Если найдёшь дефект, исправь и добавь конкретный тест, обнови `STATUS.md`.
+1. Сверь последние записи `STATUS.md`, `TECH_SPEC.md` §21/§50, `INSTALL.md`,
+   `poc/A6_POC.md` и текущий JSON до изменений. Закрой доступность реальных
+   provider proxy routes штатным provisioning, без секретов в git/логах.
+2. На host проверь proxy TCP и UDP/QUIC через one-shot listener, Docker DNAT,
+   UFW и FORWARD для veth. Правила должны оставаться привязаны к конкретному
+   interface и destination gateway `:1081`; не открывай общий FORWARD.
+   Если обнаружится дефект, добавь точечный regression test.
+3. Проверь concurrent proxy jobs, signal/cancel, timeout и restart helper:
+   не должны оставаться netns/veth/firewall rules, `/etc/netns` и `/run` job
+   state. Не ослабляй gVisor и не добавляй Docker socket.
+4. Установка OpenScience client сейчас сделана в работающем контейнере.
+   Обеспечь воспроизводимую установку при его пересоздании; смонтированный
+   `/srv/workspace/vibelab-egress` может содержать старую версию клиента.
+   Проверь §49.39 на полном recreate и зафиксируй результат.
 
 ## Тестирующему агенту
 
-1. Запусти `EGRESSD_METRICS_DB=/tmp/egressd-a6-test.sqlite3 python3 -m pytest tests/ client/tests/ -q`; `python3 -m py_compile host/strict-helper/*.py host/live-acceptance.py scripts/verify-live-report.py`; `bash -n scripts/*.sh`; `systemd-analyze verify host/units/vibelab-egress-tun-helper.service`; `git diff --check`.
-2. На globe после установки: `egressctl capabilities`; `bash scripts/run-live-acceptance.sh`; `sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json`. Сохрани report hash и разбор каждого FAIL/SKIP. §50.2 обязан показать host UID/GID, cwd и запись в host `/tmp`. Не объявляй A6 закрытой до PASS §50.2 и зависимых проверок.
-3. Для §50.9 нужен контейнер с фактическим runtime `runsc`/gVisor. Для provider-зависимых §50.3/4/5 и остальных требуются рабочие proxy routes; с одним direct корректен SKIP. §49.39 требует настоящее пересоздание контейнера, `docker restart` не засчитывается.
+1. Запусти `EGRESSD_METRICS_DB=/tmp/egressd-a6-test.sqlite3 python3 -m pytest tests/ client/tests/ -q`,
+   syntax checks для Python/Bash, `systemd-analyze verify` и `git diff --check`
+   после кодовых изменений.
+2. На globe запусти `bash scripts/run-live-acceptance.sh`, затем
+   `sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json`.
+   Сохрани итоговый checks hash и разбор каждого FAIL/SKIP. Не смешивай
+   `egress-host-test` (22 checks) с live acceptance (28 checks).
+3. Добейся PASS §50.1 proxy TCP, §50.3 UDP/QUIC и §50.4 concurrent proxy
+   на настоящих provider routes. Повтори §50.2 и §50.9 как regression.
+   §49.39 требует recreate, `docker restart` недостаточен. Root-only
+   `a8_host_test_report` в non-root live получает честный SKIP; запусти
+   соответствующую проверку с root, если требуется закрыть этот пункт.
+4. Обнови `STATUS.md` после каждого завершённого шага. A6 не закрывать,
+   пока зависимые live-проверки не пройдут на host.
 
-## Операционному/безопасностному агенту
+## Операционному и безопасностному агенту
 
-- Аудируй scope capabilities unit: `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SETUID`, `CAP_SETGID`; helper слушает только socket root:`vibelab-egress-tun` mode 0660. Целевая команда не должна наследовать capabilities. Проверь отсутствие command/env/secrets в audit, отсутствие Docker socket и отсутствие mount helper в OpenScience.
-- Перед откатом останови host unit, затем удали только его netns/точечные правила через штатную cleanup; не сбрасывай таблицы Docker/UFW. Backend и пользовательские данные сохраняй.
-- Секреты из `/etc/vibelab-egress/secrets/`, клиентские bundle и generated config не копировать в репозиторий или отчёт.
-
-## Ограничение текущей сессии
-
-SSH `vibelab@globe.autosome.ru` работает, но `sudo -n` требует пароль. Root install и live acceptance на globe в этой сессии ещё не выполнены. Команда установки приведена выше; после неё нужно продолжить live-приёмку и независимую проверку JSON.
+- Проверь unit capabilities: `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SETUID`,
+  `CAP_SETGID`, `CAP_CHOWN`, `CAP_KILL`, `CAP_SETPCAP`; socket только локальный,
+  клиентская команда с `CapEff=0`. Проверяй отсутствие секретов/команд/env
+  в audit, Docker socket в Compose и доступа OpenScience к host helper.
+- Текущий helper установлен и работает на globe. При обновлении используй
+  `scripts/install-tun-host.sh`; старый контейнерный helper больше не должен
+  работать. Не сбрасывай общие таблицы Docker/UFW при cleanup.
+- Не передавай реальные secrets, bundle, generated config и `/run` state.
+  В git сохраняй только проверенный JSON и документацию. Исторические копии
+  отчётов на globe не включать в коммит без отдельной проверки.

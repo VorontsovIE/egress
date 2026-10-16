@@ -1072,3 +1072,29 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   не увидел каталог; проверенная альтернатива — tar stream через
   `docker exec -i` (несекретный probe появился). Ожидается root-доступ
   к client bundle для передачи его через stdin и установки в контейнере.
+
+- 2026-10-16: OpenScience client `openscience-main` установлен в настоящем
+  `runsc` контейнере через `tar | docker exec -i`; затем текущий package и
+  installer из host checkout переданы тем же способом, потому что
+  `/srv/workspace/vibelab-egress` внутри контейнера отставал от host.
+  `egressctl status` видит backend, `egressctl capabilities` сообщает
+  `unsupported_in_environment`, а `egress-run --mode tun direct -- true`
+  завершается с кодом 6 без fallback. Временные каталоги внутри runsc удалены.
+  Начальный `docker cp` оставил невидимую для runsc копию bundle в Docker
+  overlay; оба файла с credentials в ней перезаписаны нулевой длиной и
+  проверены обратным копированием. Остаток каталога без секретов исчезнет
+  при пересоздании контейнера.
+
+- 2026-10-16: новый host live acceptance на globe (`2026-10-16T16:30:40Z`):
+  **19 PASS / 0 FAIL / 9 SKIP**, checks hash
+  `1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca`.
+  Независимый verifier на globe дал `VERIFIED`, hash OK, 19 подтверждённых
+  PASS; secret scan выполнен. §50.2 доказал host UID/GID 1082:1083,
+  исходный cwd и host-файл; §50.5–§50.12, включая фактический gVisor §50.9,
+  прошли в доступных сценариях. Provider-зависимые TCP/UDP и параллельные
+  проверки пропущены: сейчас доступен только direct route. §49.39 ждёт
+  реального пересоздания контейнера; root-only `a8_host_test_report`
+  пропущен в non-root запуске (отдельный root harness установки backend
+  ранее дал 19 PASS / 0 FAIL / 3 SKIP). **A6 остаётся открытой** до live
+  PASS provider-зависимых §50.1/§50.3/§50.4 и проверки оставшихся SKIP.
+  Актуальные задачи по ролям — `handoff.md`.
