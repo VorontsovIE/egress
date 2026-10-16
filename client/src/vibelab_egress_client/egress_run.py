@@ -243,7 +243,8 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
         if err == "helper_not_running":
             _die(EXIT_UNSUPPORTED,
                  f"tun helper is not running ({detail}); start "
-                 "egress-tun-helper or use --mode proxy")
+                 "egress-tun-helper or use --mode proxy. "
+                 "There is no silent fallback to proxy.")
         _die(EXIT_RUNTIME, f"tun run failed: {err} {detail}".strip())
 
     return int(resp.get("exit_code", 0))

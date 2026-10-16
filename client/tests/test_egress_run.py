@@ -276,6 +276,26 @@ class TestTun:
                               ["--mode", "tun", "direct", "--", "true"])
         assert code == egress_run.EXIT_UNSUPPORTED
 
+    def test_tun_helper_not_running_message(self, monkeypatch, cfg_file):
+        """helper-not-running must state there is no silent fallback
+        (spec 50.9; the live acceptance check greps this wording)."""
+        import io
+        from contextlib import redirect_stderr
+        cfg = Path(cfg_file)
+        text = cfg.read_text().replace("tun_backend: none",
+                                       "tun_backend: host-helper")
+        cfg.write_text(text)
+        err = io.StringIO()
+        code = 0
+        with redirect_stderr(err):
+            try:
+                egress_run.main(["--config", str(cfg),
+                                 "--mode", "tun", "direct", "--", "true"])
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 0
+        assert code == egress_run.EXIT_UNSUPPORTED
+        assert "no silent fallback to proxy" in err.getvalue().lower()
+
     def test_tun_checked_before_direct(self, monkeypatch, cfg_file):
         """--mode tun must fail even for the direct route (no fallback)."""
         def run_env(env, cmd):
