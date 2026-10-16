@@ -87,15 +87,24 @@ CTX = {}
 # secret redaction
 # ---------------------------------------------------------------------------
 def _collect_secret_values():
-    """Gather secret VALUES (never printed) to redact from captured output."""
+    """Gather (value, label) secret pairs to redact/scan.
+
+    The label is the value's ORIGIN (file path or env var name) so scans
+    can tell apart what is legitimately embedded where (e.g. the mihomo
+    admin secret inside the generated mihomo config — mihomo needs it
+    there). ``*.profile.json`` files are excluded: they are deterministic
+    NON-SECRET metadata whose identical content legitimately appears in
+    the repo (test fixtures, PoC artifacts) — counting them as secrets
+    produced false-positive "leaks" (2026-10-15 live run).
+    """
     vals = []
 
-    def add(path):
+    def add(path, label=None):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 v = f.read().strip()
             if v:
-                vals.append(v)
+                vals.append((v, label or path))
         except OSError:
             pass
 
@@ -103,32 +112,35 @@ def _collect_secret_values():
         os.path.join("/etc/vibelab-egress", "client.token"),
         os.path.join("/etc/vibelab-egress", "default-proxy.auth"),
     ):
-        add(p)
+        add(p, os.path.basename(p))
     # client config token/auth file paths (host + openscience)
     for cfg_path in (CTX.get("config"), CTX.get("osconfig")):
         if cfg_path:
             for key in ("api_token_file", "default_proxy_auth_file"):
                 v = _flat_yaml_get(cfg_path, key)
                 if v:
-                    add(v)
+                    add(v, key)
     # backend secrets dir (mihomo secret + provider subscriptions)
     if os.path.isdir(SECRETS_DIR):
         for root_, _, files in os.walk(SECRETS_DIR):
             for fn in files:
-                add(os.path.join(root_, fn))
+                if fn.endswith(".profile.json"):
+                    continue  # non-secret metadata (see docstring)
+                full = os.path.join(root_, fn)
+                add(full, os.path.relpath(full, SECRETS_DIR))
     # environment-provided secrets
     for env in ("VIBELAB_EGRESS_OS_TOKEN", "VIBELAB_EGRESS_OS_AUTH"):
         v = os.environ.get(env, "").strip()
         if v:
-            vals.append(v)
-    # de-dup, keep only values long enough to redact safely
+            vals.append((v, env))
+    # de-dup (keep first label), only values long enough to redact safely
     seen = set()
     out = []
-    for v in vals:
+    for v, label in vals:
         v = v.strip()
         if len(v) >= 8 and v not in seen:
             seen.add(v)
-            out.append(v)
+            out.append((v, label))
     return out
 
 
@@ -153,7 +165,7 @@ def _flat_yaml_get(path, key):
 
 
 def make_redactor():
-    secrets = _collect_secret_values()
+    secrets = [v for v, _ in _collect_secret_values()]
     count = {"n": 0}
 
     def redact(text):
@@ -1039,6 +1051,12 @@ def check_a8_secrets():
         if not secrets:
             return ("skip", {"reason": "no secret values available to scan against"},
                     "no secrets to scan")
+        # values the generated mihomo config LEGITIMATELY embeds (mihomo
+        # needs them: admin secret + per-client/one-shot listener users):
+        # not a leak when present under generated/.
+        gen_ok_labels = {label for _, label in secrets
+                         if label == "mihomo_api_secret"
+                         or label.startswith("clients/")}
         leaks = []
         # 1. repo (skip .git, binaries, large files)
         for root_, dirs, files in os.walk(REPO):
@@ -1052,9 +1070,9 @@ def check_a8_secrets():
                         content = f.read()
                 except OSError:
                     continue
-                for s in secrets:
-                    if s in content:
-                        leaks.append(f"repo:{p}")
+                for sv, label in secrets:
+                    if sv in content:
+                        leaks.append(f"repo:{p} (secret: {label})")
                         break
         # 2. generated artifacts
         gen = os.path.join(ROOT, "generated")
@@ -1067,16 +1085,18 @@ def check_a8_secrets():
                             content = f.read()
                     except OSError:
                         continue
-                    for s in secrets:
-                        if s in content:
-                            leaks.append(f"artifact:{p}")
+                    for sv, label in secrets:
+                        if label in gen_ok_labels:
+                            continue
+                        if sv in content:
+                            leaks.append(f"artifact:{p} (secret: {label})")
                             break
         # 3. docker logs of the egress stack
         for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd"):
             lg = _run(["docker", "logs", "--tail", "2000", svc], 30, redact)
-            for s in secrets:
-                if s in (lg["stdout"] + lg["stderr"]):
-                    leaks.append(f"logs:{svc}")
+            for sv, label in secrets:
+                if sv in (lg["stdout"] + lg["stderr"]):
+                    leaks.append(f"logs:{svc} (secret: {label})")
                     break
         ev = {"scanned": ["repo", "generated", "docker-logs"],
               "leaks": leaks[:20], "leak_count": len(leaks)}
