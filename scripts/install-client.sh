@@ -70,6 +70,9 @@ install_package() { # prefix
   # resolves. (Copying `$PKG_SRC/.` flattens the module one level up and
   # breaks the import.)
   cp -r "$PKG_SRC" "$libdir/"
+  # Optional container-owned subscription normalization. The adapter imports
+  # PyYAML only when `egressctl source` is used in a container.
+  cp -r "$REPO_ROOT/adapters" "$libdir/"
   # cp -r propagates the SOURCE directory's mode (the repo source tree is
   # 750 root:group), which would leave the installed package dir unreadable
   # by the user running egressctl -> "No module named ...egressctl". The
@@ -77,6 +80,7 @@ install_package() { # prefix
   # installed tree to be world-readable + traversable.
   chmod 755 "$libdir/vibelab_egress_client"
   chmod -R a+rX "$libdir/vibelab_egress_client"
+  chmod -R a+rX "$libdir/adapters"
   # wrappers: fixed python3 invocation, no build step needed (stdlib-only)
   cat > "$bindir/egressctl" <<EOF
 #!/usr/bin/env bash

@@ -65,6 +65,7 @@ class ProviderDef:
     exclude_filter: str | None = None
     exclude_type: str | None = None
     payload: list[dict[str, Any]] | None = None  # inline fallback nodes
+    owner: str | None = None  # absent for system providers
 
     def to_config(self) -> dict[str, Any]:
         cfg: dict[str, Any] = {"type": self.type}
@@ -203,7 +204,7 @@ class EgressConfig:
             if s.user in users or any(c.client_id == s.user for c in self.clients):
                 raise ValueError(f"oneshot user {s.user} collides with a client user")
 
-    def _group_def(self) -> dict[str, Any]:
+    def _group_def(self, client_id: str | None = None) -> dict[str, Any]:
         """A select group containing DIRECT + all provider nodes + statics.
 
         Provider nodes are pulled in via the ``use`` field (mihomo adds the
@@ -212,8 +213,10 @@ class EgressConfig:
         """
         members = [DIRECT] + [sp["name"] for sp in self.static_proxies]
         g: dict[str, Any] = {"type": "select", "proxies": members}
-        if self.providers:
-            g["use"] = [p.name for p in self.providers]
+        allowed = [p.name for p in self.providers if
+                   not p.owner or client_id is None or p.owner == client_id]
+        if allowed:
+            g["use"] = allowed
         return g
 
     def generate(self) -> dict[str, Any]:
@@ -289,7 +292,7 @@ class EgressConfig:
             "proxies": list(self.static_proxies),
             "proxy-providers": {p.name: p.to_config() for p in self.providers},
             "proxy-groups": [
-                {"name": c.client_id, **self._group_def()}
+                {"name": c.client_id, **self._group_def(c.client_id)}
                 for c in self.clients
             ]
             + [

@@ -158,6 +158,18 @@ command -v python3 >/dev/null 2>&1 || die_env "python3 not found"
 docker compose version >/dev/null 2>&1 || die_env "docker compose v2 not available"
 [ -f "$REPO_ROOT/compose.yaml" ] || die_env "compose.yaml not found in $REPO_ROOT"
 log "prerequisites ok (docker, compose v2, python3, compose.yaml)"
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" = 1 ]; then
+  EGRESSD_UID=1000
+  EGRESSD_GID=1000
+else
+  getent group vibelab-egressd >/dev/null || groupadd --system vibelab-egressd
+  id vibelab-egressd >/dev/null 2>&1 || \
+    useradd --system --gid vibelab-egressd --no-create-home \
+            --shell /usr/sbin/nologin vibelab-egressd
+  EGRESSD_UID="$(id -u vibelab-egressd)"
+  EGRESSD_GID="$(id -g vibelab-egressd)"
+fi
+export EGRESSD_UID EGRESSD_GID
 
 # ---------------------------------------------------------------------------
 # 2. persistent root + filesystem check (spec 38)
@@ -184,7 +196,7 @@ chmod 700 "$ROOT"
 # state/metrics/geo under $ROOT/egressd (mounted at /var/lib/egressd). The
 # root:0700 default would make its startup mkdir() fail with PermissionError
 # and crash-loop the container, so hand that one dir to the container user.
-chown 1000:1000 "$ROOT/egressd" 2>/dev/null || true
+chown -R "$EGRESSD_UID:$EGRESSD_GID" "$ROOT/egressd" 2>/dev/null || true
 chmod 755 "$ROOT/egressd"
 # egressd also WRITES the generated mihomo config to $ROOT/generated (mounted
 # at /var/lib/egressd/generated; mihomo reads it :ro). It must be owned by
@@ -192,9 +204,21 @@ chmod 755 "$ROOT/egressd"
 # 0700 (the host acceptance persistent_dirs_permissions check requires every
 # non-egressd dir under $ROOT to be 0700); ownership (not the mode) is what
 # lets uid 1000 write.
-chown 1000:1000 "$ROOT/generated" 2>/dev/null || true
+chown -R "$EGRESSD_UID:$EGRESSD_GID" "$ROOT/generated" 2>/dev/null || true
 chmod 700 "$ROOT/generated"
-log "persistent dirs ready (0700; egressd+generated -> uid 1000)"
+chown -R "$EGRESSD_UID:$EGRESSD_GID" "$ROOT/providers" 2>/dev/null || true
+chmod 700 "$ROOT/providers"
+log "persistent dirs ready (0700; egressd+generated -> service uid $EGRESSD_UID)"
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
+  install -d -o root -g root -m 0755 /etc/vibelab-egress
+  printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nVIBELAB_EGRESS_ROOT=%s\nVIBELAB_EGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\n' \
+    "$EGRESSD_UID" "$EGRESSD_GID" "$ROOT" "$SECRETS_DIR" "$DOCKER_GATEWAY" \
+    > /etc/vibelab-egress/compose.env
+  chmod 0644 /etc/vibelab-egress/compose.env
+fi
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
+  install -m 0755 "$REPO_ROOT/host/egress-providerctl" /usr/local/sbin/egress-providerctl
+fi
 
 # Seed the GEO datasets into the mihomo home dir. Mihomo v1.19.32 treats a
 # missing GeoIP.dat that it also cannot download as a FATAL config-parse
@@ -346,9 +370,12 @@ run_logged "python3 -m egressd.bootstrap_config" \
 #     egressd can read it. mihomo runs as root in its container, so it can
 #     still read the files regardless of host ownership.
 # ---------------------------------------------------------------------------
-log "making backend secrets readable by the egressd user (uid 1000)"
-chown -R 1000:1000 "$SECRETS_DIR" 2>/dev/null || \
-  log "  note: could not chown $SECRETS_DIR to uid 1000 (egressd may fail to read secrets)"
+log "making backend secrets readable by the egressd user (uid $EGRESSD_UID)"
+chown -R "$EGRESSD_UID:$EGRESSD_GID" "$SECRETS_DIR" 2>/dev/null || \
+  log "  note: could not chown $SECRETS_DIR to service uid (egressd may fail to read secrets)"
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
+  chmod 0755 /etc/vibelab-egress
+fi
 
 # ---------------------------------------------------------------------------
 # 9. compose deploy
@@ -369,6 +396,17 @@ run_logged "docker compose build vibelab-egress-egressd" \
 # Restart both services on install to load the freshly generated inputs.
 run_logged "docker compose up -d --force-recreate" docker compose up -d --force-recreate \
   || die_env "docker compose up -d --force-recreate failed (full log: $LOG_FILE)"
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ] && command -v systemctl >/dev/null; then
+  install -d -o root -g root -m 0755 /usr/local/libexec/vibelab-egress
+  install -o root -g root -m 0755 "$REPO_ROOT/host/egress-enroll" \
+    /usr/local/libexec/vibelab-egress/egress-enroll
+  install -o root -g root -m 0644 \
+    "$REPO_ROOT/host/units/vibelab-egress-enroll.service" \
+    /etc/systemd/system/vibelab-egress-enroll.service
+  systemctl daemon-reload
+  systemctl enable --now vibelab-egress-enroll.service
+  systemctl restart vibelab-egress-enroll.service
+fi
 log "waiting for services to become healthy (3 consecutive polls, 2s interval, 90s timeout)"
 # Require EVERY service to be healthy, not just any one. The old check
 # (grep '"healthy"') broke out as soon as mihomo was healthy, so it reported

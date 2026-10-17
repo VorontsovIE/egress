@@ -30,6 +30,18 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+# The installer records the dedicated service UID and non-default paths here.
+# These are non-secret Compose substitutions, never executable shell input.
+try:
+    with open("/etc/vibelab-egress/compose.env", encoding="utf-8") as _env_file:
+        for _line in _env_file:
+            _key, _sep, _value = _line.strip().partition("=")
+            if _sep and _key in {"EGRESSD_UID", "EGRESSD_GID", "VIBELAB_EGRESS_ROOT",
+                                "VIBELAB_EGRESS_SECRETS", "DOCKER_GATEWAY"}:
+                os.environ.setdefault(_key, _value)
+except OSError:
+    pass
+
 PROJ = "vibelab-egress"
 SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
 DEFAULT_ROOT = "/home/vibelab/openscience/egress"

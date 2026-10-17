@@ -6,6 +6,12 @@ execution environments (host, OpenScience/gVisor, другие контейне�
 клиентский пакет (`egressctl` + `egress-run`, stdlib-only) ставится локально
 в каждую среду.
 
+На host каждый локальный UID получает личный профиль автоматически при первом
+вызове клиента, без sudo и без домашнего каталога. Пользователь может добавить
+личную подписку или proxy через `egressctl source add`; в контейнере исходник
+остаётся внутри контейнера, а backend получает только нормализованные узлы
+(подробности: `INSTALL.md`, § «Личные профили и источники»).
+
 ```text
 Docker host
 ├── OpenScience stack (workload)
@@ -27,7 +33,7 @@ remote-exec service (TECH_SPEC §1.1, §10).
 
 | Файл | Назначение |
 |---|---|
-| `TECH_SPEC.md` | Источник правды по требованиям (51 раздел; layout §44, acceptance §49/50) |
+| `TECH_SPEC.md` | Источник правды по требованиям (52 раздела; layout §44, acceptance §49/50) |
 | `INSTALL.md` | Установка: A. backend (Docker host), B. client (каждая среда) |
 | `STATUS.md` | Статус фаз A0–A8, журнал решений — обновляется после каждого шага |
 | `POC_REPORT.md` | Отчёт Phase 0 PoC (22/22) |

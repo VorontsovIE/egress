@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG_PATH = "/etc/vibelab-egress/client.yaml"
+DEFAULT_ENROLL_SOCKET = "/run/vibelab-egress-enroll/enroll.sock"
 ENV_CONFIG = "VIBELAB_EGRESS_CONFIG"
 
 CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._\-]{1,64}")
@@ -38,6 +41,8 @@ class ClientConfig:
     environment: str
     tun_backend: str = "none"
     extra: dict = field(default_factory=dict)
+    _token_value: str | None = field(default=None, repr=False)
+    _proxy_auth_value: str | None = field(default=None, repr=False)
 
     def validate(self) -> None:
         """Structural validation (local, no network)."""
@@ -60,6 +65,8 @@ class ClientConfig:
 
     # ---- secrets (read from files, never stored in the yaml) ----
     def api_token(self) -> str:
+        if self._token_value is not None:
+            return self._token_value
         return self._read_secret(self.api_token_file, "api token")
 
     def default_proxy_auth(self) -> tuple[str, str]:
@@ -67,7 +74,8 @@ class ClientConfig:
 
         Format: ``user:password`` on a single line.
         """
-        raw = self._read_secret(self.default_proxy_auth_file, "default-proxy auth")
+        raw = self._proxy_auth_value if self._proxy_auth_value is not None else \
+            self._read_secret(self.default_proxy_auth_file, "default-proxy auth")
         if ":" not in raw:
             raise ConfigError(
                 f"default-proxy auth file {self.default_proxy_auth_file!r} "
@@ -156,6 +164,8 @@ def load_config(explicit_path: str | None = None) -> ClientConfig:
         path = Path(explicit_path)
     elif os.environ.get(ENV_CONFIG):
         path = Path(os.environ[ENV_CONFIG])
+    elif Path(os.environ.get("VIBELAB_EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)).exists():
+        return _load_host_socket()
     else:
         path = Path(DEFAULT_CONFIG_PATH)
     if not path.is_file():
@@ -180,3 +190,28 @@ def load_config(explicit_path: str | None = None) -> ClientConfig:
     )
     cfg.validate()
     return cfg
+
+
+def _load_host_socket() -> ClientConfig:
+    path = os.environ.get("VIBELAB_EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(30)
+            sock.connect(path)
+            sock.sendall(b'{"op":"get"}')
+            raw = sock.recv(4096)
+        data = json.loads(raw)
+        if not data.get("ok"):
+            raise ConfigError("host enrollment unavailable")
+        cfg = ClientConfig(
+            client_id=data["client_id"], control_url="http://127.0.0.1:9091",
+            proxy_host="127.0.0.1", default_proxy_port=1080,
+            oneshot_proxy_port=1081, api_token_file="(local socket)",
+            default_proxy_auth_file="(local socket)", environment="host",
+            tun_backend=data["tun_backend"], _token_value=data["token"],
+            _proxy_auth_value=data["proxy_auth"],
+        )
+        cfg.validate()
+        return cfg
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ConfigError("host enrollment unavailable") from exc

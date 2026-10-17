@@ -312,3 +312,26 @@ class TestCapabilities:
         assert code == 0
         data = json.loads(out)
         assert data["tun"]["status"] == "none"
+
+
+def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
+    from vibelab_egress_client import personal_sources
+    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    monkeypatch.setattr(personal_sources, "normalize", lambda name: "proxies: []\n")
+    raw = tmp_path / "subscription.txt"
+    raw.write_text("private-source-marker")
+    sent = []
+
+    class Stub:
+        def upload_personal(self, name, yaml_text):
+            sent.append((name, yaml_text))
+            return {"alias": name, "node_count": 1}
+
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
+                             "--file", str(raw), api_stub=Stub())
+    assert code == 0, err
+    assert "source added: demo" in out
+    assert sent == [("demo", "proxies: []\n")]
+    local = tmp_path / "sources" / "demo.json"
+    assert json.loads(local.read_text())["source"] == "private-source-marker"
+    assert local.stat().st_mode & 0o777 == 0o600

@@ -41,6 +41,7 @@ from .configgen import (
     OneShotSlot,
     ProviderDef,
 )
+from .personal import load_metadata
 
 
 def load_mihomo_secret() -> str | None:
@@ -97,8 +98,10 @@ def load_providers(providers_dir: str) -> list[ProviderDef]:
     for p in sorted(d.glob("*.yaml")):
         # the path is the absolute file path (inside the mihomo home), which is
         # what mihomo's file provider reads and what egressd re-reads on update.
+        mihomo_dir = os.environ.get("EGRESSD_MIHO_PROVIDER_DIR", providers_dir)
         providers.append(ProviderDef(
-            name=p.stem, type="file", path=str(p), prefix=f"{p.stem}-",
+            name=p.stem, type="file", path=str(Path(mihomo_dir) / p.name), prefix=f"{p.stem}-",
+            owner=(load_metadata(p.stem) or {}).get("client_id"),
         ))
     return providers
 

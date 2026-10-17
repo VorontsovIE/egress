@@ -41,6 +41,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
 # Default repo root = parent of the host/ dir containing this script, so the
@@ -53,7 +54,19 @@ MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016
 MIHOMO_ADMIN_PORT = 9090
 CLIENT_LIB_DIR = "/usr/local/lib/vibelab-egress"
 STACK_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
-EGRESSD_UID = 1000
+def _service_uid() -> int:
+    if os.environ.get("EGRESSD_UID"):
+        return int(os.environ["EGRESSD_UID"])
+    try:
+        for line in Path("/etc/vibelab-egress/compose.env").read_text().splitlines():
+            if line.startswith("EGRESSD_UID="):
+                return int(line.partition("=")[2])
+    except (OSError, ValueError):
+        pass
+    return 1000
+
+
+EGRESSD_UID = _service_uid()
 # Live-mode checks (daemon or backend required). Used to attach diagnosis
 # and actionable "next:" hints on failure.
 LIVE_CHECK_IDS = frozenset([

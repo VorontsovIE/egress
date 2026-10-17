@@ -91,6 +91,23 @@ class EgressApi:
     def list_providers(self) -> dict:
         return self._request("GET", "/v1/providers")
 
+    def list_personal(self) -> dict:
+        return self._request("GET", "/v1/personal/providers")
+
+    def add_personal(self, name: str, kind: str, source: str) -> dict:
+        return self._request("POST", "/v1/personal/providers",
+                             {"name": name, "kind": kind, "source": source})
+
+    def upload_personal(self, name: str, yaml_text: str) -> dict:
+        return self._request("PUT", f"/v1/personal/providers/{urllib.parse.quote(name)}/snapshot",
+                             {"yaml": yaml_text})
+
+    def refresh_personal(self, name: str) -> dict:
+        return self._request("POST", f"/v1/personal/providers/{urllib.parse.quote(name)}/refresh")
+
+    def delete_personal(self, name: str) -> dict:
+        return self._request("DELETE", f"/v1/personal/providers/{urllib.parse.quote(name)}")
+
     def update_provider(self, provider_id: str | None = None, via: str | None = None,
                         if_older_than: str | None = None) -> dict:
         body: dict[str, Any] = {}

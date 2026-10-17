@@ -49,6 +49,11 @@ WG_SECRET = "SECURITY-GATE-WG-PRIVATE-KEY-DO-NOT-LEAK-9999"
 # a surface violation.
 # ---------------------------------------------------------------------------
 DOCUMENTED_ENDPOINTS = {
+    ("GET", "/v1/personal/providers"),
+    ("POST", "/v1/personal/providers"),
+    ("POST", "/v1/personal/providers/{alias}/refresh"),
+    ("PUT", "/v1/personal/providers/{alias}/snapshot"),
+    ("DELETE", "/v1/personal/providers/{alias}"),
     ("GET", "/v1/health"),
     ("GET", "/v1/ready"),
     ("GET", "/v1/self"),

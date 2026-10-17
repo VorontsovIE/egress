@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Local, non-root UID enrollment service for host clients.
+
+The only operation returns the calling UID's own credentials. The peer UID is
+read from SO_PEERCRED; no UID, path, command, or client ID is accepted from the
+request. Backend credentials are written atomically, with the token last.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import socket
+import struct
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+MAX_FRAME = 1024
+LOCK = threading.RLock()
+
+
+def atomic_write(path: Path, value: str) -> None:
+    fd, name = tempfile.mkstemp(prefix=".client-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, 0o600)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def credentials(uid: int, clients: Path, tun_socket: Path) -> dict:
+    client_id = f"host-uid-{uid}"
+    token_path = clients / f"{client_id}.token"
+    proxy_path = clients / f"{client_id}.proxy-creds"
+    profile_path = clients / f"{client_id}.profile.json"
+    with LOCK:
+        clients.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(clients, 0o700)
+        token = token_path.read_text().strip() if token_path.exists() else ""
+        auth = proxy_path.read_text().strip() if proxy_path.exists() else ""
+        if not token:
+            token = secrets.token_urlsafe(32)
+        if not auth:
+            auth = f"{client_id}:{secrets.token_urlsafe(24)}"
+            atomic_write(proxy_path, auth + "\n")
+        modes = ["proxy", "tun"] if tun_socket.is_socket() else ["proxy"]
+        profile = {"client_id": client_id, "environment": "host", "modes": modes}
+        try:
+            current = json.loads(profile_path.read_text())
+        except (OSError, ValueError):
+            current = None
+        if current != profile:
+            atomic_write(profile_path, json.dumps(profile, sort_keys=True) + "\n")
+        if not token_path.exists() or not token_path.read_text().strip():
+            atomic_write(token_path, token + "\n")
+    return {"client_id": client_id, "token": token, "proxy_auth": auth,
+            "tun_backend": "host-helper" if "tun" in modes else "none"}
+
+
+def ready(data: dict, timeout: float = 25.0) -> bool:
+    deadline = time.monotonic() + timeout
+    token = data["token"]
+    user, password = data["proxy_auth"].split(":", 1)
+    while time.monotonic() < deadline:
+        try:
+            request = urllib.request.Request("http://127.0.0.1:9091/v1/self",
+                headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(request, timeout=1) as response:
+                if json.load(response).get("client_id") != data["client_id"]:
+                    raise OSError("identity mismatch")
+            with socket.create_connection(("127.0.0.1", 1080), timeout=1) as sock:
+                sock.sendall(b"\x05\x01\x02")
+                if sock.recv(2) != b"\x05\x02":
+                    raise OSError("SOCKS auth unavailable")
+                u, p = user.encode(), password.encode()
+                sock.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(p)]) + p)
+                if sock.recv(2) == b"\x01\x00":
+                    return True
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def serve(socket_path: Path, clients: Path, tun_socket: Path) -> None:
+    socket_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if socket_path.exists():
+        socket_path.unlink()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_path))
+    os.chmod(socket_path, 0o666)
+    server.listen(32)
+    active = threading.BoundedSemaphore(16)
+
+    def handle(conn: socket.socket) -> None:
+        try:
+            with conn:
+                conn.settimeout(30)
+                try:
+                    raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                    _, uid, _ = struct.unpack("iii", raw)
+                    body = conn.recv(MAX_FRAME + 1)
+                    if len(body) > MAX_FRAME or json.loads(body) != {"op": "get"}:
+                        raise ValueError("invalid request")
+                    result = credentials(uid, clients, tun_socket)
+                    if not ready(result):
+                        raise RuntimeError("backend not ready for this profile")
+                    response = {"ok": True, **result}
+                except (OSError, ValueError, RuntimeError):
+                    response = {"ok": False, "error": "enrollment unavailable"}
+                try:
+                    conn.sendall(json.dumps(response).encode() + b"\n")
+                except OSError:
+                    pass
+        finally:
+            active.release()
+
+    try:
+        while True:
+            conn, _ = server.accept()
+            if not active.acquire(blocking=False):
+                conn.close()
+                continue
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+    finally:
+        server.close()
+        socket_path.unlink(missing_ok=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--socket", default="/run/vibelab-egress-enroll/enroll.sock")
+    parser.add_argument("--clients-dir", default="/etc/vibelab-egress/secrets/clients")
+    parser.add_argument("--tun-socket", default="/run/vibelab-egress/tun-helper.sock")
+    args = parser.parse_args()
+    serve(Path(args.socket), Path(args.clients_dir), Path(args.tun_socket))
+
+
+if __name__ == "__main__":
+    main()

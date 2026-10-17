@@ -147,6 +147,14 @@ write_file "$CLIENTS_DIR/$CLIENT.token" "$API_TOKEN"
 write_file "$CLIENTS_DIR/$CLIENT.profile.json" "$PROFILE_JSON"
 write_file "$CLIENTS_DIR/$CLIENT.proxy-creds" "$PROXY_USER:$PROXY_PASS"
 chmod 700 "$SECRETS_DIR" "$CLIENTS_DIR"
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ] && id -u vibelab-egressd >/dev/null 2>&1; then
+  service_uid="$(id -u vibelab-egressd)"
+  service_gid="$(id -g vibelab-egressd)"
+  chown "$service_uid:$service_gid" "$CLIENTS_DIR" \
+    "$CLIENTS_DIR/$CLIENT.token" \
+    "$CLIENTS_DIR/$CLIENT.profile.json" \
+    "$CLIENTS_DIR/$CLIENT.proxy-creds"
+fi
 
 # ---------------------------------------------------------------------------
 # summary — paths + short hashes only, never secret values (spec section 37)

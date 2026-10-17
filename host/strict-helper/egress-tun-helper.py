@@ -14,7 +14,7 @@ the network setup, then DROPS to the caller's UID/GID before exec'ing the
 target. It is NOT a remote-exec API and is NOT reachable over the network.
 
 Security invariants (spec 21.4) -- each is enforced here and unit-tested:
-  * local only: bound to a group-restricted UNIX socket; no TCP bind.
+  * local only: bound to a UNIX socket with peer UID verification; no TCP bind.
   * caller identity from OS credentials (SO_PEERCRED), never from the body.
   * fixed protocol of operations only: `capability`, `run`, `cleanup`.
     Any other op / unknown field -> error. There is no free-form command
@@ -511,7 +511,9 @@ def serve(sock_path: str, known_routes: set[str],
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
     os.chown(sock_path, 0, group_id)
-    os.chmod(sock_path, 0o660)
+    # Every host UID may request a run. SO_PEERCRED supplies the actual caller
+    # identity, and the workload is executed only after dropping to that UID.
+    os.chmod(sock_path, 0o666)
     server.listen(16)
     audit("listen", socket=sock_path)
     instance = helper or Helper(known_routes, allowed_upstreams)

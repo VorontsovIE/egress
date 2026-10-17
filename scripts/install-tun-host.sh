@@ -12,7 +12,7 @@ LIBEXEC='/usr/local/libexec/vibelab-egress'
 UNIT='/etc/systemd/system/vibelab-egress-tun-helper.service'
 
 usage() {
-  echo 'usage: install-tun-host.sh --user HOST_USER [--docker-gateway IPv4]' >&2
+  echo 'usage: install-tun-host.sh [--docker-gateway IPv4]' >&2
   exit 2
 }
 
@@ -25,7 +25,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" = 0 ] || { echo 'install-tun-host: root required' >&2; exit 3; }
-id "$HOST_USER" >/dev/null 2>&1 || { echo 'install-tun-host: valid --user required' >&2; exit 2; }
+if [ -n "$HOST_USER" ]; then
+  id "$HOST_USER" >/dev/null 2>&1 || { echo 'install-tun-host: invalid --user' >&2; exit 2; }
+fi
 python3 - "$DOCKER_GATEWAY" <<'PY'
 import ipaddress
 import sys
@@ -51,7 +53,8 @@ getent group vibelab-egress-worker >/dev/null || groupadd --system vibelab-egres
 id vibelab-egress-worker >/dev/null 2>&1 || \
   useradd --system --gid vibelab-egress-worker --no-create-home \
           --shell /usr/sbin/nologin vibelab-egress-worker
-usermod -a -G vibelab-egress-tun "$HOST_USER"
+# Access is now granted by the local socket's mode and SO_PEERCRED, so no
+# per-account group change or new login session is required.
 
 install -d -o root -g root -m 0755 "$LIBEXEC"
 for file in egress-tun-helper.py native_netns.py exec_as_caller.py; do
@@ -87,4 +90,4 @@ systemctl is-active --quiet vibelab-egress-tun-helper.service || {
   echo 'install-tun-host: helper failed to start; inspect journalctl -u vibelab-egress-tun-helper' >&2
   exit 4
 }
-echo "install-tun-host: installed; $HOST_USER must start a new login session for group access"
+echo "install-tun-host: installed; every local UID can use the socket"

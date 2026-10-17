@@ -51,6 +51,7 @@ class RouteInfo:
     last_test_at: str | None = None
     benchmark_mbps: float | None = None
     benchmark_at: str | None = None
+    owner: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,10 +112,12 @@ class RouteCatalog:
         providers: dict[str, list[str]],
         prefixes: dict[str, str] | None = None,
         protocols: dict[str, dict[str, str]] | None = None,
+        owners: dict[str, str] | None = None,
     ) -> "RouteCatalog":
         """Rebuild the catalog. ``protocols`` maps provider -> {clean: type}."""
         prefixes = prefixes or {}
         protocols = protocols or {}
+        owners = owners or {}
         by_id: dict[str, RouteInfo] = {}
         mihomo_to_id: dict[str, str] = {}
         id_to_mihomo: dict[str, str] = {}
@@ -138,6 +141,7 @@ class RouteCatalog:
                     provider=prov,
                     display_name=display,
                     protocol=protocols.get(prov, {}).get(clean, "unknown"),
+                    owner=owners.get(prov),
                     country=cc,
                     city=city,
                 )
@@ -174,6 +178,10 @@ class RouteCatalog:
     def exists(self, route_id: str) -> bool:
         return route_id in self._by_id
 
+    def visible(self, route_id: str, client_id: str) -> bool:
+        route = self._by_id.get(route_id)
+        return route is not None and route.owner in (None, client_id)
+
     def all_route_ids(self) -> list[str]:
         return list(self._by_id.keys())
 
@@ -187,9 +195,12 @@ class RouteCatalog:
         self,
         country: str | None = None,
         provider: str | None = None,
+        client_id: str | None = None,
     ) -> list[RouteInfo]:
         out = []
         for r in self._by_id.values():
+            if client_id is not None and r.owner not in (None, client_id):
+                continue
             if r.id == DIRECT:
                 # direct is always a candidate when no provider filter is set
                 if provider is not None and provider != "builtin":

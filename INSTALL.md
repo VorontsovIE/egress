@@ -31,10 +31,9 @@ Persistent root (по умолчанию `/home/vibelab/openscience/egress`,
 ```text
 <root>/
   mihomo/        # bbolt state (store-selected), logs
-  providers/     # provider subscriptions (read-only mount)
+  providers/     # normalized provider YAML; egressd writes, Mihomo reads
   generated/     # generated mihomo config + docker-cidrs.yaml
   egressd/       # metrics.sqlite, session state
-  geo/           # GeoIP.dat, GeoSite.dat, ASN.mmdb
 ```
 
 Перед install скрипт показывает `findmnt -T` и `df -h` для выбранного
@@ -49,13 +48,32 @@ state растёт со временем).
 ```text
 mihomo_api_secret      # Mihomo admin API (только egressd)
 devbridge.token        # narrow dev/test bridge
-providers/             # subscription-секреты (blanc, xeovo, custom VLESS)
+providers/             # source metadata (.json), raw static sources (.source)
 clients/               # <id>.token, <id>.profile.json, <id>.proxy-creds
 ```
 
-Provider subscriptions кладутся в `providers/` вручную (или через
-adapters, A2) **до** первого deploy, либо добавляются позже — egressd
-подхватит при update.
+Каждый источник добавляется через host-only `egress-providerctl`; один ID
+соответствует одному набору маршрутов. Метаданные и исходный файл живут
+только в secrets, а нормализованный YAML создаёт egressd в persistent root.
+
+```bash
+sudo egress-providerctl add --id myprovider --subscription-url
+# URL вводится скрыто; схема по умолчанию HTTPS, явный HTTP допустим.
+sudo egress-providerctl add --id custom --source-file /path/to/links.txt
+# Исходный файл должен иметь режим 0600.
+sudo egress-providerctl list
+sudo egress-providerctl update --id myprovider
+sudo egress-providerctl update --id custom --source-file /path/to/new-links.txt
+sudo egress-providerctl remove --id custom
+```
+
+Поддерживаются Clash/Mihomo YAML, base64-подписки, URI VLESS, VMess,
+Trojan, Shadowsocks, Hysteria2, TUIC и WireGuard `.conf`. URL-источники
+обновляются каждые 10 минут. Ошибка загрузки или разбора сохраняет
+предыдущие маршруты. Ручное обновление через выбранный маршрут:
+`egressctl update --provider myprovider --via otherprovider:route`.
+Проверка: `egressctl providers`, `egressctl list`, `egressctl list --healthy`,
+`egressctl test myprovider:route`.
 
 ### Firewall
 
@@ -300,3 +318,35 @@ Production OpenScience: bake client package + Skill в image либо
 `egressctl`: 0 ok · 1 runtime/API · 2 usage · 3 config · 4 auth ·
 5 identity mismatch. `egress-run`: 0 ok · 2 usage · 3 config · 4 auth ·
 6 unsupported mode · (иначе — exit code child-процесса).
+
+## Личные профили и источники (§52)
+
+После установки backend на host локальному пользователю не требуется
+`provision-client.sh` или sudo: первый вызов `egressctl whoami` обращается к
+`/run/vibelab-egress-enroll/enroll.sock`. Служба определяет UID по Unix socket,
+создаёт профиль `host-uid-<uid>` и возвращает учётные данные в память клиента.
+Работает и для системных UID без home. Проверка от имени такого пользователя:
+
+```bash
+egressctl whoami
+egressctl source add personal --url 'https://public.example/subscription'
+egressctl source list
+egressctl list --provider <provider_id>
+egressctl source refresh personal
+egressctl source remove personal
+```
+
+Для файла вместо `--url` используется `--file /path/to/subscription`. Личные
+маршруты видны только владельцу; глобальные providers доступны всем.
+
+В контейнере `egressctl source add` хранит исходный URL или содержимое файла
+внутри контейнера: `${VIBELAB_EGRESS_SOURCE_DIR}` либо
+`${XDG_STATE_HOME}/vibelab-egress/sources` либо
+`~/.local/state/vibelab-egress/sources`, 0700/0600. Для `source add/refresh`
+нужен PyYAML в контейнере (`python3 -m pip install PyYAML` при сборке image).
+Установщик копирует optional adapters рядом с stdlib-only клиентом.
+Контейнер отправляет backend только нормализованный YAML, поэтому его сырой
+URL/файл не доступен и не управляется со стороны host. Каталог источников
+нужно включить в persistent volume или image, если они должны переживать
+пересоздание контейнера. Обновление контейнерного URL запускается внутри
+контейнера командой `egressctl source refresh <name>` (например, таймером).

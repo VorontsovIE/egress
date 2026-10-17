@@ -1098,3 +1098,32 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   ранее дал 19 PASS / 0 FAIL / 3 SKIP). **A6 остаётся открытой** до live
   PASS provider-зависимых §50.1/§50.3/§50.4 и проверки оставшихся SKIP.
   Актуальные задачи по ролям — `handoff.md`.
+
+- 2026-10-17: реализован host-side импорт proxy-источников. Новый
+  `egress-providerctl` добавляет URL (скрытый ввод) или локальный файл 0600,
+  показывает redacted-статус, обновляет и удаляет provider ID. Метаданные URL
+  и исходные URI хранятся в `/etc/vibelab-egress/secrets/providers/`,
+  нормализованные YAML — в persistent `providers/` (egressd RW, Mihomo RO).
+  Исправлен путь file-provider в runtime config. Добавлены URI VMess/Trojan/
+  Shadowsocks/Hysteria2/TUIC, base64 URI, сохранена поддержка Clash YAML,
+  VLESS и WireGuard. URL refresh каждые 600 с; ручной `--via` использует
+  выделенный one-shot SOCKS slot, не общий selector. Ошибка обновления
+  оставляет предыдущий provider YAML и каталог; ответ и журнал содержат
+  только фиксированный код ошибки. Оффлайн-свит: **345 passed** (uv Python
+  3.13, отдельный временный state). Live на globe ещё не выполнен: доступный
+  Docker относится к `vorontsov-x13`, здесь нет целевого backend/secrets и
+  URL реальной подписки. A6 остаётся открытой до реального импорта и live
+  acceptance с независимым verifier.
+
+- 2026-10-17: добавлены личные профили для host UID и изолированные providers.
+  Локальная enrollment-служба создаёт профиль по `SO_PEERCRED` при первом
+  обращении без sudo и без home. Backend работает под выделенным служебным
+  UID; TUN helper socket доступен всем локальным UID с проверкой peer UID.
+  Каталог, default, проверки, benchmark, one-shot и обновления providers
+  ограничены владельцем. `egressctl source add/list/refresh/remove` поддерживает
+  личные источники. Host хранит исходник в backend; контейнер хранит его только
+  в собственном каталоге и передаёт нормализованный снимок. Добавлены
+  регенерация, hot reload и rollback личного provider. ТЗ расширено §52.
+  Оффлайн-свит после изменений: **353 passed** (uv Python 3.13, временный
+  state, включая install harness, Mihomo ACL-группы и запрет redirect на
+  приватный адрес). Live на целевом host ещё требуется после deploy.

@@ -35,6 +35,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 
 API_VERSION = "v1"
@@ -319,17 +320,32 @@ def scan_providers(providers_dir: Path) -> dict[str, dict[str, Any]]:
         log.warning("scan_providers: cannot read providers dir %s (%s)",
                     providers_dir, e)
         return manifest
-    for p in provider_files:
+    from .provider_sources import ID_RE, load_source, read_status, source_dir
+    from .personal import load_metadata
+
+    ids = {p.stem for p in provider_files if ID_RE.fullmatch(p.stem)}
+    try:
+        ids.update(p.stem for p in source_dir().glob("*.json") if ID_RE.fullmatch(p.stem))
+    except OSError:
+        pass
+    for provider_id in sorted(ids):
+        p = providers_dir / f"{provider_id}.yaml"
         try:
             _, _, mtime = _read_provider_file(p)
         except Exception:
             mtime = 0
-        manifest[p.stem] = {
-            "type": "file",
+        source = load_source(provider_id)
+        personal = load_metadata(provider_id)
+        manifest[provider_id] = {
+            "type": source["type"] if source else (personal or {}).get("kind", "file"),
             "path": str(p),
-            "prefix": f"{p.stem}-",
-            "source": os.environ.get(f"EGRESSD_PROVIDER_SOURCE_{p.stem}"),
+            "prefix": f"{provider_id}-",
+            "source": source or os.environ.get(f"EGRESSD_PROVIDER_SOURCE_{provider_id}"),
             "mtime": mtime,
+            "status": read_status(provider_id),
+            "owner": (personal or {}).get("client_id"),
+            "kind": (personal or {}).get("kind"),
+            "personal": personal,
         }
     return manifest
 
@@ -349,17 +365,20 @@ def rebuild_catalog(app: FastAPI) -> Any:
     providers: dict[str, list[str]] = {}
     prefixes: dict[str, str] = {}
     protocols: dict[str, dict[str, str]] = {}
+    owners: dict[str, str] = {}
     for prov, meta in manifest.items():
         try:
             names, types, _ = _read_provider_file(Path(meta["path"]))
-        except Exception as e:
-            log.warning("provider read failed", extra={"provider": prov, "error": str(e)})
+        except Exception:
+            log.warning("provider read failed", extra={"provider": prov})
             names, types = [], {}
         providers[prov] = names
         prefixes[prov] = meta.get("prefix", f"{prov}-")
         protocols[prov] = types
+        if meta.get("owner"):
+            owners[prov] = meta["owner"]
 
-    catalog = RouteCatalog().build(providers, prefixes, protocols)
+    catalog = RouteCatalog().build(providers, prefixes, protocols, owners)
     # enrich with the most recent benchmark sample per route (spec 25/26:
     # the throughput score in `best --speed-aware` and the route listing).
     try:
@@ -525,6 +544,11 @@ def create_app() -> FastAPI:
     else:
         app.state.configctl = None
 
+    # A single background loop checks URL sources every ten minutes. It uses
+    # the same update function as the public manual trigger below.
+    import threading
+    app.state.provider_update_lock = threading.RLock()
+
     # ---- auth -------------------------------------------------------------
     def auth_profile(request: Request) -> dict[str, Any]:
         header = request.headers.get("authorization", "")
@@ -537,6 +561,15 @@ def create_app() -> FastAPI:
 
     def client_id(profile: dict[str, Any]) -> str:
         return profile["client_id"]
+
+    def visible(profile: dict[str, Any], route: str) -> bool:
+        return app.state.catalog.visible(route, client_id(profile))
+
+    def require_visible(profile: dict[str, Any], route: str) -> None:
+        if not app.state.catalog.exists(route):
+            raise HTTPException(status_code=400, detail="unknown route")
+        if not visible(profile, route):
+            raise HTTPException(status_code=404, detail="unknown route")
 
     def audit(event: str, client_id: str | None = None, **fields: Any) -> None:
         """Structured audit event (spec 40). Never logs secret values."""
@@ -575,6 +608,9 @@ def create_app() -> FastAPI:
                 "default.get", "default.set",
                 "default.mode.get", "default.mode.set",
                 "providers.list", "providers.update",
+                "personal.providers.list", "personal.providers.add",
+                "personal.providers.snapshot", "personal.providers.refresh",
+                "personal.providers.delete",
                 "test", "probe-domain", "benchmark", "benchmarks", "best",
                 "oneshot.session", "oneshot.list", "oneshot.close",
                 "proxy.default-capability",
@@ -598,8 +634,9 @@ def create_app() -> FastAPI:
                 "reachable": st == 200,
                 "version": ver.get("version") if isinstance(ver, dict) else None,
             },
-            "catalog": {"routes": len(app.state.catalog.all_route_ids()),
-                        "providers": app.state.catalog.providers()},
+            "catalog": {"routes": len(app.state.catalog.filter(client_id=client_id(profile))),
+                        "providers": sorted({r.provider for r in app.state.catalog.filter(
+                            client_id=client_id(profile)) if r.id != "direct"})},
         }
 
     @app.get("/v1/capabilities")
@@ -632,7 +669,8 @@ def create_app() -> FastAPI:
                     provider: str | None = None,
                     healthy: bool | None = None) -> dict[str, Any]:
         profile = auth_profile(request)
-        routes = app.state.catalog.filter(country=country, provider=provider)
+        routes = app.state.catalog.filter(country=country, provider=provider,
+                                          client_id=client_id(profile))
         if healthy is True:
             routes = [r for r in routes if r.healthy is True]
         elif healthy is False:
@@ -648,7 +686,8 @@ def create_app() -> FastAPI:
         profile = auth_profile(request)
         r = app.state.catalog.get(route_id)
         if r is None:
-            raise HTTPException(status_code=404, detail=f"unknown route {route_id!r}")
+            raise HTTPException(status_code=404, detail="unknown route")
+        require_visible(profile, route_id)
         out = r.to_dict()
         out["client_id"] = profile["client_id"]
         return out
@@ -659,8 +698,7 @@ def create_app() -> FastAPI:
         cid = client_id(profile)
         if not _ROUTE_ID_RE.fullmatch(route_id):
             raise HTTPException(status_code=400, detail=f"invalid route id {route_id!r}")
-        if not app.state.catalog.exists(route_id):
-            raise HTTPException(status_code=400, detail=f"unknown route {route_id!r}")
+        require_visible(profile, route_id)
         prev, changed = app.state.state.set_route(cid, route_id, reason)
         selector_applied = True
         if changed:
@@ -732,18 +770,211 @@ def create_app() -> FastAPI:
         profile = auth_profile(request)
         out = []
         for prov, meta in app.state.provider_manifest.items():
+            if meta.get("owner") not in (None, client_id(profile)):
+                continue
             nodes = app.state.catalog.filter(provider=prov)
             out.append({
                 "id": prov,
                 "type": meta.get("type"),
                 "node_count": len(nodes),
                 "last_update": meta.get("mtime"),
+                "last_success": meta.get("status", {}).get("last_success"),
+                "last_error": meta.get("status", {}).get("last_error"),
             })
         return {"client_id": client_id(profile), "providers": out}
 
+    # Personal sources are scoped by the authenticated profile. Host profiles
+    # keep their source in the backend; container profiles upload a normalized
+    # snapshot and retain their URL/source inside the container.
+    def _personal_view(meta: dict[str, Any]) -> dict[str, Any]:
+        return {key: meta.get(key) for key in
+                ("alias", "provider_id", "kind", "node_count", "updated_at")}
+
+    def _commit_personal(meta: dict[str, Any], yaml_text: str) -> dict[str, Any]:
+        from .personal import atomic_bytes, load_metadata, metadata_path, save_metadata
+        provider = meta["provider_id"]
+        path = Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")) / f"{provider}.yaml"
+        old = path.read_bytes() if path.exists() else None
+        old_meta = load_metadata(provider)
+        try:
+            atomic_bytes(path, yaml_text.encode())
+            save_metadata(meta)
+            if app.state.configctl is not None:
+                app.state.configctl.regenerate()
+                ok, _ = app.state.configctl.hot_reload()
+                if not ok:
+                    raise RuntimeError("mihomo reload failed")
+            rebuild_catalog(app)
+        except Exception:
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_bytes(path, old)
+            if old_meta is None:
+                metadata_path(meta["client_id"], meta["alias"]).unlink(missing_ok=True)
+            else:
+                save_metadata(old_meta)
+            if app.state.configctl is not None:
+                app.state.configctl.regenerate()
+                app.state.configctl.hot_reload()
+            rebuild_catalog(app)
+            raise HTTPException(status_code=503, detail="personal provider unavailable")
+        affected = app.state.state.reconcile(app.state.catalog)
+        for rec in affected:
+            _select(rec["client_id"], "DIRECT", timeout=5.0)
+        _terminate_sessions_for_removed_routes()
+        return _personal_view(meta)
+
+    @app.get("/v1/personal/providers")
+    def personal_providers(request: Request) -> dict[str, Any]:
+        from .personal import list_owned
+        profile = auth_profile(request)
+        return {"client_id": client_id(profile),
+                "providers": [_personal_view(m) for m in list_owned(client_id(profile))]}
+
+    @app.post("/v1/personal/providers")
+    async def add_personal_provider(request: Request) -> dict[str, Any]:
+        from adapters.common import normalize_source
+        from .personal import (MAX_PROVIDERS, MAX_SOURCE_BYTES, fetch_url,
+                               list_owned, load_metadata, provider_id, validate_url,
+                               validate_yaml)
+        profile = auth_profile(request)
+        if profile.get("environment") != "host":
+            raise HTTPException(status_code=403, detail="host source operation only")
+        body = await _json_body(request)
+        alias, kind = body.get("name"), body.get("kind")
+        try:
+            provider = provider_id(client_id(profile), alias)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid personal provider name") from None
+        if load_metadata(provider) or len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
+            raise HTTPException(status_code=409, detail="personal provider exists or limit reached")
+        source = body.get("source")
+        if kind not in ("url", "file") or not isinstance(source, str) or \
+                len(source.encode()) > MAX_SOURCE_BYTES:
+            raise HTTPException(status_code=400, detail="invalid personal source")
+        try:
+            if kind == "url":
+                validate_url(source)
+                raw = fetch_url(source).decode("utf-8")
+            else:
+                raw = source
+            yaml_text, _ = normalize_source(raw)
+            yaml_text, count = validate_yaml(yaml_text)
+        except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+            raise HTTPException(status_code=400, detail="personal source rejected") from None
+        meta = {"provider_id": provider, "client_id": client_id(profile),
+                "alias": alias, "kind": kind, "source": source,
+                "node_count": count, "updated_at": int(time.time())}
+        with app.state.provider_update_lock:
+            return _commit_personal(meta, yaml_text)
+
+    @app.put("/v1/personal/providers/{alias}/snapshot")
+    async def upload_personal_snapshot(alias: str, request: Request) -> dict[str, Any]:
+        from .personal import (MAX_PROVIDERS, list_owned, load_metadata,
+                               provider_id, validate_yaml)
+        profile = auth_profile(request)
+        if profile.get("environment") == "host":
+            raise HTTPException(status_code=403, detail="container snapshot operation only")
+        body = await _json_body(request)
+        try:
+            provider = provider_id(client_id(profile), alias)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid personal provider name") from None
+        old = load_metadata(provider)
+        if old is None and len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
+            raise HTTPException(status_code=409, detail="personal provider limit reached")
+        if old is not None and old.get("client_id") != client_id(profile):
+            raise HTTPException(status_code=404, detail="unknown personal provider")
+        if not isinstance(body.get("yaml"), str):
+            raise HTTPException(status_code=400, detail="normalized YAML required")
+        try:
+            yaml_text, count = validate_yaml(body["yaml"])
+        except (ValueError, yaml.YAMLError):
+            raise HTTPException(status_code=400, detail="personal snapshot rejected") from None
+        meta = {"provider_id": provider, "client_id": client_id(profile),
+                "alias": alias, "kind": "snapshot", "node_count": count,
+                "updated_at": int(time.time())}
+        with app.state.provider_update_lock:
+            return _commit_personal(meta, yaml_text)
+
+    @app.delete("/v1/personal/providers/{alias}")
+    def delete_personal_provider(alias: str, request: Request) -> dict[str, Any]:
+        from .personal import load_metadata, metadata_path, provider_id
+        profile = auth_profile(request)
+        try:
+            provider = provider_id(client_id(profile), alias)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=404, detail="unknown personal provider") from None
+        meta = load_metadata(provider)
+        if meta is None or meta.get("client_id") != client_id(profile):
+            raise HTTPException(status_code=404, detail="unknown personal provider")
+        path = Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")) / f"{provider}.yaml"
+        with app.state.provider_update_lock:
+            old = path.read_bytes() if path.exists() else None
+            path.unlink(missing_ok=True)
+            metadata_path(client_id(profile), alias).unlink(missing_ok=True)
+            try:
+                if app.state.configctl is not None:
+                    app.state.configctl.regenerate()
+                    ok, _ = app.state.configctl.hot_reload()
+                    if not ok:
+                        raise RuntimeError("mihomo reload failed")
+            except Exception:
+                from .personal import atomic_bytes, save_metadata
+                if old is not None:
+                    atomic_bytes(path, old)
+                save_metadata(meta)
+                if app.state.configctl is not None:
+                    try:
+                        app.state.configctl.regenerate()
+                        app.state.configctl.hot_reload()
+                    except Exception:
+                        log.error("personal provider rollback reload failed",
+                                  extra={"provider": provider})
+                rebuild_catalog(app)
+                raise HTTPException(status_code=503, detail="personal provider unavailable") from None
+            rebuild_catalog(app)
+            affected = app.state.state.reconcile(app.state.catalog)
+            for rec in affected:
+                _select(rec["client_id"], "DIRECT", timeout=5.0)
+            _terminate_sessions_for_removed_routes()
+        return {"deleted": True, "name": alias}
+
+    @app.post("/v1/personal/providers/{alias}/refresh")
+    def refresh_personal_provider(alias: str, request: Request) -> dict[str, Any]:
+        from adapters.common import normalize_source
+        from .personal import fetch_url, load_metadata, provider_id, validate_yaml
+        profile = auth_profile(request)
+        try:
+            provider = provider_id(client_id(profile), alias)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=404, detail="unknown personal provider") from None
+        meta = load_metadata(provider)
+        if meta is None or meta.get("client_id") != client_id(profile):
+            raise HTTPException(status_code=404, detail="unknown personal provider")
+        if meta.get("kind") != "url":
+            raise HTTPException(status_code=400, detail="provider has no backend URL")
+        try:
+            raw = fetch_url(meta["source"]).decode("utf-8")
+            normalized, _ = normalize_source(raw)
+            normalized, count = validate_yaml(normalized)
+        except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+            raise HTTPException(status_code=502, detail="personal source refresh failed") from None
+        updated = {**meta, "node_count": count, "updated_at": int(time.time())}
+        with app.state.provider_update_lock:
+            return _commit_personal(updated, normalized)
+
     def _update_provider(profile: dict[str, Any], provider_id: str,
                          via: str | None, if_older_than: float | None) -> dict[str, Any]:
+        with app.state.provider_update_lock:
+            return _update_provider_locked(profile, provider_id, via, if_older_than)
+
+    def _update_provider_locked(profile: dict[str, Any], provider_id: str,
+                                via: str | None, if_older_than: float | None) -> dict[str, Any]:
         cid = client_id(profile)
+        if via is not None and (not isinstance(via, str) or not _ROUTE_ID_RE.fullmatch(via)):
+            raise HTTPException(status_code=400, detail="invalid transport route")
         # re-scan so a changed provider source/config is picked up (spec 12)
         app.state.provider_manifest = scan_providers(
             Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")))
@@ -751,6 +982,33 @@ def create_app() -> FastAPI:
         if provider_id not in manifest:
             raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}")
         meta = manifest[provider_id]
+        if meta.get("owner") not in (None, cid):
+            raise HTTPException(status_code=404, detail="unknown provider")
+        if meta.get("owner") is not None:
+            if via is not None:
+                raise HTTPException(status_code=400,
+                                    detail="personal source refresh uses direct transport")
+            if meta.get("kind") != "url":
+                return {"provider": provider_id, "ok": True, "updated": False,
+                        "reason": "local_snapshot"}
+            from adapters.common import normalize_source
+            from .personal import fetch_url, load_metadata, validate_yaml
+            personal_meta = load_metadata(provider_id)
+            if personal_meta is None:
+                raise HTTPException(status_code=404, detail="unknown provider")
+            try:
+                raw = fetch_url(personal_meta["source"]).decode("utf-8")
+                normalized, _ = normalize_source(raw)
+                normalized, count = validate_yaml(normalized)
+            except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+                raise HTTPException(status_code=502, detail="personal source refresh failed") from None
+            updated = {**personal_meta, "node_count": count,
+                       "updated_at": int(time.time())}
+            result = _commit_personal(updated, normalized)
+            return {"provider": provider_id, "ok": True, "updated": True,
+                    "node_count": result["node_count"]}
+        if via and via != "direct":
+            require_visible(profile, via)
         # if_older_than (seconds): skip if the artifact is fresh enough
         if if_older_than is not None and meta.get("mtime"):
             age = time.time() - meta["mtime"]
@@ -764,11 +1022,16 @@ def create_app() -> FastAPI:
         if meta.get("source"):
             method = "adapter"
             try:
-                _fetch_and_write_provider(provider_id, meta, via)
-            except Exception as e:
+                _fetch_and_write_provider(provider_id, meta, via, app)
+            except Exception:
+                if isinstance(meta["source"], dict):
+                    from .provider_sources import write_status
+                    write_status(provider_id, ok=False)
+                    manifest[provider_id]["status"] = {**meta.get("status", {}),
+                                                        "last_error": "update_failed"}
                 audit("provider_update", cid, provider=provider_id, ok=False,
-                      method=method, via=via, error=str(e))
-                raise HTTPException(status_code=502, detail=f"provider fetch failed: {e}")
+                      method=method, via=via, error="update_failed")
+                raise HTTPException(status_code=502, detail="provider update failed")
         elif meta.get("type") == "http":
             st, _ = app.state.mihomo.update_provider(provider_id)
             if st not in (200, 204):
@@ -778,6 +1041,11 @@ def create_app() -> FastAPI:
 
         # re-read inventory + rebuild catalog (spec 12 step 2/3)
         rebuild_catalog(app)
+        if isinstance(meta.get("source"), dict):
+            from .provider_sources import write_status
+            write_status(provider_id, ok=True)
+            app.state.provider_manifest[provider_id]["status"] = {
+                "last_success": int(time.time()), "last_error": None}
         # hot-reload mihomo so the new node set is live (spec A3: egressd owns
         # config generation + reload). store-selected:true preserves selectors.
         reload_ok, reload_detail = False, "no config controller (offline mode)"
@@ -833,7 +1101,9 @@ def create_app() -> FastAPI:
         profile = auth_profile(request)
         body = await _json_body(request)
         results = []
-        for prov in list(app.state.provider_manifest.keys()):
+        for prov, meta in list(app.state.provider_manifest.items()):
+            if meta.get("owner") not in (None, client_id(profile)):
+                continue
             try:
                 results.append(_update_provider(profile, prov, body.get("via"),
                                                 _parse_duration(body.get("if_older_than"))))
@@ -841,6 +1111,48 @@ def create_app() -> FastAPI:
                 results.append({"provider": prov, "ok": False, "updated": False,
                                 "error": e.detail})
         return {"client_id": client_id(profile), "results": results}
+
+    def _periodic_updates() -> None:
+        from .provider_sources import REFRESH_INTERVAL
+        while True:
+            time.sleep(REFRESH_INTERVAL)
+            manifest = scan_providers(Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")))
+            for provider_id, meta in manifest.items():
+                if meta.get("kind") == "url" and meta.get("owner"):
+                    try:
+                        _update_provider({"client_id": meta["owner"]}, provider_id,
+                                         None, REFRESH_INTERVAL)
+                    except Exception:
+                        log.warning("scheduled personal provider update failed",
+                                    extra={"provider": provider_id})
+                elif meta.get("type") == "url":
+                    try:
+                        _update_provider({"client_id": "scheduler"}, provider_id, None, REFRESH_INTERVAL)
+                    except Exception:
+                        log.warning("scheduled provider update failed", extra={"provider": provider_id})
+
+    @app.on_event("startup")
+    def start_provider_updates() -> None:
+        threading.Thread(target=_periodic_updates, daemon=True, name="provider-updates").start()
+        if app.state.configctl is not None:
+            def watch_clients() -> None:
+                signature = app.state.registry._state_sig()
+                while True:
+                    time.sleep(1)
+                    current = app.state.registry._state_sig()
+                    if current is None or current == signature:
+                        continue
+                    with app.state.provider_update_lock:
+                        try:
+                            app.state.registry.reload()
+                            app.state.configctl.regenerate()
+                            ok, _ = app.state.configctl.hot_reload()
+                            if ok:
+                                signature = current
+                        except Exception:
+                            log.warning("client inventory reload failed")
+            threading.Thread(target=watch_clients, daemon=True,
+                             name="client-inventory").start()
 
     # ---- health/latency test (spec 23) ----
     @app.post("/v1/test")
@@ -857,10 +1169,13 @@ def create_app() -> FastAPI:
     def _run_tests(profile: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
         cid = client_id(profile)
         if "route" in body and body["route"]:
+            existing = app.state.catalog.get(body["route"])
+            if existing is not None and not visible(profile, body["route"]):
+                raise HTTPException(status_code=404, detail="unknown route")
             route_ids = [body["route"]]
         else:
             routes = app.state.catalog.filter(country=body.get("country"),
-                                              provider=body.get("provider"))
+                                              provider=body.get("provider"), client_id=cid)
             route_ids = [r.id for r in routes][: app.state.test_max_routes]
         results = []
         for rid in route_ids:
@@ -924,7 +1239,8 @@ def create_app() -> FastAPI:
 
         if body.get("all"):
             routes = app.state.catalog.filter(country=body.get("country"),
-                                              provider=body.get("provider"))
+                                              provider=body.get("provider"),
+                                              client_id=client_id(profile))
             route_ids = [r.id for r in routes][:max_routes]
         elif body.get("routes"):
             route_ids = list(body["routes"])
@@ -932,6 +1248,8 @@ def create_app() -> FastAPI:
             route_ids = [app.state.state.get(client_id(profile))["route"]]
 
         cid = client_id(profile)
+        for rid in route_ids:
+            require_visible(profile, rid)
         kw = dict(scheme=body.get("scheme", "https"), port=body.get("port"),
                   path=body.get("path", "/"), method=body.get("method", "GET"),
                   check=check, expected=expected)
@@ -957,11 +1275,14 @@ def create_app() -> FastAPI:
         nbytes = _parse_bytes(body.get("bytes", "8M"))
         top = int(body.get("top_latency", 5))
         if body.get("route"):
+            existing = app.state.catalog.get(body["route"])
+            if existing is not None and not visible(profile, body["route"]):
+                raise HTTPException(status_code=404, detail="unknown route")
             route_ids = [body["route"]]
         else:
             # shortlist by latency (spec 25 pipeline: health -> shortlist -> bench)
             routes = app.state.catalog.filter(country=body.get("country"),
-                                              provider=body.get("provider"))
+                                              provider=body.get("provider"), client_id=cid)
             ranked = [r for r in routes if r.id != "direct" and r.healthy
                       and r.latency_ms is not None]
             ranked.sort(key=lambda r: r.latency_ms)
@@ -1016,7 +1337,8 @@ def create_app() -> FastAPI:
              speed_aware: bool = False) -> dict[str, Any]:
         profile = auth_profile(request)
         cid = client_id(profile)
-        routes = app.state.catalog.filter(country=country, provider=provider)
+        routes = app.state.catalog.filter(country=country, provider=provider,
+                                          client_id=cid)
 
         # spec 26: with --domain the route must have a fresh successful probe
         # for that domain, or be in the on-demand probed shortlist. We reuse
@@ -1095,8 +1417,7 @@ def create_app() -> FastAPI:
         mode = body.get("mode", "proxy")
         if not route:
             raise HTTPException(status_code=400, detail="'route' is required")
-        if not app.state.catalog.exists(route):
-            raise HTTPException(status_code=400, detail=f"unknown route {route!r}")
+        require_visible(profile, route)
         if mode == "tun":
             raise HTTPException(status_code=400,
                                 detail="unsupported_in_environment: tun one-shot not available")
@@ -1218,6 +1539,9 @@ def create_app() -> FastAPI:
         profile = auth_profile(request)
         cid = client_id(profile)
         rebuild_catalog(app)
+        if app.state.configctl is not None:
+            app.state.configctl.regenerate()
+            app.state.configctl.hot_reload()
         affected = app.state.state.reconcile(app.state.catalog)
         for rec in affected:
             app.state.metrics.add_default_selection(
@@ -1232,7 +1556,7 @@ def create_app() -> FastAPI:
         for c, st in app.state.state.all().items():
             _select(c, app.state.catalog.mihomo_name(st["route"]), timeout=5.0)
         audit("reconcile", cid, fallbacks=len(affected), terminated_sessions=terminated)
-        return {"client_id": cid, "routes": len(app.state.catalog.all_route_ids()),
+        return {"client_id": cid, "routes": len(app.state.catalog.filter(client_id=cid)),
                 "fallbacks": affected, "terminated_sessions": terminated}
 
     # ---- doctor (spec 40) ----
@@ -1246,8 +1570,9 @@ def create_app() -> FastAPI:
         checks = {
             "mihomo": "up" if mihomo_ok else "down",
             "mihomo_version": ver.get("version") if isinstance(ver, dict) else None,
-            "catalog_routes": len(app.state.catalog.all_route_ids()),
-            "providers": app.state.catalog.providers(),
+            "catalog_routes": len(app.state.catalog.filter(client_id=cid)),
+            "providers": sorted({r.provider for r in app.state.catalog.filter(
+                client_id=cid) if r.id != "direct"}),
             "default": app.state.state.get(cid),
             "oneshot_slots": len(app.state.allocator),
             "oneshot_free": app.state.allocator.free_count(),
@@ -1338,7 +1663,7 @@ def _parse_expected(value: Any) -> tuple[int, int]:
 
 
 def _fetch_and_write_provider(provider_id: str, meta: dict[str, Any],
-                              via: str | None) -> None:
+                              via: str | None, app: FastAPI | None = None) -> None:
     """Controlled fetch of a provider subscription + adapter + atomic write (spec 12).
 
     ``via`` optionally names the egress route the fetch is transported through
@@ -1346,14 +1671,46 @@ def _fetch_and_write_provider(provider_id: str, meta: dict[str, Any],
     fetched bytes are normalized by the provider adapter and written atomically
     (with last-known-good) to the provider file.
     """
-    import sys
-
     from adapters import atomic_write, get_adapter
+    from adapters.common import normalize_source
+    from .provider_sources import source_dir
 
     source = meta["source"]
-    raw = _fetch_bytes(source, via)
-    adapter = get_adapter(provider_id)
-    yaml_text, _meta = adapter.normalize(raw.decode("utf-8", errors="replace"))
+    if isinstance(source, dict):
+        if source["type"] == "file":
+            if via not in (None, "direct"):
+                raise ValueError("static source does not use a transport route")
+            raw = (source_dir() / f"{provider_id}.source").read_bytes()
+        else:
+            url = source["url"]
+            if via and via != "direct":
+                if app is None or not app.state.catalog.exists(via):
+                    raise ValueError("unknown transport route")
+                slot = app.state.allocator.allocate(5.0)
+                if slot is None:
+                    raise ValueError("no free transport slot")
+                try:
+                    if not app.state.mihomo or not app.state.catalog.mihomo_name(via):
+                        raise ValueError("transport route unavailable")
+                    name = app.state.catalog.mihomo_name(via)
+                    st, _ = app.state.mihomo.put(f"/proxies/{slot.group}", {"name": name})
+                    selected, group = app.state.mihomo.get(f"/proxies/{slot.group}")
+                    if st not in (200, 204) or selected != 200 or not isinstance(group, dict) or group.get("now") != name:
+                        raise ValueError("transport route unavailable")
+                    from .provider_fetch import socks_fetch
+                    raw = socks_fetch(url, app.state.probe_host, app.state.oneshot_proxy_port,
+                                      slot.user, slot.password)
+                finally:
+                    app.state.allocator.release(slot)
+            else:
+                from .provider_fetch import direct_fetch
+                raw = direct_fetch(url)
+    else:
+        raw = _fetch_bytes(source, via)
+    if isinstance(source, dict):
+        yaml_text, _meta = normalize_source(raw.decode("utf-8"))
+    else:
+        yaml_text, _meta = get_adapter(provider_id).normalize(raw.decode("utf-8"))
     atomic_write(Path(meta["path"]), yaml_text)
 
 

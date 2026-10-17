@@ -38,6 +38,7 @@ import re
 import sys
 import tempfile
 import time
+from urllib.parse import parse_qs, unquote, urlparse
 from pathlib import Path
 from typing import Any, Callable
 
@@ -117,8 +118,10 @@ def detect_format(text: str) -> str:
     s = text.strip()
     if not s:
         raise ValueError("empty subscription source")
-    if s.startswith("vless://"):
+    if all(line.strip().lower().startswith("vless://") for line in s.splitlines() if line.strip()):
         return "vless"
+    if all(line.strip().lower().startswith(("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")) for line in s.splitlines() if line.strip()):
+        return "uris"
     if re.search(r"^\[Interface\]", s, re.MULTILINE):
         return "wg-conf"
     # base64: a single line of base64 that decodes to Clash YAML
@@ -127,7 +130,7 @@ def detect_format(text: str) -> str:
             dec = base64.b64decode(s, validate=True).decode("utf-8")
         except Exception:
             dec = ""
-        if "proxies" in dec:
+        if "proxies" in dec or dec.strip().startswith(("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")):
             return "base64"
     if "proxies" in s:
         return "clash"
@@ -145,7 +148,9 @@ def _parse_clash_yaml(text: str) -> list[dict[str, Any]]:
         raise RuntimeError("PyYAML is required to parse Clash YAML")
     data = yaml.safe_load(text)
     if isinstance(data, dict) and isinstance(data.get("proxies"), list):
-        return [p for p in data["proxies"] if isinstance(p, dict)]
+        if any(not isinstance(p, dict) for p in data["proxies"]):
+            raise ValueError("Clash YAML contains an invalid proxy")
+        return data["proxies"]
     if isinstance(data, dict) and {"name", "type"}.issubset(data):
         return [data]
     raise ValueError("Clash YAML must contain a 'proxies' list")
@@ -153,7 +158,7 @@ def _parse_clash_yaml(text: str) -> list[dict[str, Any]]:
 
 def _parse_base64(text: str) -> list[dict[str, Any]]:
     dec = base64.b64decode(text.strip(), validate=True).decode("utf-8")
-    return _parse_clash_yaml(dec)
+    return _PARSERS[detect_format(dec)](dec)
 
 
 def _parse_wg_conf(text: str) -> list[dict[str, Any]]:
@@ -256,11 +261,82 @@ def _parse_vless(text: str) -> list[dict[str, Any]]:
     return proxies
 
 
+def _parse_uris(text: str) -> list[dict[str, Any]]:
+    proxies: list[dict[str, Any]] = []
+    for index, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        u = urlparse(line)
+        scheme = u.scheme.lower()
+        if scheme == "vmess":
+            payload = line.split("://", 1)[1]
+            payload += "=" * (-len(payload) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+            p = {"name": data.get("ps") or f"vmess-{index}", "type": "vmess",
+                 "server": data["add"], "port": int(data["port"]),
+                 "uuid": data["id"], "alterId": int(data.get("aid", 0)),
+                 "cipher": data.get("scy") or "auto"}
+            if data.get("tls") == "tls":
+                p["tls"] = True
+                p["servername"] = data.get("sni") or data["add"]
+            if data.get("net") and data["net"] != "tcp":
+                p["network"] = data["net"]
+            proxies.append(p)
+            continue
+        if scheme not in ("vless", "trojan", "ss", "hysteria2", "hy2", "tuic"):
+            raise ValueError("unsupported proxy URI scheme")
+        if scheme == "ss":
+            # SIP002 permits either base64(userinfo)@host or a base64 URI.
+            if "@" not in u.netloc:
+                decoded = base64.urlsafe_b64decode(u.netloc + "=" * (-len(u.netloc) % 4)).decode()
+                u = urlparse("ss://" + decoded + u.path + ("?" + u.query if u.query else "") + ("#" + u.fragment if u.fragment else ""))
+            userinfo = unquote(u.username or "")
+            if ":" not in userinfo:
+                userinfo = base64.urlsafe_b64decode(userinfo + "=" * (-len(userinfo) % 4)).decode()
+            cipher, password = userinfo.split(":", 1)
+            p = {"type": "ss", "cipher": cipher, "password": password}
+        elif scheme == "vless":
+            p = {"type": "vless", "uuid": unquote(u.username or "")}
+        elif scheme == "trojan":
+            p = {"type": "trojan", "password": unquote(u.username or "")}
+        elif scheme in ("hysteria2", "hy2"):
+            p = {"type": "hysteria2", "password": unquote(u.username or "")}
+        else:
+            p = {"type": "tuic", "uuid": unquote(u.username or ""),
+                 "password": unquote(u.password or "")}
+        if not u.hostname or not u.port or not (p.get("uuid") or p.get("password")):
+            raise ValueError("proxy URI missing required field")
+        p.update(name=unquote(u.fragment) or f"{p['type']}-{index}",
+                 server=u.hostname, port=u.port)
+        q = parse_qs(u.query)
+        first = lambda key, default="": q.get(key, [default])[0]
+        if scheme == "vless":
+            security = first("security", "tls")
+            p["tls"] = security in ("tls", "reality")
+            if security == "reality":
+                p["reality-opts"] = {"public-key": first("pbk"), "short-id": first("sid")}
+            if first("flow"):
+                p["flow"] = first("flow")
+        if scheme in ("vless", "trojan"):
+            if first("sni"):
+                p["servername"] = first("sni")
+            if first("type") and first("type") != "tcp":
+                p["network"] = first("type")
+        if scheme in ("hysteria2", "hy2", "tuic") and first("sni"):
+            p["sni"] = first("sni")
+        proxies.append(p)
+    if not proxies:
+        raise ValueError("subscription produced zero proxies")
+    return proxies
+
+
 _PARSERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "clash": _parse_clash_yaml,
     "base64": _parse_base64,
     "wg-conf": _parse_wg_conf,
     "vless": _parse_vless,
+    "uris": _parse_uris,
 }
 
 
@@ -284,6 +360,22 @@ def normalize_proxies(
     seen: set[str] = set()
     for p in proxies:
         p = dict(p)
+        kind = p.get("type")
+        try:
+            port = int(p.get("port"))
+        except (TypeError, ValueError):
+            port = 0
+        if not p.get("server") or not 1 <= port <= 65535:
+            raise ValueError("proxy missing server or valid port")
+        p["port"] = port
+        required = {
+            "vless": ("uuid",), "vmess": ("uuid",),
+            "trojan": ("password",), "ss": ("cipher", "password"),
+            "hysteria2": ("password",), "tuic": ("uuid", "password"),
+            "wireguard": ("private-key", "public-key"),
+        }.get(kind, ())
+        if not kind or any(not p.get(field) for field in required):
+            raise ValueError("proxy missing required fields")
         raw = str(p.get("name", "node"))
         base = name_map(raw) if name_map else raw
         name = _apply_prefix(_safe_name(base), prefix)

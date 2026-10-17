@@ -86,6 +86,7 @@ services:
     # with an explicit, reviewed privilege grant (spec section 21, phase A6).
 
   vibelab-egress-egressd:
+    user: "${EGRESSD_UID:-1000}:${EGRESSD_GID:-1000}"
     build:
       context: .
       dockerfile: egressd/Dockerfile
@@ -101,7 +102,9 @@ services:
       # persisted one-shot passwords created by bootstrap_config. Without this
       # path they choose different fallback passwords and SOCKS auth fails.
       EGRESSD_ONESHOT_SLOTS_FILE: /etc/vibelab-egress/secrets/clients/oneshot-slots.json
-      EGRESSD_PROVIDERS_DIR: /etc/vibelab-egress/secrets/providers
+      EGRESSD_PROVIDERS_DIR: /var/lib/egressd/providers
+      EGRESSD_PROVIDER_SOURCES_DIR: /etc/vibelab-egress/secrets/providers
+      EGRESSD_MIHO_PROVIDER_DIR: /root/.config/mihomo/providers
       EGRESSD_DATA_DIR: /var/lib/egressd
       EGRESSD_GENERATED_DIR: /var/lib/egressd/generated
       # Where egressd writes the generated mihomo config. Must be the shared
@@ -126,6 +129,7 @@ services:
       - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/egressd:/var/lib/egressd
       # generated config output (egressd writes, mihomo reads via its mount)
       - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/generated:/var/lib/egressd/generated
+      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/providers:/var/lib/egressd/providers
       # backend secrets (client tokens for auth, mihomo secret, provider subs)
       - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
     depends_on:

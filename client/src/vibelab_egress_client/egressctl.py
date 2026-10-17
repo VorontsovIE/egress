@@ -66,6 +66,9 @@ def _call(args: argparse.Namespace, fn, human_fn) -> Any:
             sys.exit(EXIT_AUTH)
         print(f"error: {e}", file=sys.stderr)
         sys.exit(EXIT_RUNTIME)
+    except (OSError, ValueError, RuntimeError) as e:
+        print(f"error: {type(e).__name__} in local source operation", file=sys.stderr)
+        sys.exit(EXIT_RUNTIME)
     return data
 
 
@@ -127,8 +130,59 @@ def cmd_providers(args) -> None:
         _print_json(data)
     else:
         for p in providers:
-            print(f"{p.get('id', '?')}: {p.get('name', p.get('id'))} "
-                  f"updated={p.get('last_update', '?')} nodes={p.get('node_count', '?')}")
+            print(f"{p.get('id', '?')}: type={p.get('type', '?')} "
+                  f"nodes={p.get('node_count', '?')} "
+                  f"last_success={p.get('last_success') or '-'} "
+                  f"last_error={p.get('last_error') or '-'}")
+
+
+def cmd_source_list(args) -> None:
+    data = _call(args, _api(args).list_personal, None)
+    if args.json:
+        _print_json(data)
+    else:
+        for item in data.get("providers", []):
+            print(f"{item['alias']}\t{item['kind']}\t{item['node_count']} nodes")
+
+
+def cmd_source_add(args) -> None:
+    from . import personal_sources as local
+    cfg = _load(args)
+    api = EgressApi(cfg, timeout=45)
+    if not local.ALIAS.fullmatch(args.name):
+        raise SystemExit("invalid source name")
+    if args.url:
+        kind, value = "url", args.url
+    else:
+        kind, value = "file", Path(args.file).read_text()
+    if len(value.encode()) > local.MAX_SOURCE_BYTES:
+        raise SystemExit("source too large")
+    if cfg.environment == "host":
+        data = _call(args, lambda: api.add_personal(args.name, kind, value), None)
+    else:
+        local.save(args.name, kind, value)
+        data = _call(args, lambda: api.upload_personal(args.name, local.normalize(args.name)), None)
+    _emit(args, data, f"source added: {args.name}")
+
+
+def cmd_source_refresh(args) -> None:
+    from . import personal_sources as local
+    cfg = _load(args)
+    api = EgressApi(cfg, timeout=45)
+    if cfg.environment == "host":
+        data = _call(args, lambda: api.refresh_personal(args.name), None)
+    else:
+        data = _call(args, lambda: api.upload_personal(args.name, local.normalize(args.name)), None)
+    _emit(args, data, f"source refreshed: {args.name}")
+
+
+def cmd_source_remove(args) -> None:
+    from . import personal_sources as local
+    cfg = _load(args)
+    data = _call(args, lambda: EgressApi(cfg).delete_personal(args.name), None)
+    if cfg.environment != "host":
+        local.remove(args.name)
+    _emit(args, data, f"source removed: {args.name}")
 
 
 def cmd_update(args) -> None:
@@ -425,6 +479,23 @@ def build_parser() -> argparse.ArgumentParser:
     ms.set_defaults(fn=cmd_mode_set)
 
     add("providers", cmd_providers, "list providers")
+
+    source = add("source", cmd_source_list, "personal subscription sources")
+    ssub = source.add_subparsers(dest="source_cmd", required=True)
+    sl = ssub.add_parser("list", help="list personal sources")
+    sl.set_defaults(fn=cmd_source_list)
+    sa = ssub.add_parser("add", help="add a private subscription or proxy source")
+    sa.add_argument("name")
+    choice = sa.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--url")
+    choice.add_argument("--file")
+    sa.set_defaults(fn=cmd_source_add)
+    sr = ssub.add_parser("refresh", help="refresh a private source")
+    sr.add_argument("name")
+    sr.set_defaults(fn=cmd_source_refresh)
+    sd = ssub.add_parser("remove", help="remove a private source")
+    sd.add_argument("name")
+    sd.set_defaults(fn=cmd_source_remove)
 
     up = add("update", cmd_update, "trigger provider update")
     up.add_argument("--provider", help="specific provider id")
