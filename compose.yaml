@@ -116,6 +116,9 @@ services:
       EGRESSD_CONFIG_OUT: /var/lib/egressd/generated/config.yaml
       # Mihomo accepts reload paths only under its own home directory.
       EGRESSD_MIHO_CONFIG_PATH: /root/.config/mihomo/generated/config.yaml
+      # Addresses inside Mihomo, distinct from MIHOMO_API_URL used by egressd.
+      EGRESSD_MIHO_CONTROLLER_LISTEN: 0.0.0.0:9090
+      EGRESSD_LISTENER_LISTEN: 0.0.0.0
       EGRESSD_LISTEN: 0.0.0.0:9091
       # Probe engine + benchmark downloads run inside the egressd container
       # and must reach mihomo's SOCKS listeners across the compose network

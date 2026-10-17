@@ -1145,3 +1145,14 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   же общий файл в контейнере Mihomo. Добавлен regression test с проверкой
   compose mounts и reload path. Локальный офлайн-свит: **354 passed**;
   повторная live-проверка на globe ещё требуется.
+
+- 2026-10-18: повторная установка на globe с `e0dfef0` выявила следующий
+  runtime-дефект: Mihomo стал unhealthy, поскольку egressd успел перезаписать
+  bootstrap-конфиг перед его пересозданием. Runtime-генератор использовал
+  `MIHOMO_API_URL` (адрес подключения из egressd) как bind адрес самого
+  Mihomo и оставлял SOCKS listeners на `127.0.0.1` внутри контейнера.
+  Разделены адрес API подключения и bind адрес контроллера, в compose явно
+  заданы `0.0.0.0:9090` и `0.0.0.0` для SOCKS; installer останавливает старый
+  egressd до bootstrap-регенерации. Добавлены regression tests конфига и
+  порядка установки. Локальный офлайн-свит: **355 passed**; live-повтор на
+  globe ожидается.

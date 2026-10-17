@@ -161,6 +161,10 @@ grep -q '"summary"' "$logf" 2>/dev/null
 check "success: harness JSON report teed into install log" $?
 grep -q "docker compose up -d --force-recreate" "$logf" 2>/dev/null
 check "success: regenerated config forces container recreate" $?
+stop_line="$(grep -n -m1 'run: docker compose stop vibelab-egress-egressd' "$logf" | cut -d: -f1)"
+bootstrap_line="$(grep -n -m1 'run: python3 -m egressd.bootstrap_config' "$logf" | cut -d: -f1)"
+[ -n "$stop_line" ] && [ -n "$bootstrap_line" ] && [ "$stop_line" -lt "$bootstrap_line" ]
+check "success: old egressd stopped before bootstrap regeneration" $?
 
 # ---------------------------------------------------------------------------
 # 2. fail A: compose up fails

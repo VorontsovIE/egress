@@ -25,6 +25,9 @@ case "${1:-}" in
         echo "stub: compose build $*"
         exit "${STUB_DOCKER_BUILD_RC:-0}"
         ;;
+      stop)
+        echo "stub: compose stop $*"
+        ;;
       up)
         echo "stub: compose up $*"
         if [ "${STUB_DOCKER_UP_RC:-0}" != "0" ]; then

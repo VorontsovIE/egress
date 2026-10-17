@@ -21,6 +21,7 @@ egressd is layout-agnostic:
   * EGRESSD_PROVIDERS_DIR     -- provider *.yaml files (inside the mihomo home)
   * EGRESSD_CONFIG_OUT        -- where the generated config.yaml is written
   * EGRESSD_MIHO_CONFIG_PATH  -- path to that file inside the mihomo container
+  * EGRESSD_MIHO_CONTROLLER_LISTEN -- Mihomo's own admin API bind address
   * EGRESSD_DEFAULT_PROXY_PORT / EGRESSD_ONESHOT_PROXY_PORT / MIHOMO_API_URL
   * EGRESSD_LISTENER_LISTEN   -- SOCKS bind address (127.0.0.1 or 0.0.0.0)
   * EGRESSD_DOCKER_CIDRS_FILE -- optional hard-direct CIDRs (spec 35)
@@ -140,7 +141,7 @@ def build_egress_config() -> EgressConfig | None:
         oneshot_slots=load_oneshot_slots(slots_file, slots_count),
         default_port=int(os.environ.get("EGRESSD_DEFAULT_PROXY_PORT", "18080")),
         oneshot_port=int(os.environ.get("EGRESSD_ONESHOT_PROXY_PORT", "18081")),
-        controller=os.environ.get("MIHOMO_API_URL", "http://127.0.0.1:9090").replace("http://", ""),
+        controller=os.environ.get("EGRESSD_MIHO_CONTROLLER_LISTEN", "0.0.0.0:9090"),
         dns_listen=os.environ.get("EGRESSD_DNS_LISTEN", "127.0.0.1:1053"),
         listener_listen=os.environ.get("EGRESSD_LISTENER_LISTEN", "127.0.0.1"),
     )

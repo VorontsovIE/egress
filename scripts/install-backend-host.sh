@@ -352,6 +352,11 @@ fi
 # ---------------------------------------------------------------------------
 STEP=8; STEP_NAME="bootstrap config"
 log "generating initial mihomo config (bootstrap)"
+# A running egressd writes the same shared config. Stop it before bootstrap
+# so it cannot replace the startup config while Mihomo is being recreated.
+run_logged "docker compose stop vibelab-egress-egressd" \
+  docker compose stop vibelab-egress-egressd \
+  || die_env "docker compose stop failed (full log: $LOG_FILE)"
 touch "$ROOT/providers/.gitkeep"
 run_logged "python3 -m egressd.bootstrap_config" \
   env PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \

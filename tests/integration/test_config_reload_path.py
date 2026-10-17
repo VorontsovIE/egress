@@ -8,7 +8,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "egressd" / "src"))
 
-from egressd.configctl import ConfigController  # noqa: E402
+from egressd.configctl import ConfigController, build_egress_config  # noqa: E402
 
 
 class MihomoStub:
@@ -43,3 +43,26 @@ def test_hot_reload_uses_mihomo_visible_config_path():
                            env["EGRESSD_MIHO_CONFIG_PATH"])
     assert ctl.hot_reload() == (True, "reloaded")
     assert stub.path == env["EGRESSD_MIHO_CONFIG_PATH"]
+
+
+def test_runtime_config_binds_inside_mihomo(monkeypatch, tmp_path):
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    env = compose["services"]["vibelab-egress-egressd"]["environment"]
+    clients = tmp_path / "clients"
+    clients.mkdir()
+    (clients / "host-main.token").write_text("fake-token\n")
+    (clients / "host-main.proxy-creds").write_text("fake-user:fake-password\n")
+    secret = tmp_path / "secret"
+    secret.write_text("fake-secret\n")
+    monkeypatch.setenv("MIHOMO_SECRET_FILE", str(secret))
+    monkeypatch.setenv("EGRESSD_CLIENTS_DIR", str(clients))
+    monkeypatch.setenv("EGRESSD_PROVIDERS_DIR", str(tmp_path / "providers"))
+    monkeypatch.setenv("EGRESSD_ONESHOT_SLOTS", "0")
+    for key in ("MIHOMO_API_URL", "EGRESSD_MIHO_CONTROLLER_LISTEN",
+                "EGRESSD_LISTENER_LISTEN"):
+        monkeypatch.setenv(key, env[key])
+
+    cfg = build_egress_config().generate()
+    assert cfg["external-controller"] == "0.0.0.0:9090"
+    assert {listener["listen"] for listener in cfg["listeners"]} == {"0.0.0.0"}
+    assert cfg["external-controller"] != env["MIHOMO_API_URL"].removeprefix("http://")
