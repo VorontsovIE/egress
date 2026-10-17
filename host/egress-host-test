@@ -37,6 +37,7 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -49,7 +50,7 @@ ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
 _DEFAULT_REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 REPO = os.environ.get("VIBELAB_EGRESS_REPO", _DEFAULT_REPO)
 SECRETS = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
-HOST_CLIENT_DIR = "/etc/vibelab-egress"
+HOST_CLIENT_DIR = os.environ.get("VIBELAB_EGRESS_HOST_CLIENT_DIR", "/etc/vibelab-egress")
 MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e"
 MIHOMO_ADMIN_PORT = 9090
 CLIENT_LIB_DIR = "/usr/local/lib/vibelab-egress"
@@ -581,8 +582,19 @@ def check_host_client_config_token_permissions():
         add("host_client_config_token_permissions", "skipped",
             f"host client dir absent: {HOST_CLIENT_DIR}")
         return
+    legacy_files = ("client.yaml", "client.token", "default-proxy.auth")
+    if not any(os.path.isfile(os.path.join(HOST_CLIENT_DIR, fn)) for fn in legacy_files):
+        enroll_sock = "/run/vibelab-egress-enroll/enroll.sock"
+        try:
+            info = os.stat(enroll_sock)
+        except OSError:
+            info = None
+        if info and stat.S_ISSOCK(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o666:
+            add("host_client_config_token_permissions", "pass",
+                "host uses UID enrollment socket (0666, SO_PEERCRED)")
+            return
     bad = []
-    for fn in ("client.yaml", "client.token", "default-proxy.auth"):
+    for fn in legacy_files:
         p = os.path.join(HOST_CLIENT_DIR, fn)
         if not os.path.isfile(p):
             bad.append(f"{fn} missing")
@@ -640,11 +652,13 @@ def check_host_whoami_identity(live):
                 f"egressctl whoami rc={p.returncode}: {p.stderr.strip()[:200]}")
             return
         data = json.loads(p.stdout)
-        if data.get("client_id") == "host-main":
-            add("host_whoami_identity", "pass", "host whoami = host-main")
+        actual = data.get("client_id")
+        expected = f"host-uid-{os.getuid()}"
+        if actual == "host-main" or (actual == expected and data.get("environment") == "host"):
+            add("host_whoami_identity", "pass", f"host whoami = {actual}")
         else:
             add("host_whoami_identity", "fail",
-                f"host whoami = {data.get('client_id')!r} (expected host-main)")
+                f"host whoami = {actual!r} (expected {expected} or legacy host-main)")
     except Exception as e:
         add("host_whoami_identity", "fail", f"egressctl whoami failed: {e}")
 

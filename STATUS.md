@@ -1127,3 +1127,11 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   Оффлайн-свит после изменений: **353 passed** (uv Python 3.13, временный
   state, включая install harness, Mihomo ACL-группы и запрет redirect на
   приватный адрес). Live на целевом host ещё требуется после deploy.
+
+- 2026-10-17: после переноса на globe офлайн-свит показал 352 PASS / 1 FAIL:
+  stubbed install harness подхватывал реальный `/etc/vibelab-egress` и UID
+  службы из host `compose.env`. Тест теперь указывает временный каталог
+  client bundle и фиксированный тестовый UID; live harness принимает новый
+  `host-uid-<UID>` наряду с legacy `host-main` и поддерживает установку без
+  legacy client-файлов через enrollment socket. Локальный офлайн-свит после
+  исправления — **353 passed**; повторный прогон на globe ожидается.

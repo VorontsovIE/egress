@@ -44,6 +44,9 @@ check() { # <name> <rc> [detail]
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# The host may already have a production client under /etc. Stubbed tests
+# must inspect only their temporary fixture, never the machine's live files.
+export VIBELAB_EGRESS_HOST_CLIENT_DIR="$TMP/absent-host-client"
 
 IS_ROOT=0
 [ "$(id -u)" = "0" ] && IS_ROOT=1
@@ -84,6 +87,7 @@ scenario_install() {
   [ "${SCENARIO_WITH_FIREWALL:-0}" = "1" ] && skip_fw=""
   ( cd "$REPO"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
+      VIBELAB_EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
       VIBELAB_EGRESS_TEST_MODE=1 \
       bash scripts/install-backend-host.sh \
       --root "$d/root" --secrets-dir "$d/secrets" \
@@ -349,6 +353,8 @@ scenario_verify() { # <dir> [KEY=VAL...]
   for a in "$@"; do envs+=("$a"); done
   ( cd "$REPO"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
+      VIBELAB_EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
+      EGRESSD_UID=1000 EGRESSD_GID=1000 \
       VIBELAB_EGRESS_ROOT="$d/root" VIBELAB_EGRESS_SECRETS="$d/secrets" \
       bash scripts/verify-backend-host.sh \
       --root "$d/root" --secrets-dir "$d/secrets" \
