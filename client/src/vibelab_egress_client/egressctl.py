@@ -154,7 +154,11 @@ def cmd_source_add(args) -> None:
     if args.url:
         kind, value = "url", args.url
     else:
-        kind, value = "file", Path(args.file).read_text()
+        try:
+            kind, value = "file", Path(args.file).read_text()
+        except (OSError, UnicodeError) as e:
+            print(f"source file error: {e}", file=sys.stderr)
+            sys.exit(EXIT_USAGE)
     if len(value.encode()) > local.MAX_SOURCE_BYTES:
         raise SystemExit("source too large")
     if cfg.environment == "host":

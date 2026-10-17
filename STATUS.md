@@ -1156,3 +1156,12 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   egressd до bootstrap-регенерации. Добавлены regression tests конфига и
   порядка установки. Локальный офлайн-свит: **355 passed**; live-повтор на
   globe ожидается.
+
+- 2026-10-18: на globe два непривилегированных UID (`egress-smoke-a/b`)
+  успешно получили разные `host-uid-*` профили; `doctor` для первого показал
+  рабочие config, control plane, identity и proxy endpoint. Проба
+  `source add --file /path/to/subscription` указала несуществующий примерный
+  путь и завершилась traceback. CLI теперь сообщает `source file error`
+  с кодом 2 для отсутствующего или нечитаемого файла; INSTALL.md уточняет
+  необходимость фактического пути, доступного вызывающему UID. Клиентские
+  тесты: **29 passed**. Live-проверка импорта реальной подписки ещё требуется.

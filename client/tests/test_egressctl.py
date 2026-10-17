@@ -335,3 +335,14 @@ def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
     local = tmp_path / "sources" / "demo.json"
     assert json.loads(local.read_text())["source"] == "private-source-marker"
     assert local.stat().st_mode & 0o777 == 0o600
+
+
+def test_source_add_missing_file_reports_usage_error(monkeypatch, cfg_file, tmp_path):
+    missing = tmp_path / "missing-subscription.yaml"
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
+                             "--file", str(missing))
+    assert code == egressctl.EXIT_USAGE
+    assert out == ""
+    assert "source file error:" in err
+    assert str(missing) in err
+    assert "Traceback" not in err
