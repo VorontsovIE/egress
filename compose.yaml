@@ -114,6 +114,8 @@ services:
       # (mihomo would never see a runtime regeneration) and it is not writable
       # by the non-root egressd user (uid 1000), so a regenerate() would crash.
       EGRESSD_CONFIG_OUT: /var/lib/egressd/generated/config.yaml
+      # Mihomo accepts reload paths only under its own home directory.
+      EGRESSD_MIHO_CONFIG_PATH: /root/.config/mihomo/generated/config.yaml
       EGRESSD_LISTEN: 0.0.0.0:9091
       # Probe engine + benchmark downloads run inside the egressd container
       # and must reach mihomo's SOCKS listeners across the compose network

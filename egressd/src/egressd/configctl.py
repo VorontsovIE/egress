@@ -20,6 +20,7 @@ egressd is layout-agnostic:
   * EGRESSD_ONESHOT_SLOTS_FILE-- {os_i: password}
   * EGRESSD_PROVIDERS_DIR     -- provider *.yaml files (inside the mihomo home)
   * EGRESSD_CONFIG_OUT        -- where the generated config.yaml is written
+  * EGRESSD_MIHO_CONFIG_PATH  -- path to that file inside the mihomo container
   * EGRESSD_DEFAULT_PROXY_PORT / EGRESSD_ONESHOT_PROXY_PORT / MIHOMO_API_URL
   * EGRESSD_LISTENER_LISTEN   -- SOCKS bind address (127.0.0.1 or 0.0.0.0)
   * EGRESSD_DOCKER_CIDRS_FILE -- optional hard-direct CIDRs (spec 35)
@@ -152,9 +153,10 @@ class ConfigController:
     """Regenerates the Mihomo config and hot-reloads it (spec A3)."""
 
     def __init__(self, egress_config: EgressConfig, config_out: str | Path,
-                 mihomo: Any):
+                 mihomo: Any, mihomo_config_path: str | Path | None = None):
         self.cfg = egress_config
         self.config_out = Path(config_out)
+        self.mihomo_config_path = Path(mihomo_config_path or config_out)
         self.mihomo = mihomo
 
     def refresh(self) -> None:
@@ -198,7 +200,7 @@ class ConfigController:
 
     def hot_reload(self, wait_s: float = 20.0) -> tuple[bool, str]:
         """PUT /configs to mihomo and wait for it to come back up."""
-        st, data = self.mihomo.put("/configs", {"path": str(self.config_out)})
+        st, _ = self.mihomo.put("/configs", {"path": str(self.mihomo_config_path)})
         if st not in (200, 204):
             return False, f"mihomo /configs returned {st}"
         # mihomo reloads asynchronously; poll /version until it is back

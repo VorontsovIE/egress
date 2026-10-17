@@ -1135,3 +1135,13 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   `host-uid-<UID>` наряду с legacy `host-main` и поддерживает установку без
   legacy client-файлов через enrollment socket. Локальный офлайн-свит после
   исправления — **353 passed**; повторный прогон на globe ожидается.
+
+- 2026-10-18: host acceptance на globe от 2026-10-17 дал **17 PASS / 2 FAIL /
+  3 SKIP**. `host_whoami_identity` и `host_default_route_mode` не прошли,
+  потому что Mihomo отклонял hot reload (HTTP 400): egressd передавал путь
+  `/var/lib/egressd/generated/config.yaml` из своего контейнера, а Mihomo
+  разрешает только путь внутри своего home. Для `PUT /configs` теперь
+  передаётся `/root/.config/mihomo/generated/config.yaml`, указывающий на тот
+  же общий файл в контейнере Mihomo. Добавлен regression test с проверкой
+  compose mounts и reload path. Локальный офлайн-свит: **354 passed**;
+  повторная live-проверка на globe ещё требуется.

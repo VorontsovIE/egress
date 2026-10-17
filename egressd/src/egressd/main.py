@@ -540,6 +540,7 @@ def create_app() -> FastAPI:
             egress_cfg,
             os.environ.get("EGRESSD_CONFIG_OUT", "/root/.config/mihomo/config.yaml"),
             app.state.mihomo,
+            os.environ.get("EGRESSD_MIHO_CONFIG_PATH"),
         )
     else:
         app.state.configctl = None
