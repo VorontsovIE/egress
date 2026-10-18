@@ -12,6 +12,9 @@
   отклоняется, каталог обрезается до лимита, parallel ограничен числом one-shot
   слотов. Probe выполняется в рабочем потоке; сохранены классификация TLS
   timeout и ограниченный benchmark. Целевые A3/A5: 61 passed.
+- Установка: backend installer работает из чужого cwd, host client сохраняет
+  проход к backend secrets для service UID при закрытых файлах. Сценарий
+  установки с новым cwd и остальные offline install cases: 75 passed.
 
 ## Локальная проверка подписок — 2026-10-18
 

@@ -45,6 +45,12 @@ SKIP_FIREWALL=0
 ASSUME_YES=0
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOSTCTL="$REPO_ROOT/host/egress-hostctl"
+# pkexec and service launchers may start us outside the checkout. Compose
+# commands below need the project file from this repository.
+cd "$REPO_ROOT"
+# pkexec gives root a restricted PATH that omits /usr/local/bin, where step 7
+# installs egressctl and egress-run. The acceptance harness needs both.
+export PATH="$PATH:/usr/local/bin:/usr/local/sbin"
 
 ARGS="$*"
 

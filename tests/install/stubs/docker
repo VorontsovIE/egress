@@ -17,6 +17,10 @@ case "${1:-}" in
     # optional global flags (-f <file>, -p <project>)
     while [ "${1:-}" = "-f" ] || [ "${1:-}" = "-p" ]; do shift 2; done
     sub="${1:-}"; shift || true
+    if [ "$sub" != version ] && [ ! -f compose.yaml ]; then
+      echo "no configuration file provided: not found" >&2
+      exit 1
+    fi
     case "$sub" in
       version)
         echo "Docker Compose version v2.29.7-stub"

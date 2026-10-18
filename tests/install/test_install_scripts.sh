@@ -85,11 +85,11 @@ scenario_install() {
   # opts into the real step-6 code path for the firewall scenario.
   local skip_fw="--skip-firewall"
   [ "${SCENARIO_WITH_FIREWALL:-0}" = "1" ] && skip_fw=""
-  ( cd "$REPO"
+  ( cd "${SCENARIO_CWD:-$REPO}"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
       VIBELAB_EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
       VIBELAB_EGRESS_TEST_MODE=1 \
-      bash scripts/install-backend-host.sh \
+      bash "$REPO/scripts/install-backend-host.sh" \
       --root "$d/root" --secrets-dir "$d/secrets" \
       --yes ${skip_fw} ${flags[@]+"${flags[@]}"} \
       > "$d/install.out" 2> "$d/install.err" )
@@ -165,6 +165,13 @@ stop_line="$(grep -n -m1 'run: docker compose stop vibelab-egress-egressd' "$log
 bootstrap_line="$(grep -n -m1 'run: python3 -m egressd.bootstrap_config' "$logf" | cut -d: -f1)"
 [ -n "$stop_line" ] && [ -n "$bootstrap_line" ] && [ "$stop_line" -lt "$bootstrap_line" ]
 check "success: old egressd stopped before bootstrap regeneration" $?
+
+# pkexec starts the installer outside the checkout. Compose must still find
+# this repository's compose.yaml during step 8.
+d="$TMP/outside-cwd"
+make_env "$d"
+SCENARIO_CWD="$TMP" scenario_install "$d" --skip-client
+check "outside-cwd: install rc=0" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------
 # 2. fail A: compose up fails

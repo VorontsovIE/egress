@@ -142,7 +142,8 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
 Host client, установленный через `sudo` от имени `vibelab`, получает
 доступ к своим `client.token` и `default-proxy.auth`: файлы остаются 0600,
 владельцем становится `vibelab`; каталог `/etc/vibelab-egress` остаётся
-root-owned (0750). Backend secrets в подкаталоге `secrets/` сохраняют
+root-owned (0755), чтобы enrollment-служба могла пройти к своему подкаталогу.
+Backend secrets в подкаталоге `secrets/` сохраняют
 собственные ограничения доступа.
 
 ### Установка и обновление host-native TUN-helper
@@ -335,6 +336,9 @@ egressctl list --provider <provider_id>
 egressctl source refresh personal
 egressctl source remove personal
 ```
+
+Для приватной URL-подписки используйте `--url -` и подайте одну строку через
+stdin: так URL с токеном не окажется в аргументах процесса.
 
 Один прокси добавляется напрямую по URI, без файла подписки:
 
