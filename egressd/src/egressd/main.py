@@ -850,14 +850,29 @@ def create_app() -> FastAPI:
             provider = provider_id(client_id(profile), alias)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid personal provider name") from None
-        if load_metadata(provider):
-            raise HTTPException(status_code=409, detail="personal provider exists; use source refresh")
-        if len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
-            raise HTTPException(status_code=409, detail="personal provider limit reached")
         source = body.get("source")
         if kind not in ("url", "file") or not isinstance(source, str) or \
                 len(source.encode()) > MAX_SOURCE_BYTES:
             raise HTTPException(status_code=400, detail="invalid personal source")
+        path = Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")) / f"{provider}.yaml"
+
+        def existing_result() -> dict[str, Any] | None:
+            existing = load_metadata(provider)
+            if existing is not None:
+                if existing.get("client_id") != client_id(profile) or \
+                        existing.get("kind") != kind or existing.get("source") != source:
+                    raise HTTPException(status_code=409,
+                                        detail="personal provider exists with different source")
+                if path.exists():
+                    return {**_personal_view(existing), "skipped": True}
+            elif len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
+                raise HTTPException(status_code=409, detail="personal provider limit reached")
+            return None
+
+        with app.state.provider_update_lock:
+            result = existing_result()
+            if result is not None:
+                return result
         try:
             if kind == "url":
                 validate_url(source)
@@ -873,6 +888,9 @@ def create_app() -> FastAPI:
                 "node_count": count, "skipped_nodes": skipped,
                 "updated_at": int(time.time())}
         with app.state.provider_update_lock:
+            result = existing_result()
+            if result is not None:
+                return result
             return _commit_personal(meta, yaml_text)
 
     @app.put("/v1/personal/providers/{alias}/snapshot")

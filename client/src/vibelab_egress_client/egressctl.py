@@ -155,6 +155,9 @@ def cmd_source_list(args) -> None:
 
 
 def _source_result(args, data, action: str, name: str) -> None:
+    if data.get("skipped"):
+        _emit(args, data, f"source skipped: {name} (already exists unchanged)")
+        return
     skipped = data.get("skipped_nodes") or 0
     count = data.get("node_count", 0)
     label = "node" if count == 1 else "nodes"
@@ -181,6 +184,15 @@ def cmd_source_add(args) -> None:
     if cfg.environment == "host":
         data = _call(args, lambda: api.add_personal(args.name, kind, value), None)
     else:
+        path = local.path_for(args.name)
+        if path.exists():
+            existing = _call(args, lambda: local.load(args.name), None)
+            if existing["kind"] == kind and existing["source"] == value:
+                remote = _call(args, api.list_personal, None)
+                for item in remote.get("providers", []):
+                    if item.get("alias") == args.name:
+                        _source_result(args, {**item, "skipped": True}, "added", args.name)
+                        return
         local.save(args.name, kind, value)
         data = _call(args, lambda: api.upload_personal(args.name, local.normalize(args.name)), None)
     _source_result(args, data, "added", args.name)

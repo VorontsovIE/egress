@@ -61,6 +61,43 @@ def test_container_snapshot_private_and_no_raw_source(tmp_path, monkeypatch):
     assert not (providers / f"{provider}.yaml").exists()
 
 
+def test_host_add_same_source_skips_without_regeneration(tmp_path, monkeypatch):
+    clients = tmp_path / "clients"
+    clients.mkdir()
+    (clients / "alice.token").write_text("token-alice")
+    (clients / "alice.profile.json").write_text(json.dumps(
+        {"environment": "host", "modes": ["proxy"]}))
+    providers = tmp_path / "providers"
+    providers.mkdir()
+    monkeypatch.setenv("EGRESSD_CLIENTS_DIR", str(clients))
+    monkeypatch.setenv("EGRESSD_PROVIDERS_DIR", str(providers))
+    monkeypatch.setenv("EGRESSD_PERSONAL_DIR", str(tmp_path / "personal"))
+    monkeypatch.setenv("EGRESSD_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("EGRESSD_METRICS_DB", str(tmp_path / "state" / "metrics.sqlite"))
+    monkeypatch.setenv("EGRESSD_GEO_DIR", str(tmp_path / "geo"))
+    from egressd.main import create_app
+    api = TestClient(create_app())
+    auth = {"Authorization": "Bearer token-alice"}
+    source = yaml.safe_dump({"proxies": [
+        {"name": "test", "type": "socks5", "server": "1.1.1.1", "port": 443}]})
+    body = {"name": "demo", "kind": "file", "source": source}
+    first = api.post("/v1/personal/providers", headers=auth, json=body)
+    assert first.status_code == 200
+    assert not first.json().get("skipped")
+    provider = first.json()["provider_id"]
+    path = providers / f"{provider}.yaml"
+    before = path.stat().st_mtime_ns
+    second = api.post("/v1/personal/providers", headers=auth, json=body)
+    assert second.status_code == 200
+    assert second.json()["skipped"] is True
+    assert second.json()["updated_at"] == first.json()["updated_at"]
+    assert path.stat().st_mtime_ns == before
+    changed = api.post("/v1/personal/providers", headers=auth,
+                       json={**body, "source": source + "# changed\n"})
+    assert changed.status_code == 409
+    assert "source" not in second.json()
+
+
 def test_reject_private_proxy_address():
     from egressd.personal import validate_yaml
     raw = yaml.safe_dump({"proxies": [{"name": "inside", "type": "socks5",
