@@ -165,15 +165,21 @@ def test_empty_subscription_rejected():
         run_adapter("blanc", "   ")
 
 
-def test_duplicate_node_name_rejected():
-    # Mihomo silently loads duplicate node names (a routing hazard); the
-    # adapter must reject the collision up front (spec A2 "node collisions").
+def test_duplicate_node_names_disambiguated():
+    # Mihomo silently loads duplicate node names (a routing hazard). The
+    # adapter must produce distinct stable IDs for different endpoints.
     dup = yaml.safe_dump({"proxies": [
         {"name": "dup-node", "type": "socks5", "server": "1.1.1.1", "port": 1080},
         {"name": "dup-node", "type": "socks5", "server": "2.2.2.2", "port": 1080},
     ]})
-    with pytest.raises(ValueError, match="duplicate"):
-        run_adapter("blanc", dup)
+    normalized, meta = run_adapter("blanc", dup)
+    names = [p["name"] for p in yaml.safe_load(normalized)["proxies"]]
+    assert len(names) == len(set(names)) == meta["count"] == 2
+    assert all(name.startswith("dup-node-") for name in names)
+    reversed_nodes = list(reversed(yaml.safe_load(dup)["proxies"]))
+    reversed_yaml = yaml.safe_dump({"proxies": reversed_nodes})
+    reordered, _ = run_adapter("blanc", reversed_yaml)
+    assert set(names) == {p["name"] for p in yaml.safe_load(reordered)["proxies"]}
     # distinct names are fine
     ok = yaml.safe_dump({"proxies": [
         {"name": "a", "type": "socks5", "server": "1.1.1.1", "port": 1080},

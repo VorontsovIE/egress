@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 import hashlib
 import json
 import os
@@ -329,25 +330,6 @@ def _parse_uris(text: str) -> list[dict[str, Any]]:
         proxies.append(p)
     if not proxies:
         raise ValueError("subscription produced zero proxies")
-    # URI fragments are display labels, and subscriptions can reuse one label
-    # for several distinct endpoints. Give those nodes stable unique names
-    # before the strict collision check in normalize_proxies().
-    bases = [_safe_name(p["name"]) for p in proxies]
-    reserved = set(bases)
-    used: set[str] = set()
-    for proxy, base in zip(proxies, bases):
-        if bases.count(base) == 1:
-            continue
-        public_fields = redact({k: v for k, v in proxy.items() if k != "name"})
-        fingerprint = hashlib.sha256(json.dumps(public_fields, sort_keys=True).encode()).hexdigest()[:10]
-        stem = f"{base[:53]}-{fingerprint}"
-        name = stem
-        ordinal = 2
-        while name in reserved or name in used:
-            name = f"{stem[:64 - len(str(ordinal)) - 1]}-{ordinal}"
-            ordinal += 1
-        proxy["name"] = name
-        used.add(name)
     return proxies
 
 
@@ -371,13 +353,10 @@ def normalize_proxies(
     """Sanitize + prefix proxy names. ``name_map`` is a provider-specific
     display-name -> stable-id transform (optional).
 
-    Raises ``ValueError`` on a duplicate normalized node name. Mihomo does NOT
-    refuse to start on duplicate node names -- it silently loads them, which is
-    a routing hazard (two nodes, one selectable name). The adapter therefore
-    rejects the collision up front (spec A2 "node collisions").
+    Mihomo silently loads duplicate names, making only one node selectable.
+    Give colliding display labels stable unique names across source formats.
     """
     out: list[dict[str, Any]] = []
-    seen: set[str] = set()
     for p in proxies:
         p = dict(p)
         kind = p.get("type")
@@ -399,11 +378,26 @@ def normalize_proxies(
         raw = str(p.get("name", "node"))
         base = name_map(raw) if name_map else raw
         name = _apply_prefix(_safe_name(base), prefix)
-        if name in seen:
-            raise ValueError(f"duplicate node name {name!r} in provider subscription")
-        seen.add(name)
         p["name"] = name
         out.append(p)
+    counts = Counter(p["name"] for p in out)
+    reserved = set(counts)
+    used: set[str] = set()
+    for p in out:
+        base = p["name"]
+        if counts[base] > 1:
+            # Redact credentials before hashing so route IDs cannot expose a
+            # fingerprint of a password, UUID, or private key.
+            public_fields = redact({k: v for k, v in p.items() if k != "name"})
+            fingerprint = hashlib.sha256(json.dumps(public_fields, sort_keys=True).encode()).hexdigest()[:10]
+            stem = f"{base[:53]}-{fingerprint}"
+            name = stem
+            ordinal = 2
+            while name in reserved or name in used:
+                name = f"{stem[:64 - len(str(ordinal)) - 1]}-{ordinal}"
+                ordinal += 1
+            p["name"] = name
+        used.add(p["name"])
     return out
 
 
