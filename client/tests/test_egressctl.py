@@ -376,3 +376,38 @@ def test_source_add_timeout_explains_unknown_outcome(monkeypatch, cfg_file, tmp_
     assert out == ""
     assert "outcome unknown" in err
     assert "source list" in err
+
+
+def test_container_add_single_uri_without_file(monkeypatch, cfg_file, tmp_path):
+    from vibelab_egress_client import personal_sources
+    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    uploaded = []
+
+    class Stub:
+        def upload_personal(self, name, yaml_text):
+            uploaded.append((name, yaml_text))
+            return {"alias": name, "node_count": 1, "skipped_nodes": 0}
+
+        def list_personal(self):
+            return {"providers": [{"alias": "single", "node_count": 1}]}
+
+    uri = "vless://fake-uuid@1.1.1.1:443?security=tls#single"
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "single",
+                             "--uri", uri, api_stub=Stub())
+    assert code == 0, err
+    assert "source added: single" in out
+    assert len(uploaded) == 1
+    assert "type: vless" in uploaded[0][1]
+    assert personal_sources.load("single") == {"kind": "uri", "source": uri}
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "single",
+                             "--uri", uri, api_stub=Stub())
+    assert code == 0, err
+    assert "source skipped: single" in out
+    assert len(uploaded) == 1
+
+    import io
+    monkeypatch.setattr(sys, "stdin", io.StringIO(uri + "\n"))
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "fromstdin",
+                             "--uri", "-", api_stub=Stub())
+    assert code == 0, err
+    assert personal_sources.load("fromstdin") == {"kind": "uri", "source": uri}

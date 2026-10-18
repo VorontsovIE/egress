@@ -336,7 +336,19 @@ egressctl source refresh personal
 egressctl source remove personal
 ```
 
-Повторный `source add` с тем же именем и тем же URL или содержимым файла
+Один прокси добавляется напрямую по URI, без файла подписки:
+
+```bash
+egressctl source add single --uri 'vless://fake-uuid@proxy.example:443?security=tls#single'
+egressctl source list
+```
+
+Для ввода URI из stdin без его записи в командной строке используйте
+`egressctl source add single --uri -`, вставьте одну полную ссылку и нажмите
+Enter. Поддерживаются `vless://`, `vmess://`, `trojan://`, `ss://`,
+`hysteria2://`/`hy2://` и `tuic://`; один вызов `--uri` принимает один узел.
+
+Повторный `source add` с тем же именем и тем же URL, URI или содержимым файла
 завершается как `source skipped`: существующий источник не загружается и
 конфигурация не меняется. Чтобы получить изменившееся содержимое URL,
 используйте `egressctl source refresh personal`.

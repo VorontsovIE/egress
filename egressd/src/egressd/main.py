@@ -851,7 +851,7 @@ def create_app() -> FastAPI:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid personal provider name") from None
         source = body.get("source")
-        if kind not in ("url", "file") or not isinstance(source, str) or \
+        if kind not in ("url", "file", "uri") or not isinstance(source, str) or \
                 len(source.encode()) > MAX_SOURCE_BYTES:
             raise HTTPException(status_code=400, detail="invalid personal source")
         path = Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")) / f"{provider}.yaml"
@@ -879,7 +879,11 @@ def create_app() -> FastAPI:
                 raw = fetch_url(source).decode("utf-8")
             else:
                 raw = source
-            yaml_text, _ = normalize_source(raw)
+            yaml_text, parsed = normalize_source(raw)
+            if kind == "uri" and ("\n" in source or "\r" in source or
+                                  parsed["format"] not in ("vless", "uris") or
+                                  parsed["count"] != 1):
+                raise ValueError("personal URI source needs one proxy")
             yaml_text, count, skipped = validate_yaml(yaml_text)
         except (OSError, ValueError, UnicodeError, yaml.YAMLError):
             raise HTTPException(status_code=400, detail="personal source rejected") from None

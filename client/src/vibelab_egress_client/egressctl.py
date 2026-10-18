@@ -173,6 +173,9 @@ def cmd_source_add(args) -> None:
         raise SystemExit("invalid source name")
     if args.url:
         kind, value = "url", args.url
+    elif args.uri is not None:
+        kind = "uri"
+        value = sys.stdin.readline(local.MAX_SOURCE_BYTES + 1).strip() if args.uri == "-" else args.uri
     else:
         try:
             kind, value = "file", Path(args.file).read_text()
@@ -522,6 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
     choice = sa.add_mutually_exclusive_group(required=True)
     choice.add_argument("--url")
     choice.add_argument("--file")
+    choice.add_argument("--uri", help="one proxy URI; use '-' to read a line from stdin")
     sa.set_defaults(fn=cmd_source_add)
     sr = ssub.add_parser("refresh", help="refresh a private source")
     sr.add_argument("name")

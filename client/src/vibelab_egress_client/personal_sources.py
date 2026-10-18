@@ -55,7 +55,7 @@ def save(name: str, kind: str, source: str) -> None:
 
 def load(name: str) -> dict:
     data = json.loads(path_for(name).read_text())
-    if not isinstance(data, dict) or data.get("kind") not in ("url", "file") or \
+    if not isinstance(data, dict) or data.get("kind") not in ("url", "file", "uri") or \
             not isinstance(data.get("source"), str):
         raise ValueError("invalid local source")
     return data
@@ -67,7 +67,7 @@ def remove(name: str) -> None:
 
 def read_source(name: str) -> str:
     source = load(name)
-    if source["kind"] == "file":
+    if source["kind"] in ("file", "uri"):
         return source["source"]
     with urllib.request.urlopen(source["source"], timeout=30) as response:
         raw = response.read(MAX_SOURCE_BYTES + 1)
@@ -81,5 +81,10 @@ def normalize(name: str) -> str:
         from adapters.common import normalize_source
     except ImportError as exc:
         raise RuntimeError("container source adapter requires PyYAML in the container") from exc
-    normalized, _ = normalize_source(read_source(name))
+    source = load(name)
+    normalized, parsed = normalize_source(read_source(name))
+    if source["kind"] == "uri" and ("\n" in source["source"] or "\r" in source["source"] or
+                                    parsed["format"] not in ("vless", "uris") or
+                                    parsed["count"] != 1):
+        raise ValueError("personal URI source needs one proxy")
     return normalized

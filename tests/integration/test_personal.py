@@ -97,6 +97,17 @@ def test_host_add_same_source_skips_without_regeneration(tmp_path, monkeypatch):
     assert changed.status_code == 409
     assert "source" not in second.json()
 
+    uri = "vless://fake-uuid@1.1.1.1:443?security=tls#one"
+    single = api.post("/v1/personal/providers", headers=auth,
+                      json={"name": "single", "kind": "uri", "source": uri})
+    assert single.status_code == 200
+    assert single.json()["node_count"] == 1
+    assert api.post("/v1/personal/providers", headers=auth,
+                    json={"name": "single", "kind": "uri", "source": uri}).json()["skipped"]
+    multi = api.post("/v1/personal/providers", headers=auth,
+                     json={"name": "multi", "kind": "uri", "source": uri + "\n" + uri})
+    assert multi.status_code == 400
+
 
 def test_reject_private_proxy_address():
     from egressd.personal import validate_yaml
