@@ -97,13 +97,22 @@ def test_host_add_same_source_skips_without_regeneration(tmp_path, monkeypatch):
     assert changed.status_code == 409
     assert "source" not in second.json()
 
-    uri = "vless://fake-uuid@1.1.1.1:443?security=tls#one"
+    uri = ("vless://fake-uuid@1.1.1.1:443?security=reality&pbk=fake-key"
+           "&sid=0011&sni=cover.example&fp=firefox#one")
     single = api.post("/v1/personal/providers", headers=auth,
                       json={"name": "single", "kind": "uri", "source": uri})
     assert single.status_code == 200
     assert single.json()["node_count"] == 1
     assert api.post("/v1/personal/providers", headers=auth,
                     json={"name": "single", "kind": "uri", "source": uri}).json()["skipped"]
+    single_path = providers / f"{single.json()['provider_id']}.yaml"
+    single_path.write_text("proxies: []\n")
+    refreshed = api.post("/v1/personal/providers/single/refresh", headers=auth)
+    assert refreshed.status_code == 200
+    node = yaml.safe_load(single_path.read_text())["proxies"][0]
+    assert node["servername"] == "cover.example"
+    assert node["client-fingerprint"] == "firefox"
+    assert node["reality-opts"] == {"public-key": "fake-key", "short-id": "0011"}
     multi = api.post("/v1/personal/providers", headers=auth,
                      json={"name": "multi", "kind": "uri", "source": uri + "\n" + uri})
     assert multi.status_code == 400
@@ -153,6 +162,22 @@ def test_personal_domain_is_pinned_before_mihomo_dials(monkeypatch):
     node = yaml.safe_load(normalized)["proxies"][0]
     assert node["server"] == "1.1.1.1"
     assert node["servername"] == "public.example"
+
+
+def test_reality_domain_pinning_keeps_sni_and_public_key(monkeypatch):
+    from adapters.common import normalize_source
+    from egressd import personal
+    monkeypatch.setattr(personal, "_public_addresses", lambda host: ["1.1.1.1"])
+    uri = ("vless://fake-uuid@public.example:443?security=reality&pbk=fake-key"
+           "&sid=0011&sni=cover.example&fp=firefox#node")
+    normalized, _ = normalize_source(uri)
+    pinned, count, skipped = personal.validate_yaml(normalized)
+    node = yaml.safe_load(pinned)["proxies"][0]
+    assert (count, skipped) == (1, 0)
+    assert node["server"] == "1.1.1.1"
+    assert node["servername"] == "cover.example"
+    assert node["client-fingerprint"] == "firefox"
+    assert node["reality-opts"] == {"public-key": "fake-key", "short-id": "0011"}
 
 
 def test_personal_provider_skips_unresolvable_nodes(monkeypatch):

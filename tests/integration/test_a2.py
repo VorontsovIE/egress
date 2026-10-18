@@ -148,7 +148,8 @@ PersistentKeepalive = 25
 
 def test_vless_normalized():
     uri = ("vless://11111111-2222-3333-4444-555555555555@vless.example.com:443"
-           "?encryption=none&security=reality&pbk=REALITYKEY&sni=vless.example.com&fp=chrome")
+           "?encryption=none&security=reality&pbk=REALITYKEY&sid=0011"
+           "&sni=vless.example.com&fp=firefox&spx=%2Fexample&type=tcp")
     y, meta = run_adapter("xeovo", uri)
     out = yaml.safe_load(y)
     p = out["proxies"][0]
@@ -157,6 +158,11 @@ def test_vless_normalized():
     assert p["port"] == 443
     assert p["uuid"] == "11111111-2222-3333-4444-555555555555"
     assert p["reality-opts"]["public-key"] == "REALITYKEY"
+    assert p["reality-opts"]["short-id"] == "0011"
+    assert p["servername"] == "vless.example.com"
+    assert p["client-fingerprint"] == "firefox"
+    assert "fingerprint" not in p["reality-opts"]
+    assert "spider-x" not in p["reality-opts"]
     assert p["name"].startswith("vless-")
 
 

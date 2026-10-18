@@ -247,16 +247,16 @@ def _parse_vless(text: str) -> list[dict[str, Any]]:
         if sec == "reality":
             p["reality-opts"] = {
                 "public-key": first("pbk"),
-                "fingerprint": first("fp", "chrome"),
-                "server-name": first("sni") or server,
-                "spider-x": "1",
+                "short-id": first("sid"),
             }
-        elif p["tls"]:
+        if p["tls"]:
             p["servername"] = first("sni") or server
+            p["client-fingerprint"] = first("fp", "chrome")
             if first("allow-insecure") == "1":
                 p["skip-cert-verify"] = True
-        if first("network") and first("network") != "tcp":
-            p["network"] = first("network")
+        network = first("type") or first("network")
+        if network and network != "tcp":
+            p["network"] = network
         proxies.append(p)
     if not proxies:
         raise ValueError("no vless:// URIs found")
@@ -318,6 +318,9 @@ def _parse_uris(text: str) -> list[dict[str, Any]]:
             p["tls"] = security in ("tls", "reality")
             if security == "reality":
                 p["reality-opts"] = {"public-key": first("pbk"), "short-id": first("sid")}
+            if p["tls"]:
+                p["servername"] = first("sni") or u.hostname
+                p["client-fingerprint"] = first("fp", "chrome")
             if first("flow"):
                 p["flow"] = first("flow")
         if scheme in ("vless", "trojan"):

@@ -347,6 +347,8 @@ egressctl source list
 `egressctl source add single --uri -`, вставьте одну полную ссылку и нажмите
 Enter. Поддерживаются `vless://`, `vmess://`, `trojan://`, `ss://`,
 `hysteria2://`/`hy2://` и `tuic://`; один вызов `--uri` принимает один узел.
+После обновления backend используйте `egressctl source refresh single`, чтобы
+пересоздать уже добавленный URI по новой версии адаптера.
 
 Повторный `source add` с тем же именем и тем же URL, URI или содержимым файла
 завершается как `source skipped`: существующий источник не загружается и

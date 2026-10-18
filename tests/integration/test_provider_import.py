@@ -43,6 +43,18 @@ def test_base64_uri_list_and_clash_yaml():
     assert normalize_source(clash)[1]["count"] == 1
 
 
+def test_reality_fields_in_mixed_uri_source():
+    source = ("vless://fake-uuid@proxy.example:443?security=reality&pbk=fake-key"
+              "&sid=0011&sni=cover.example&fp=firefox&spx=%2Fignored#one\n"
+              "trojan://fake-password@other.example:443#two")
+    output, meta = normalize_source(source)
+    assert meta["format"] == "uris"
+    node = yaml.safe_load(output)["proxies"][0]
+    assert node["servername"] == "cover.example"
+    assert node["client-fingerprint"] == "firefox"
+    assert node["reality-opts"] == {"public-key": "fake-key", "short-id": "0011"}
+
+
 def test_duplicate_uri_labels_get_stable_unique_names():
     first = "hysteria2://fake-a@1.1.1.1:443#US-SLC-Hysteria2"
     second = "hysteria2://fake-b@8.8.8.8:443#US-SLC-Hysteria2"

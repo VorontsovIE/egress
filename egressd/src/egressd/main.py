@@ -982,10 +982,11 @@ def create_app() -> FastAPI:
         meta = load_metadata(provider)
         if meta is None or meta.get("client_id") != client_id(profile):
             raise HTTPException(status_code=404, detail="unknown personal provider")
-        if meta.get("kind") != "url":
-            raise HTTPException(status_code=400, detail="provider has no backend URL")
+        if meta.get("kind") not in ("url", "uri"):
+            raise HTTPException(status_code=400, detail="provider has no backend source to refresh")
         try:
-            raw = fetch_url(meta["source"]).decode("utf-8")
+            raw = (fetch_url(meta["source"]).decode("utf-8") if meta["kind"] == "url"
+                   else meta["source"])
             normalized, _ = normalize_source(raw)
             normalized, count, skipped = validate_yaml(normalized)
         except (OSError, ValueError, UnicodeError, yaml.YAMLError):
@@ -1018,7 +1019,7 @@ def create_app() -> FastAPI:
             if via is not None:
                 raise HTTPException(status_code=400,
                                     detail="personal source refresh uses direct transport")
-            if meta.get("kind") != "url":
+            if meta.get("kind") not in ("url", "uri"):
                 return {"provider": provider_id, "ok": True, "updated": False,
                         "reason": "local_snapshot"}
             from adapters.common import normalize_source
@@ -1027,7 +1028,8 @@ def create_app() -> FastAPI:
             if personal_meta is None:
                 raise HTTPException(status_code=404, detail="unknown provider")
             try:
-                raw = fetch_url(personal_meta["source"]).decode("utf-8")
+                raw = (fetch_url(personal_meta["source"]).decode("utf-8")
+                       if personal_meta["kind"] == "url" else personal_meta["source"])
                 normalized, _ = normalize_source(raw)
                 normalized, count, skipped = validate_yaml(normalized)
             except (OSError, ValueError, UnicodeError, yaml.YAMLError):
