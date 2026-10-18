@@ -43,6 +43,20 @@ def test_base64_uri_list_and_clash_yaml():
     assert normalize_source(clash)[1]["count"] == 1
 
 
+def test_duplicate_uri_labels_get_stable_unique_names():
+    first = "hysteria2://fake-a@1.1.1.1:443#US-SLC-Hysteria2"
+    second = "hysteria2://fake-b@8.8.8.8:443#US-SLC-Hysteria2"
+    forward, _ = normalize_source(first + "\n" + second)
+    reverse, _ = normalize_source(second + "\n" + first)
+    forward_nodes = yaml.safe_load(forward)["proxies"]
+    reverse_nodes = yaml.safe_load(reverse)["proxies"]
+    names = {node["name"] for node in forward_nodes}
+    assert len(names) == 2
+    assert all(name.startswith("US-SLC-Hysteria2-") for name in names)
+    assert names == {node["name"] for node in reverse_nodes}
+    assert all("fake-" not in name for name in names)
+
+
 def test_invalid_or_empty_never_normalizes():
     for source in ("", "proxies: []", "proxies: [bad]", "trojan://missing"):
         with pytest.raises((ValueError, TypeError)):

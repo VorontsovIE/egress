@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -328,6 +329,25 @@ def _parse_uris(text: str) -> list[dict[str, Any]]:
         proxies.append(p)
     if not proxies:
         raise ValueError("subscription produced zero proxies")
+    # URI fragments are display labels, and subscriptions can reuse one label
+    # for several distinct endpoints. Give those nodes stable unique names
+    # before the strict collision check in normalize_proxies().
+    bases = [_safe_name(p["name"]) for p in proxies]
+    reserved = set(bases)
+    used: set[str] = set()
+    for proxy, base in zip(proxies, bases):
+        if bases.count(base) == 1:
+            continue
+        public_fields = redact({k: v for k, v in proxy.items() if k != "name"})
+        fingerprint = hashlib.sha256(json.dumps(public_fields, sort_keys=True).encode()).hexdigest()[:10]
+        stem = f"{base[:53]}-{fingerprint}"
+        name = stem
+        ordinal = 2
+        while name in reserved or name in used:
+            name = f"{stem[:64 - len(str(ordinal)) - 1]}-{ordinal}"
+            ordinal += 1
+        proxy["name"] = name
+        used.add(name)
     return proxies
 
 
