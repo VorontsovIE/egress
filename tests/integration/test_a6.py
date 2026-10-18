@@ -255,6 +255,10 @@ def test_native_netns_config_mode_set_before_worker_ownership(tmp_path, monkeypa
     config_path = tmp_path / name / "mihomo" / "config.yaml"
     assert config_path.stat().st_mode & 0o777 == 0o600
     assert owners[str(config_path)] == worker_uid
+    config = json.loads(config_path.read_text())
+    assert config["dns"]["enable"] is True
+    assert config["dns"]["nameserver"] == ["https://1.1.1.1/dns-query#oneshot"]
+    assert config["tun"]["dns-hijack"] == ["any:53", "tcp://any:53"]
 
 
 # ---------------------------------------------------------------------------

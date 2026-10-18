@@ -224,9 +224,16 @@ class NativeNetnsBackend:
         config = {
             "mode": "rule", "log-level": "warning", "ipv6": False,
             "allow-lan": False,
+            # DNS packets from the workload enter tun0 and are handled by
+            # Mihomo's internal resolver. The resolver's DoH connection is
+            # explicitly sent through the selected one-shot proxy, so the
+            # strict namespace never needs direct access to a DNS server.
+            "dns": {"enable": True, "ipv6": False,
+                    "default-nameserver": ["1.1.1.1"],
+                    "nameserver": ["https://1.1.1.1/dns-query#oneshot"]},
             "tun": {"enable": True, "stack": "mips", "device": "tun0",
                     "auto-route": False, "auto-detect-interface": False,
-                    "dns-hijack": ["any:53"]},
+                    "dns-hijack": ["any:53", "tcp://any:53"]},
             "proxies": [{"name": "oneshot", "type": "socks5",
                          "server": self.gateway, "port": 1081,
                          "interface-name": state["ns_if"],
