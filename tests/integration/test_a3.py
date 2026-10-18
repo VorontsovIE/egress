@@ -127,6 +127,29 @@ def _dump_all_tables(app) -> str:
     return "\n".join(out)
 
 
+def test_provider_route_uses_mihomo_provider_healthcheck(egress, monkeypatch):
+    from egressd.main import MihomoAdmin
+
+    calls = []
+    monkeypatch.setattr(egress["app"].state.mihomo, "provider_delay",
+                        lambda *args: (calls.append(args) or (200, {"delay": 42})))
+    response = egress["client"].post(
+        "/v1/routes/blanc:FI-Helsinki-1/test", headers=egress["host"])
+    assert response.status_code == 200
+    assert response.json()["results"][0]["latency_ms"] == 42
+    assert calls == [("blanc", "blanc-FI-Helsinki-1",
+                      "https://www.gstatic.com/generate_204")]
+
+    admin = MihomoAdmin()
+    paths = []
+    monkeypatch.setattr(admin, "_request", lambda method, path, data, timeout:
+                        (paths.append((method, path)) or (200, {"delay": 42})))
+    assert admin.provider_delay("blanc", "blanc-FI-Helsinki-1",
+                                "https://www.gstatic.com/generate_204") == (200, {"delay": 42})
+    assert paths == [("GET", "/providers/proxies/blanc/blanc-FI-Helsinki-1/"
+                      "healthcheck?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=5000")]
+
+
 # ===========================================================================
 # 1. client impersonation denied
 # ===========================================================================

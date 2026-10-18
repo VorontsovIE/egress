@@ -266,13 +266,16 @@ class MihomoAdmin:
                                                     "resp": str(resp)[:200]})
         return st, resp
 
-    def delay(self, node_name: str, url: str, timeout_ms: int = 5000) -> tuple[int, Any]:
-        """Per-node HTTP delay test (spec 23). Mihomo: /proxies/<name>/delay."""
+    def provider_delay(self, provider_name: str, node_name: str, url: str,
+                       timeout_ms: int = 5000) -> tuple[int, Any]:
+        """Test a file-provider node through Mihomo's provider API."""
         from urllib.parse import quote
 
         return self._request(
             "GET",
-            f"/proxies/{quote(node_name)}/delay?url={quote(url)}&timeout={timeout_ms}",
+            f"/providers/proxies/{quote(provider_name, safe='')}/"
+            f"{quote(node_name, safe='')}/healthcheck?"
+            f"url={quote(url, safe='')}&timeout={timeout_ms}",
             None, 10.0,
         )
 
@@ -1239,9 +1242,11 @@ def create_app() -> FastAPI:
             app.state.metrics.add_health(route_id, cid, healthy, ms, "direct")
             return {"route": route_id, "healthy": healthy, "latency_ms": ms,
                     "source": "direct"}
-        # mihomo per-node delay (spec 23)
-        st, data = app.state.mihomo.delay(app.state.catalog.mihomo_name(route_id),
-                                          app.state.health_url)
+        # Provider nodes are not in Mihomo's /proxies map. The provider API
+        # resolves them by provider and their prefixed Mihomo node name.
+        st, data = app.state.mihomo.provider_delay(
+            r.provider, app.state.catalog.mihomo_name(route_id),
+            app.state.health_url)
         ms = data.get("delay") if isinstance(data, dict) else None
         healthy = st == 200 and isinstance(ms, int)
         r.healthy = healthy
@@ -1249,8 +1254,11 @@ def create_app() -> FastAPI:
         r.last_test_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         app.state.metrics.add_health(route_id, cid, healthy,
                                      ms if isinstance(ms, int) else None, "delay")
-        return {"route": route_id, "healthy": healthy, "latency_ms": ms,
-                "source": "mihomo-delay"}
+        result = {"route": route_id, "healthy": healthy, "latency_ms": ms,
+                  "source": "mihomo-delay"}
+        if not healthy:
+            result["mihomo_status"] = st
+        return result
 
     # ---- domain probe (spec 24) ----
     @app.post("/v1/probe-domain")
