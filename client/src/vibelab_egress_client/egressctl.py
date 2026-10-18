@@ -28,6 +28,7 @@ EXIT_USAGE = 2
 EXIT_CONFIG = 3
 EXIT_AUTH = 4
 EXIT_IDENTITY = 5
+SOURCE_TIMEOUT = 300
 
 
 def _print_json(data: Any) -> None:
@@ -65,6 +66,10 @@ def _call(args: argparse.Namespace, fn, human_fn) -> Any:
             print(f"authentication error: {e.detail}", file=sys.stderr)
             sys.exit(EXIT_AUTH)
         print(f"error: {e}", file=sys.stderr)
+        sys.exit(EXIT_RUNTIME)
+    except TimeoutError:
+        print("error: request timed out; outcome unknown; check egressctl source list before retrying",
+              file=sys.stderr)
         sys.exit(EXIT_RUNTIME)
     except (OSError, ValueError, RuntimeError) as e:
         print(f"error: {type(e).__name__} in local source operation", file=sys.stderr)
@@ -160,7 +165,7 @@ def _source_result(args, data, action: str, name: str) -> None:
 def cmd_source_add(args) -> None:
     from . import personal_sources as local
     cfg = _load(args)
-    api = EgressApi(cfg, timeout=45)
+    api = EgressApi(cfg, timeout=SOURCE_TIMEOUT)
     if not local.ALIAS.fullmatch(args.name):
         raise SystemExit("invalid source name")
     if args.url:
@@ -184,7 +189,7 @@ def cmd_source_add(args) -> None:
 def cmd_source_refresh(args) -> None:
     from . import personal_sources as local
     cfg = _load(args)
-    api = EgressApi(cfg, timeout=45)
+    api = EgressApi(cfg, timeout=SOURCE_TIMEOUT)
     if cfg.environment == "host":
         data = _call(args, lambda: api.refresh_personal(args.name), None)
     else:

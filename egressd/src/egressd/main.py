@@ -850,8 +850,10 @@ def create_app() -> FastAPI:
             provider = provider_id(client_id(profile), alias)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid personal provider name") from None
-        if load_metadata(provider) or len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
-            raise HTTPException(status_code=409, detail="personal provider exists or limit reached")
+        if load_metadata(provider):
+            raise HTTPException(status_code=409, detail="personal provider exists; use source refresh")
+        if len(list_owned(client_id(profile))) >= MAX_PROVIDERS:
+            raise HTTPException(status_code=409, detail="personal provider limit reached")
         source = body.get("source")
         if kind not in ("url", "file") or not isinstance(source, str) or \
                 len(source.encode()) > MAX_SOURCE_BYTES:

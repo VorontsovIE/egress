@@ -346,3 +346,22 @@ def test_source_add_missing_file_reports_usage_error(monkeypatch, cfg_file, tmp_
     assert "source file error:" in err
     assert str(missing) in err
     assert "Traceback" not in err
+
+
+def test_source_add_timeout_explains_unknown_outcome(monkeypatch, cfg_file, tmp_path):
+    raw = tmp_path / "subscription.txt"
+    raw.write_text("proxies: []\n")
+
+    class Stub:
+        def upload_personal(self, name, yaml_text):
+            raise TimeoutError()
+
+    from vibelab_egress_client import personal_sources
+    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    monkeypatch.setattr(personal_sources, "normalize", lambda name: raw.read_text())
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
+                             "--file", str(raw), api_stub=Stub())
+    assert code == egressctl.EXIT_RUNTIME
+    assert out == ""
+    assert "outcome unknown" in err
+    assert "source list" in err

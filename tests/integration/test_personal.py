@@ -109,11 +109,16 @@ def test_personal_domain_is_pinned_before_mihomo_dials(monkeypatch):
 
 def test_personal_provider_skips_unresolvable_nodes(monkeypatch):
     from egressd import personal
-    monkeypatch.setattr(personal, "_public_addresses",
-                        lambda host: [] if host.startswith("bad") else ["1.1.1.1"])
+    looked_up = []
+
+    def resolve(host):
+        looked_up.append(host)
+        return [] if host.startswith("bad") else ["1.1.1.1"]
+
+    monkeypatch.setattr(personal, "_public_addresses", resolve)
     raw = yaml.safe_dump({"proxies": [
         {"name": f"node-{i}", "type": "socks5",
-         "server": f"bad-{i}.example" if i < 12 else "good.example", "port": 1080}
+         "server": f"bad-{i % 2}.example" if i < 12 else "good.example", "port": 1080}
         for i in range(317)
     ]})
     normalized, count, skipped = personal.validate_yaml(raw)
@@ -121,6 +126,7 @@ def test_personal_provider_skips_unresolvable_nodes(monkeypatch):
     assert (count, skipped) == (305, 12)
     assert len(nodes) == 305
     assert all(node["server"] == "1.1.1.1" for node in nodes)
+    assert sorted(looked_up) == ["bad-0.example", "bad-1.example", "good.example"]
     assert {node["name"] for node in nodes}.isdisjoint(
         {f"node-{i}" for i in range(12)})
 

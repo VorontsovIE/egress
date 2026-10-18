@@ -168,6 +168,7 @@ def validate_yaml(text: str) -> tuple[str, int, int]:
     seen = set()
     accepted = []
     skipped = 0
+    resolved: dict[str, list[str]] = {}
     for proxy in proxies:
         if not isinstance(proxy, dict) or proxy.get("type") not in ALLOWED_TYPES:
             raise ValueError("unsupported personal proxy type")
@@ -184,7 +185,9 @@ def validate_yaml(text: str) -> tuple[str, int, int]:
             port = 0
         if not 1 <= port <= 65535:
             raise ValueError("invalid personal proxy port")
-        addresses = _public_addresses(host)
+        if host not in resolved:
+            resolved[host] = _public_addresses(host)
+        addresses = resolved[host]
         if not addresses:
             skipped += 1
             continue
