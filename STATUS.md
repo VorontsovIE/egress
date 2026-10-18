@@ -1294,3 +1294,13 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   аварийно завершиться после проверки узла. Добавлены проверки отображения,
   строкового времени и вызова `best` после теста; офлайн-свит **366 passed**.
   Live-проверка обновлённого клиента и backend на globe требуется.
+
+- 2026-10-18: host TUN helper на globe сообщил `tun=supported`, но запуск
+  непрямого маршрута завершился `netns_setup_failed [Errno 1] Operation not
+  permitted` для per-run `mihomo/config.yaml`. Причина: helper сначала передавал
+  файл worker-пользователю, затем вызывал `chmod` без `CAP_FOWNER` в systemd
+  unit. Порядок изменён: `chmod 0600` выполняется пока файл принадлежит root,
+  затем `chown` передаёт его worker. Набор capabilities не расширялся.
+  Регрессионный тест моделирует отсутствие `CAP_FOWNER`; офлайн-свит
+  **367 passed**. На globe требуется обновить только TUN helper через
+  `scripts/install-tun-host.sh` и повторить live TUN-команду.

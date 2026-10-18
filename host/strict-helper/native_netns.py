@@ -243,8 +243,10 @@ class NativeNetnsBackend:
         os.chmod(directory, 0o710)
         cfg_path = home / "config.yaml"
         cfg_path.write_text(json.dumps(config))  # JSON is valid YAML.
-        os.chown(cfg_path, uid, gid)
         os.chmod(cfg_path, 0o600)
+        # The helper's capability set omits CAP_FOWNER. Set the mode while
+        # root still owns the file, then transfer ownership to the worker.
+        os.chown(cfg_path, uid, gid)
         _run(["ip", "netns", "exec", name, "ip", "tuntap", "add",
               "dev", "tun0", "mode", "tun", "user", str(uid)])
         _run(["ip", "netns", "exec", name, "ip", "addr", "add",

@@ -214,6 +214,49 @@ class TestUnsupportedRun:
         assert "ip" in resp["detail"]
 
 
+def test_native_netns_config_mode_set_before_worker_ownership(tmp_path, monkeypatch):
+    """The bounded-capability helper can chmod only while it owns the config."""
+    native = sys.modules[th.NativeNetnsBackend.__module__]
+    worker_uid, worker_gid = 12345, 12346
+    monkeypatch.setattr(native, "_service_identity", lambda: (worker_uid, worker_gid))
+    monkeypatch.setattr(native, "_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(native.time, "sleep", lambda seconds: None)
+
+    class FakeProcess:
+        pid = 123
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(native.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    owners = {}
+    actual_chmod = os.chmod
+
+    def chown(path, uid, gid):
+        owners[str(path)] = uid
+
+    def chmod(path, mode):
+        if owners.get(str(path)) == worker_uid:
+            raise PermissionError(1, "CAP_FOWNER unavailable", str(path))
+        actual_chmod(path, mode)
+
+    monkeypatch.setattr(native.os, "chown", chown)
+    monkeypatch.setattr(native.os, "chmod", chmod)
+    name = "egress-tun-abcdef012345"
+    (tmp_path / name).mkdir()
+    backend = th.NativeNetnsBackend.__new__(th.NativeNetnsBackend)
+    backend.state_dir = tmp_path
+    backend.gateway = "172.17.0.1"
+    backend.mihomo_path = "/fake/mihomo"
+    backend.jobs = {name: {"ns_if": "en123", "host_if": "eh123",
+                           "host_ip": "169.254.240.1", "subnet": "169.254.240.0/30"}}
+    backend.pin_route(name, {"host": "127.0.0.1", "port": 1081,
+                             "username": "fake-user", "password": "fake-password"})
+    config_path = tmp_path / name / "mihomo" / "config.yaml"
+    assert config_path.stat().st_mode & 0o777 == 0o600
+    assert owners[str(config_path)] == worker_uid
+
+
 # ---------------------------------------------------------------------------
 # stale netns cleanup (file-based, no privileges needed)
 # ---------------------------------------------------------------------------
