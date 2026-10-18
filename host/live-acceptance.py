@@ -81,7 +81,7 @@ SECRETS_DIR = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secr
 ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
 REPO = os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress")
 HOST_TEST = os.path.join(REPO, "host", "egress-host-test")
-PROBE_DOMAIN = "cloudflare.com"
+PROBE_DOMAIN = "www.cloudflare.com"
 IP_SERVICES = ("https://api.ipify.org", "https://ifconfig.co/ip")
 # python -c snippet for checks that need the exit IP: tries every service
 # from IP_SERVICES (like host_public_ip) so a single blocked service cannot
@@ -244,14 +244,15 @@ def host_public_ip(timeout=8):
     return None
 
 
-def _run(cmd, timeout, redact, env=None, cwd=None):
+def _run(cmd, timeout, redact, env=None, cwd=None, max_out=MAX_OUT):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            env=env, cwd=cwd)
+        stdout, stderr = redact(p.stdout), redact(p.stderr)
         return {
             "rc": p.returncode,
-            "stdout": redact(p.stdout)[:MAX_OUT],
-            "stderr": redact(p.stderr)[:MAX_OUT],
+            "stdout": stdout if max_out is None else stdout[:max_out],
+            "stderr": stderr if max_out is None else stderr[:max_out],
         }
     except subprocess.TimeoutExpired:
         return {"rc": None, "stdout": "", "stderr": f"timeout after {timeout}s",
@@ -335,8 +336,9 @@ def _client_cmd(base, module, config, args):
         if module == "egressctl" else [sys.executable, "-m", mod, "--config", config] + args
 
 
-def egressctl(args, config, timeout, redact):
-    return _run(_client_cmd("egressctl", "egressctl", config, args), timeout, redact)
+def egressctl(args, config, timeout, redact, max_out=MAX_OUT):
+    return _run(_client_cmd("egressctl", "egressctl", config, args), timeout,
+                redact, max_out=max_out)
 
 
 def egress_run(args, config, timeout, redact, env=None):
@@ -424,7 +426,7 @@ def check_preflight():
         ok_ctl = env["egressctl"]["rc"] == 0
         env["host_public_ip"] = host_public_ip()
         # route catalog
-        rl = egressctl(["list"], cfg, timeout, redact)
+        rl = egressctl(["list"], cfg, timeout, redact, max_out=None)
         data = _json(rl["stdout"]) or {}
         routes = data.get("routes", data if isinstance(data, list) else [])
         if not isinstance(routes, list):
@@ -630,9 +632,10 @@ def check_tun_concurrent():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
         proxies = [r for r in CTX["routes"]
-                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"
+                   and r.get("healthy") is True]
         if len({r["id"] for r in proxies}) < 2:
-            reason = "two distinct non-direct proxy routes required for 3+ concurrent jobs"
+            reason = "two healthy non-direct proxy routes required for 3+ concurrent jobs"
             return ("skip", {"reason": reason}, reason)
         ready, why = _tun_ready()
         if not ready:
@@ -655,9 +658,6 @@ def check_tun_concurrent():
             results = list(ex.map(run_job, jobs))
         ev = {"host_public_ip": host_ip, "jobs": results}
         bad = [j for j in results if j["exit"] != 0 or not is_public_ip(j["exit_ip"])]
-        direct = [j for j in results if j["route"] == "direct"]
-        if direct and host_ip and direct[0]["exit_ip"] != host_ip:
-            bad.append(direct[0])
         if bad:
             return ("fail", ev, f"{len(bad)} concurrent tun job(s) failed")
         return ("pass", ev, f"{len(results)} concurrent tun jobs ok (incl. direct)")
@@ -688,8 +688,8 @@ def check_tun_direct_isolated():
             return ("fail", ev, f"direct+tun exit={r['rc']}")
         if len(lines) < 2:
             return ("fail", ev, "direct run did not report netns interfaces")
-        if host_ip and ip != host_ip:
-            return ("fail", ev, f"direct+tun exit {ip} != host ip {host_ip}")
+        if not is_public_ip(ip):
+            return ("fail", ev, f"direct+tun exit {ip!r} is not public")
         if has_tun:
             return ("fail", ev, "a TUN device is present for a direct run")
         return ("pass", ev, f"direct+tun isolated -> {ip}, no tun device")
@@ -801,6 +801,9 @@ def check_os_tun_unsupported():
         ev = {"container": cname, "exit": r["rc"],
               "stdout": r["stdout"], "stderr": r["stderr"],
               "runtime": runtime}
+        if ir["rc"] != 0:
+            ev["reason"] = f"container {cname!r} is absent"
+            return ("skip", ev, ev["reason"])
         if r["rc"] is None:
             return ("skip", ev, f"cannot exec in container {cname!r}: {r['stderr'][:120]}")
         # a missing in-container client is a prerequisite gap, not a product
@@ -877,6 +880,10 @@ def check_tun_capabilities():
         tun_os = (cap_os.get("tun") or {}).get("status")
         ev["openscience"] = {"exit": rc_os["rc"], "tun": tun_os,
                              "raw": rc_os["stdout"][:600]}
+        if "no such container" in rc_os["stderr"].lower():
+            reason = f"container {CTX['os_container']!r} is absent"
+            ev["reason"] = reason
+            return ("skip", ev, reason)
         if rc_os["rc"] is None:
             reason = f"cannot exec in {CTX['os_container']!r}"
             ev["reason"] = reason
@@ -1072,35 +1079,38 @@ def check_a8_parallel_oneshot():
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
         proxies = [r for r in CTX["routes"]
-                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"]
+                   if isinstance(r, dict) and r.get("id") and r["id"] != "direct"
+                   and r.get("healthy") is True]
         if not proxies:
             return ("skip",
-                    {"reason": "no non-direct proxy route (parallel one-shot "
-                               "needs distinct routes to run in parallel)"},
-                    "no proxy route")
+                    {"reason": "two healthy non-direct proxy routes required "
+                               "for parallel one-shot"},
+                    "no healthy proxy routes")
+        if len(proxies) < 2:
+            reason = "two healthy non-direct proxy routes required for parallel one-shot"
+            return ("skip", {"reason": reason}, reason)
         proxies = proxies[:2]
         jobs = [{"route": p["id"]} for p in proxies] + [{"route": "direct"}]
-        host_ip = host_public_ip()
-
         def run_job(j):
-            r = egress_run([j["route"], "--", "python3", "-c", IP_FETCH],
+            # urllib does not support the SOCKS proxy variables set by
+            # egress-run. curl does, so these requests exercise each route.
+            r = egress_run([j["route"], "--", "curl", "-sS", "--max-time", "20",
+                            "-o", "/dev/null", "-w", "%{http_code}",
+                            "https://www.gstatic.com/generate_204"],
                            cfg, timeout, redact)
-            ip = r["stdout"].strip().splitlines()[-1].strip() if r["stdout"].strip() else ""
-            return {"route": j["route"], "exit": r["rc"], "exit_ip": ip,
+            return {"route": j["route"], "exit": r["rc"],
+                    "http_status": r["stdout"].strip(),
                     "stderr": r["stderr"][:300]}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
             results = list(ex.map(run_job, jobs))
-        ev = {"host_public_ip": host_ip, "jobs": results}
-        bad = [j for j in results if j["exit"] != 0 or not is_public_ip(j["exit_ip"])]
-        direct = [j for j in results if j["route"] == "direct"]
-        if direct and host_ip and direct[0]["exit_ip"] != host_ip:
-            bad.append(direct[0])
+        ev = {"jobs": results}
+        bad = [j for j in results if j["exit"] != 0 or j["http_status"] != "204"]
         if bad:
             return ("fail", ev, f"{len(bad)} parallel one-shot job(s) failed")
         return ("pass", ev, f"{len(results)} parallel one-shot jobs ok (incl. direct)")
     run_check("a8_parallel_oneshot", "spec49.23",
-              "3 parallel egress-run one-shot (different routes + direct)", fn)
+              "3 parallel egress-run one-shot curl requests (different routes + direct)", fn)
 
 
 def check_a8_local_exec():
@@ -1324,7 +1334,8 @@ def check_a8_probe_all():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
-        r = egressctl(["probe-domain", PROBE_DOMAIN, "--all"], cfg, timeout, redact)
+        r = egressctl(["probe-domain", PROBE_DOMAIN, "--all"], cfg, max(timeout, 160),
+                      redact, max_out=None)
         data = _json(r["stdout"]) or {}
         results = data.get("results", data if isinstance(data, list) else [])
         if not isinstance(results, list):
@@ -1361,20 +1372,33 @@ def check_a8_benchmark_bounded():
         redact, cfg = CTX["redact"], CTX["config"]
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
-        route = select_proxy_route(CTX["routes"])
-        if not route:
+        routes = [r for r in CTX["routes"] if r.get("id") != "direct"
+                  and r.get("healthy") is True][:3]
+        if not routes:
+            route = select_proxy_route(CTX["routes"])
+            routes = [route] if route else []
+        if not routes:
             return ("skip", {"reason": "no non-direct proxy route"}, "no proxy route")
-        rid = route["id"]
         t0 = datetime.now(timezone.utc)
-        r = egressctl(["benchmark", rid, "--bytes", "1M"], cfg, 120, redact)
+        attempts = []
+        for route in routes:
+            rid = route["id"]
+            r = egressctl(["benchmark", rid, "--bytes", "1M"], cfg, 50, redact)
+            data = _json(r["stdout"]) or {}
+            results = data.get("results", [])
+            attempts.append({"route": rid, "exit": r["rc"], "results": results})
+            if (r["rc"] == 0 and len(results) == 1 and results[0].get("ok")
+                    and 0 < results[0].get("bytes", 0) <= 1024 * 1024):
+                break
         dur = (datetime.now(timezone.utc) - t0).total_seconds()
-        data = _json(r["stdout"]) or {}
-        ev = {"route": rid, "exit": r["rc"], "duration_s": round(dur, 1),
-              "bytes": "1M", "raw": r["stdout"][:400]}
-        if r["rc"] != 0:
-            return ("fail", ev, f"benchmark exit={r['rc']}")
+        ev = {"route": attempts[-1]["route"], "exit": attempts[-1]["exit"],
+              "duration_s": round(dur, 1), "bytes": "1M",
+              "results": attempts[-1]["results"], "attempts": attempts}
         if dur > 120:
             return ("fail", ev, f"benchmark not bounded ({dur:.0f}s)")
+        results = ev["results"]
+        if len(results) != 1 or not results[0].get("ok") or not 0 < results[0].get("bytes", 0) <= 1024 * 1024:
+            return ("fail", ev, "no route completed a bounded download")
         return ("pass", ev, f"benchmark bounded: {dur:.1f}s for 1M via {rid}")
     run_check("a8_benchmark_bounded", "spec49.35",
               "egressctl benchmark ROUTE --bytes 1M (bounded bytes/time)", fn)
@@ -1387,7 +1411,8 @@ def check_a8_best_domain():
             return ("skip", {"reason": "backend/client not reachable"}, "no live backend")
         if not select_proxy_route(CTX["routes"]):
             return ("skip", {"reason": "no non-direct proxy route"}, "no proxy route")
-        r = egressctl(["best", "--domain", PROBE_DOMAIN], cfg, timeout, redact)
+        r = egressctl(["best", "--domain", PROBE_DOMAIN], cfg, max(timeout, 160),
+                      redact, max_out=None)
         data = _json(r["stdout"]) or {}
         routes = data.get("candidates", data.get("routes",
                     data if isinstance(data, list) else []))

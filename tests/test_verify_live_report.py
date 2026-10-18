@@ -256,5 +256,25 @@ def test_tun_concurrent_requires_three_distinct_routes(tmp_path):
     assert out["verdict"] == "REJECTED"
 
 
+def test_tun_direct_accepts_rotating_public_host_egress(tmp_path):
+    check = make_check("tun_direct_isolated", "spec50.5", "pass", "egress-run", {
+        "exit": 0, "exit_ip": "1.1.1.1", "host_public_ip": "8.8.8.8",
+        "tun_device_present": False, "lines": ["1.1.1.1", "False"]})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "VERIFIED"
+
+
+def test_parallel_oneshot_requires_successful_socks_aware_requests(tmp_path):
+    jobs = [{"route": route, "exit": 0, "http_status": "204"}
+            for route in ("provider:a", "provider:b", "direct")]
+    check = make_check("a8_parallel_oneshot", "spec49.23", "pass", "egress-run",
+                       {"jobs": jobs})
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "VERIFIED"
+    jobs[0]["http_status"] = "000"
+    out, _ = verifier.verify(write(tmp_path, make_report([check])))
+    assert out["verdict"] == "REJECTED"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

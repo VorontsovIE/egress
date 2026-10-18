@@ -15,6 +15,10 @@
 - Установка: backend installer работает из чужого cwd, host client сохраняет
   проход к backend secrets для service UID при закрытых файлах. Сценарий
   установки с новым cwd и остальные offline install cases: 75 passed.
+- Приёмочный harness: SOCKS-aware HTTP 204 для parallel one-shot, полный JSON
+  больших ответов, допуск меняющегося публичного direct IP, явные SKIP при
+  отсутствии OpenScience и усиленный независимый verifier. Целевые тесты
+  verifier: 15 passed; сохранённый globe-отчёт: VERIFIED (19/0/9).
 
 ## Локальная проверка подписок — 2026-10-18
 

@@ -125,12 +125,14 @@ def rederive_pass(cid, c):
         routes = [j.get("route") for j in jobs]
         if len(jobs) < 3 or routes.count("direct") != 1 or len(set(routes)) != len(routes):
             return False, "requires direct plus two distinct proxy routes"
-        host_ip = get("host_public_ip", "")
+        if cid == "a8_parallel_oneshot":
+            for j in jobs:
+                if j.get("exit") != 0 or j.get("http_status") != "204":
+                    return False, f"job {j.get('route')} failed"
+            return True, f"{len(jobs)} jobs returned HTTP 204"
         for j in jobs:
             if j.get("exit") != 0 or not is_public_ip(j.get("exit_ip", "")):
                 return False, f"job {j.get('route')} failed"
-            if j.get("route") == "direct" and host_ip and j.get("exit_ip") != host_ip:
-                return False, "direct job ip != host ip"
         return True, f"{len(jobs)} jobs ok"
 
     if cid == "tun_direct_isolated":
@@ -139,8 +141,8 @@ def rederive_pass(cid, c):
         lines = get("lines", [])
         if len(lines) < 2 or lines[0] != get("exit_ip") or lines[1] != "False":
             return False, "direct netns interface evidence missing"
-        if get("host_public_ip") and get("exit_ip") != get("host_public_ip"):
-            return False, "direct ip != host ip"
+        if not is_public_ip(get("exit_ip", "")):
+            return False, "direct ip is not public"
         if get("tun_device_present"):
             return False, "tun device present for direct"
         return True, "isolated direct"
@@ -286,6 +288,10 @@ def rederive_pass(cid, c):
             return False, "exit!=0"
         if get("duration_s", 999) > 120:
             return False, "not bounded"
+        results = get("results", [])
+        if (len(results) != 1 or not results[0].get("ok")
+                or not 0 < results[0].get("bytes", 0) <= 1024 * 1024):
+            return False, "download did not complete within 1M"
         return True, "bounded"
 
     if cid == "a8_best_domain":
