@@ -17,7 +17,9 @@ Run:  python -m pytest tests/integration/test_a5.py -v
 from __future__ import annotations
 
 import json
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -41,7 +43,37 @@ from egressd.probe import (  # noqa: E402
     TCP_TIMEOUT,
     ProbeOutcome,
     classify_probe,
+    socks_probe,
 )
+
+
+def test_tls_handshake_timeout_is_route_failure():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def stall_tls():
+        conn, _ = listener.accept()
+        with conn:
+            conn.settimeout(1)
+            conn.recv(3)
+            conn.sendall(b"\x05\x00")
+            conn.recv(512)
+            conn.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
+            time.sleep(0.2)
+        listener.close()
+
+    worker = threading.Thread(target=stall_tls)
+    worker.start()
+    try:
+        result = socks_probe("127.0.0.1", listener.getsockname()[1], "u", "p",
+                             "example.com", timeout=0.05, check=("tcp", "tls"))
+    finally:
+        worker.join(timeout=2)
+        listener.close()
+    assert result.tcp_ok is True
+    assert result.tls_ok is False
+    assert result.error == TLS_FAILURE
 from egressd.ranking import (  # noqa: E402
     WEIGHTS_DEFAULT,
     WEIGHTS_SPEED_AWARE,

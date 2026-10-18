@@ -366,7 +366,7 @@ def socks_probe(
                 ctx = ssl.create_default_context()
                 s = ctx.wrap_socket(s, server_hostname=domain)
                 o.tls_ok = True
-            except ssl.SSLError as e:
+            except (ssl.SSLError, TimeoutError) as e:
                 o.tls_ok = False
                 o.detail["tls_error"] = str(e)
                 o.latency_ms = int((time.time() - t0) * 1000)
@@ -410,6 +410,11 @@ def socks_probe(
                 o.http_ok = False
         o.latency_ms = int((time.time() - t0) * 1000)
         o.error = classify_probe(o, expected)
+        return o
+    except OSError as e:
+        o.latency_ms = int((time.time() - t0) * 1000)
+        o.detail["socket_error"] = str(e)
+        o.error = TCP_TIMEOUT if isinstance(e, TimeoutError) else PROXY_FAILURE
         return o
     finally:
         try:
@@ -455,6 +460,7 @@ class ProbeEngine:
         method: str = "GET",
         check: tuple[str, ...] = ("dns", "tcp", "tls", "http"),
         expected: tuple[int, int] = (200, 399),
+        timeout: float | None = None,
     ) -> ProbeOutcome:
         route = self.catalog.get(route_id)
         if route is None:
@@ -462,7 +468,8 @@ class ProbeEngine:
             o.error = PROXY_FAILURE
             o.detail["reason"] = f"unknown route {route_id!r}"
             return o
-        slot = self.allocator.allocate(self.timeout)
+        effective_timeout = self.timeout if timeout is None else timeout
+        slot = self.allocator.allocate(effective_timeout)
         if slot is None:
             o = ProbeOutcome(route_id=route_id, domain=domain, scheme=scheme)
             o.error = SLOT_EXHAUSTED
@@ -474,7 +481,7 @@ class ProbeEngine:
             o = socks_probe(
                 self.socks_host, self.socks_port, slot.user, slot.password,
                 domain, scheme=scheme, port=port, path=path, method=method,
-                timeout=self.timeout, check=check, expected=expected,
+                timeout=effective_timeout, check=check, expected=expected,
             )
             o.route_id = route_id
             # enrich with catalog geo (context only; real verification is the

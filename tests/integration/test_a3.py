@@ -534,6 +534,55 @@ def test_probe_endpoint_returns_classified_result(egress):
         assert k in res
 
 
+def test_probe_options_are_bounded_and_run_off_request_thread(egress, monkeypatch):
+    c, host, app = egress["client"], egress["host"], egress["app"]
+    seen = {}
+    request_thread = threading.get_ident()
+
+    def fake_probe(route_ids, domain, parallel=8, **kw):
+        seen.update(routes=route_ids, domain=domain, parallel=parallel,
+                    thread=threading.get_ident(), **kw)
+        from egressd.probe import ProbeOutcome
+        return [ProbeOutcome(route_id=rid, domain=domain, error="ok", http_ok=True)
+                for rid in route_ids]
+
+    monkeypatch.setattr(app.state.engine, "probe_routes", fake_probe)
+    r = c.post("/v1/probe-domain", headers=host, json={
+        "domain": "example.com", "provider": "blanc", "parallel": 100,
+        "timeout": 7, "max_routes": 2, "scheme": "http", "port": 8080,
+        "path": "/health", "method": "HEAD", "check": ["tcp", "http"],
+        "expected_status": "204"})
+    assert r.status_code == 200
+    assert r.json()["count"] == 2
+    assert all(rid.startswith("blanc:") for rid in seen["routes"])
+    assert seen["parallel"] == len(app.state.allocator)
+    assert seen["timeout"] == 7
+    assert seen["scheme"] == "http" and seen["port"] == 8080
+    assert seen["path"] == "/health" and seen["method"] == "HEAD"
+    assert seen["check"] == ("tcp", "http") and seen["expected"] == (204, 204)
+    assert seen["thread"] != request_thread
+
+
+def test_probe_rejects_oversized_explicit_list_and_invalid_options(egress, monkeypatch):
+    c, host, app = egress["client"], egress["host"], egress["app"]
+    monkeypatch.setattr(app.state, "test_max_routes", 2)
+    routes = ["direct", "blanc:FI-Helsinki-1", "xeovo:US-New-York-1"]
+    cases = [
+        ({"routes": routes}, "too many explicit routes"),
+        ({"routes": routes, "max_routes": 999}, "too many explicit routes"),
+        ({"parallel": 0}, "probe limits"),
+        ({"timeout": 0}, "probe limits"),
+        ({"expected_status": "999"}, "expected_status"),
+        ({"check": ["dns", "bogus"]}, "check"),
+        ({"path": "/ok\r\nBad: yes"}, "invalid probe URL"),
+    ]
+    for options, detail in cases:
+        r = c.post("/v1/probe-domain", headers=host,
+                   json={"domain": "example.com", **options})
+        assert r.status_code == 400
+        assert detail in r.json()["detail"]
+
+
 # ===========================================================================
 # supporting coverage
 # ===========================================================================

@@ -26,6 +26,7 @@ Security rules (spec section 27/28):
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import os
 import re
@@ -1274,28 +1275,63 @@ def create_app() -> FastAPI:
                             r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*"
                             r"(?::\d{1,5})?", str(domain)) or len(str(domain)) > 255:
             raise HTTPException(status_code=400, detail=f"invalid domain {str(domain)[:50]!r}")
-        expected = _parse_expected(body.get("expected_status", "200-399"))
-        check = tuple(body.get("check", ["dns", "tcp", "tls", "http"]))
-        parallel = int(body.get("parallel", 8))
-        max_routes = int(body.get("max_routes", app.state.test_max_routes))
+        try:
+            expected = _parse_expected(body.get("expected_status", "200-399"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        check_raw = body.get("check", ["dns", "tcp", "tls", "http"])
+        if (not isinstance(check_raw, list) or not check_raw or
+                any(stage not in ("dns", "tcp", "tls", "http") for stage in check_raw) or
+                len(set(check_raw)) != len(check_raw)):
+            raise HTTPException(status_code=400, detail="check must list unique dns,tcp,tls,http stages")
+        check = tuple(check_raw)
+        try:
+            parallel = int(body.get("parallel", 8))
+            max_routes = int(body.get("max_routes", app.state.test_max_routes))
+            timeout = float(body.get("timeout", app.state.engine.timeout))
+            port = body.get("port")
+            port = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid numeric probe option") from None
+        if parallel < 1 or max_routes < 1 or not 0 < timeout <= 60 or \
+                (port is not None and not 1 <= port <= 65535):
+            raise HTTPException(status_code=400, detail="probe limits or port out of range")
+        parallel = min(parallel, len(app.state.allocator))
+        max_routes = min(max_routes, app.state.test_max_routes)
+        scheme = body.get("scheme", "https")
+        method = body.get("method", "GET")
+        path = body.get("path", "/")
+        if scheme not in ("http", "https") or method not in ("HEAD", "GET") or \
+                not isinstance(path, str) or not path.startswith("/") or \
+                len(path) > 2048 or any(c in path for c in "\r\n"):
+            raise HTTPException(status_code=400, detail="invalid probe URL or method")
+        if (body.get("all") and body.get("routes")) or \
+                (body.get("routes") and (body.get("country") or body.get("provider"))):
+            raise HTTPException(status_code=400, detail="routes cannot be combined with catalog filters")
 
-        if body.get("all"):
+        if body.get("all") or body.get("country") or body.get("provider"):
             routes = app.state.catalog.filter(country=body.get("country"),
                                               provider=body.get("provider"),
                                               client_id=client_id(profile))
             route_ids = [r.id for r in routes][:max_routes]
-        elif body.get("routes"):
+        elif body.get("routes") is not None:
+            if not isinstance(body["routes"], list) or not body["routes"] or \
+                    any(not isinstance(r, str) for r in body["routes"]):
+                raise HTTPException(status_code=400, detail="routes must be a nonempty list of route IDs")
             route_ids = list(body["routes"])
+            if len(route_ids) > max_routes:
+                raise HTTPException(status_code=400,
+                                    detail=f"too many explicit routes (limit {max_routes})")
         else:
             route_ids = [app.state.state.get(client_id(profile))["route"]]
 
         cid = client_id(profile)
         for rid in route_ids:
             require_visible(profile, rid)
-        kw = dict(scheme=body.get("scheme", "https"), port=body.get("port"),
-                  path=body.get("path", "/"), method=body.get("method", "GET"),
-                  check=check, expected=expected)
-        outcomes = app.state.engine.probe_routes(route_ids, domain, parallel=parallel, **kw)
+        kw = dict(scheme=scheme, port=port, path=path, method=method,
+                  check=check, expected=expected, timeout=timeout)
+        outcomes = await asyncio.to_thread(
+            app.state.engine.probe_routes, route_ids, domain, parallel=parallel, **kw)
         results = []
         for o in outcomes:
             d = o.to_dict()
@@ -1692,16 +1728,18 @@ def _parse_bytes(value: Any) -> int:
 
 
 def _parse_expected(value: Any) -> tuple[int, int]:
-    if isinstance(value, tuple):
-        return value
     s = str(value)
     m = re.fullmatch(r"\s*(\d{3})\s*-\s*(\d{3})\s*", s)
     if m:
-        return int(m.group(1)), int(m.group(2))
+        low, high = int(m.group(1)), int(m.group(2))
+        if 100 <= low <= high <= 599:
+            return low, high
     m = re.fullmatch(r"\s*(\d{3})\s*", s)
     if m:
-        return int(m.group(1)), int(m.group(1))
-    return 200, 399
+        status = int(m.group(1))
+        if 100 <= status <= 599:
+            return status, status
+    raise ValueError("expected_status must be an HTTP status or ascending range (100-599)")
 
 
 def _fetch_and_write_provider(provider_id: str, meta: dict[str, Any],
@@ -1777,10 +1815,16 @@ def _download_through_socks(host: str, port: int, user: str, password: str,
                             nbytes: int) -> tuple[float | None, int, str | None]:
     """Download ``nbytes`` through an authenticated SOCKS5 listener -> (mbps, got, err)."""
     import socket
+    from urllib.parse import urlsplit
 
     url = os.environ.get("EGRESSD_BENCH_URL",
-                         "http://speedtest.vibelab.local/download")
-    host_part, _, path_part = url.partition("://")
+                         f"http://speed.cloudflare.com/__down?bytes={nbytes}")
+    parsed = urlsplit(url)
+    if parsed.scheme != "http" or not parsed.hostname:
+        return None, 0, "benchmark URL must be HTTP with a hostname"
+    host_part = parsed.hostname
+    target_port = parsed.port or 80
+    path_part = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
     # connect to the bench host through the socks listener
     s = None
     try:
@@ -1794,7 +1838,7 @@ def _download_through_socks(host: str, port: int, user: str, password: str,
             if r[1] != 0x00:
                 return None, 0, "auth rejected"
         s.sendall(b"\x05\x01\x00\x03" + bytes([len(host_part)]) + host_part.encode()
-                  + (80).to_bytes(2, "big"))
+                  + target_port.to_bytes(2, "big"))
         resp = s.recv(4)
         if resp[1] != 0x00:
             return None, 0, f"connect failed {resp[1]}"
@@ -1811,12 +1855,29 @@ def _download_through_socks(host: str, port: int, user: str, password: str,
         s.sendall(req.encode())
         got = 0
         t0 = time.time()
+        header = bytearray()
+        while b"\r\n\r\n" not in header:
+            chunk = s.recv(4096)
+            if not chunk:
+                return None, 0, "benchmark HTTP response ended before headers"
+            header.extend(chunk)
+            if len(header) > 65536:
+                return None, 0, "benchmark HTTP headers too large"
+        head, body = bytes(header).split(b"\r\n\r\n", 1)
+        status = head.split(b"\r\n", 1)[0].split()
+        if len(status) < 2 or status[1] not in (b"200", b"206"):
+            return None, 0, "benchmark HTTP status " + (status[1].decode("ascii", "replace") if len(status) > 1 else "invalid")
+        got = min(len(body), nbytes)
         while got < nbytes:
+            if time.time() - t0 >= 45:
+                return None, got, "benchmark download timed out"
             chunk = s.recv(65536)
             if not chunk:
                 break
-            got += len(chunk)
+            got += min(len(chunk), nbytes - got)
         dt = time.time() - t0
+        if got < nbytes:
+            return None, got, "benchmark download incomplete"
         mbps = (got * 8) / (dt * 1_000_000) if dt > 0 else 0.0
         return round(mbps, 2), got, None
     except OSError as e:
