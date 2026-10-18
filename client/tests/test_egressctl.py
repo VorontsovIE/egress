@@ -151,7 +151,7 @@ class TestList:
             seen.update(f)
             return {"routes": [{"id": "blanc:FI-Helsinki-1",
                                 "provider": "blanc", "country": "FI",
-                                "delay_ms": 42, "healthy": True}]}
+                                "latency_ms": 42, "healthy": True}]}
         stub = type("S", (), {"list_routes": list_routes})()
         code, out, _ = run_cli(monkeypatch, cfg_file, "list", "--country", "FI",
                                "--provider", "blanc", "--healthy", api_stub=stub)

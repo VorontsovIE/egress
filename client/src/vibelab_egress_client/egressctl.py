@@ -245,8 +245,10 @@ def cmd_list(args) -> None:
         _print_json(data)
     else:
         for r in routes:
+            latency = r.get("latency_ms")
             print(f"{r.get('id', '?')}\t{r.get('provider', '?')}/{r.get('country', '?')}\t"
-                  f"delay={r.get('delay_ms', '?')}ms healthy={r.get('healthy', '?')}")
+                  f"delay={latency if latency is not None else '?'}ms "
+                  f"healthy={r.get('healthy', '?')}")
 
 
 def cmd_test(args) -> None:

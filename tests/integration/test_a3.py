@@ -139,6 +139,8 @@ def test_provider_route_uses_mihomo_provider_healthcheck(egress, monkeypatch):
     assert response.json()["results"][0]["latency_ms"] == 42
     assert calls == [("blanc", "blanc-FI-Helsinki-1",
                       "https://www.gstatic.com/generate_204")]
+    ranked = egress["client"].get("/v1/best", headers=egress["host"])
+    assert ranked.status_code == 200
 
     admin = MihomoAdmin()
     paths = []

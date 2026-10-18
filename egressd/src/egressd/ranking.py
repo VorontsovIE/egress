@@ -38,6 +38,7 @@ have, and ties fall back to the stable route ID).
 """
 from __future__ import annotations
 
+from datetime import datetime
 import time
 from typing import Any
 
@@ -76,10 +77,15 @@ def health_score(healthy: bool | None, tested_at: float | None, now: float) -> f
     return 0.0
 
 
-def freshness_score(tested_at: float | None, now: float) -> float:
+def freshness_score(tested_at: float | str | None, now: float) -> float:
     """1.0 for a sample taken now, 0.0 for a sample at or beyond the window."""
     if tested_at is None:
         return 0.0
+    if isinstance(tested_at, str):
+        try:
+            tested_at = datetime.fromisoformat(tested_at.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
     age = max(0.0, now - tested_at)
     return _clamp01(1.0 - age / FRESHNESS_WINDOW_S)
 

@@ -140,6 +140,9 @@ class TestRankingUnit:
         assert freshness_score(now - 1800, now) == 0.5
         assert freshness_score(now - 7200, now) == 0.0
         assert freshness_score(None, now) == 0.0
+        utc_stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 1800))
+        assert freshness_score(utc_stamp, now) == pytest.approx(0.5, abs=0.001)
+        assert freshness_score("invalid", now) == 0.0
 
     def test_latency_score(self):
         assert latency_score(50, 50) == 1.0
