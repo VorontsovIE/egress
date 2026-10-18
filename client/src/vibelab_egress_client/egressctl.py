@@ -142,7 +142,19 @@ def cmd_source_list(args) -> None:
         _print_json(data)
     else:
         for item in data.get("providers", []):
-            print(f"{item['alias']}\t{item['kind']}\t{item['node_count']} nodes")
+            skipped = item.get("skipped_nodes") or 0
+            suffix = f", {skipped} skipped" if skipped else ""
+            count = item["node_count"]
+            label = "node" if count == 1 else "nodes"
+            print(f"{item['alias']}\t{item['kind']}\t{count} {label}{suffix}")
+
+
+def _source_result(args, data, action: str, name: str) -> None:
+    skipped = data.get("skipped_nodes") or 0
+    count = data.get("node_count", 0)
+    label = "node" if count == 1 else "nodes"
+    suffix = f" ({count} {label}, {skipped} skipped)" if skipped else ""
+    _emit(args, data, f"source {action}: {name}{suffix}")
 
 
 def cmd_source_add(args) -> None:
@@ -166,7 +178,7 @@ def cmd_source_add(args) -> None:
     else:
         local.save(args.name, kind, value)
         data = _call(args, lambda: api.upload_personal(args.name, local.normalize(args.name)), None)
-    _emit(args, data, f"source added: {args.name}")
+    _source_result(args, data, "added", args.name)
 
 
 def cmd_source_refresh(args) -> None:
@@ -177,7 +189,7 @@ def cmd_source_refresh(args) -> None:
         data = _call(args, lambda: api.refresh_personal(args.name), None)
     else:
         data = _call(args, lambda: api.upload_personal(args.name, local.normalize(args.name)), None)
-    _emit(args, data, f"source refreshed: {args.name}")
+    _source_result(args, data, "refreshed", args.name)
 
 
 def cmd_source_remove(args) -> None:

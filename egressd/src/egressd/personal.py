@@ -156,7 +156,7 @@ def fetch_url(url: str) -> bytes:
     raise ValueError("too many subscription redirects")
 
 
-def validate_yaml(text: str) -> tuple[str, int]:
+def validate_yaml(text: str) -> tuple[str, int, int]:
     if len(text.encode()) > MAX_SOURCE_BYTES:
         raise ValueError("personal provider too large")
     data = yaml.safe_load(text)
@@ -166,6 +166,8 @@ def validate_yaml(text: str) -> tuple[str, int]:
     if not proxies:
         raise ValueError("personal provider needs at least one node")
     seen = set()
+    accepted = []
+    skipped = 0
     for proxy in proxies:
         if not isinstance(proxy, dict) or proxy.get("type") not in ALLOWED_TYPES:
             raise ValueError("unsupported personal proxy type")
@@ -174,12 +176,19 @@ def validate_yaml(text: str) -> tuple[str, int]:
         name, host = proxy.get("name"), proxy.get("server")
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name) or name in seen:
             raise ValueError("invalid personal proxy name")
-        seen.add(name)
         if not isinstance(host, str):
             raise ValueError("personal proxy needs a public server")
+        try:
+            port = int(proxy.get("port"))
+        except (ValueError, TypeError):
+            port = 0
+        if not 1 <= port <= 65535:
+            raise ValueError("invalid personal proxy port")
         addresses = _public_addresses(host)
         if not addresses:
-            raise ValueError("personal proxy needs a public server")
+            skipped += 1
+            continue
+        seen.add(name)
         # Mihomo must never resolve a personal server name again at dial time:
         # a later DNS answer could point at a host/private address. Preserve
         # the original hostname for protocols that use it as TLS SNI.
@@ -194,10 +203,10 @@ def validate_yaml(text: str) -> tuple[str, int]:
             elif proxy["type"] == "http" and proxy.get("tls") and not proxy.get("sni"):
                 proxy["sni"] = host
             proxy["server"] = addresses[0]
-        try:
-            port = int(proxy.get("port"))
-        except (ValueError, TypeError):
-            port = 0
-        if not 1 <= port <= 65535:
-            raise ValueError("invalid personal proxy port")
-    return yaml.safe_dump({"proxies": proxies}, sort_keys=False), len(proxies)
+        accepted.append(proxy)
+    if not accepted:
+        raise ValueError("personal provider needs at least one public node")
+    normalized = yaml.safe_dump({"proxies": accepted}, sort_keys=False)
+    if len(normalized.encode()) > MAX_SOURCE_BYTES:
+        raise ValueError("personal provider too large")
+    return normalized, len(accepted), skipped

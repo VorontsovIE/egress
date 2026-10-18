@@ -788,8 +788,10 @@ def create_app() -> FastAPI:
     # keep their source in the backend; container profiles upload a normalized
     # snapshot and retain their URL/source inside the container.
     def _personal_view(meta: dict[str, Any]) -> dict[str, Any]:
-        return {key: meta.get(key) for key in
+        view = {key: meta.get(key) for key in
                 ("alias", "provider_id", "kind", "node_count", "updated_at")}
+        view["skipped_nodes"] = meta.get("skipped_nodes", 0)
+        return view
 
     def _commit_personal(meta: dict[str, Any], yaml_text: str) -> dict[str, Any]:
         from .personal import atomic_bytes, load_metadata, metadata_path, save_metadata
@@ -861,12 +863,13 @@ def create_app() -> FastAPI:
             else:
                 raw = source
             yaml_text, _ = normalize_source(raw)
-            yaml_text, count = validate_yaml(yaml_text)
+            yaml_text, count, skipped = validate_yaml(yaml_text)
         except (OSError, ValueError, UnicodeError, yaml.YAMLError):
             raise HTTPException(status_code=400, detail="personal source rejected") from None
         meta = {"provider_id": provider, "client_id": client_id(profile),
                 "alias": alias, "kind": kind, "source": source,
-                "node_count": count, "updated_at": int(time.time())}
+                "node_count": count, "skipped_nodes": skipped,
+                "updated_at": int(time.time())}
         with app.state.provider_update_lock:
             return _commit_personal(meta, yaml_text)
 
@@ -890,11 +893,12 @@ def create_app() -> FastAPI:
         if not isinstance(body.get("yaml"), str):
             raise HTTPException(status_code=400, detail="normalized YAML required")
         try:
-            yaml_text, count = validate_yaml(body["yaml"])
+            yaml_text, count, skipped = validate_yaml(body["yaml"])
         except (ValueError, yaml.YAMLError):
             raise HTTPException(status_code=400, detail="personal snapshot rejected") from None
         meta = {"provider_id": provider, "client_id": client_id(profile),
                 "alias": alias, "kind": "snapshot", "node_count": count,
+                "skipped_nodes": skipped,
                 "updated_at": int(time.time())}
         with app.state.provider_update_lock:
             return _commit_personal(meta, yaml_text)
@@ -959,10 +963,11 @@ def create_app() -> FastAPI:
         try:
             raw = fetch_url(meta["source"]).decode("utf-8")
             normalized, _ = normalize_source(raw)
-            normalized, count = validate_yaml(normalized)
+            normalized, count, skipped = validate_yaml(normalized)
         except (OSError, ValueError, UnicodeError, yaml.YAMLError):
             raise HTTPException(status_code=502, detail="personal source refresh failed") from None
-        updated = {**meta, "node_count": count, "updated_at": int(time.time())}
+        updated = {**meta, "node_count": count, "skipped_nodes": skipped,
+                   "updated_at": int(time.time())}
         with app.state.provider_update_lock:
             return _commit_personal(updated, normalized)
 
@@ -1000,14 +1005,16 @@ def create_app() -> FastAPI:
             try:
                 raw = fetch_url(personal_meta["source"]).decode("utf-8")
                 normalized, _ = normalize_source(raw)
-                normalized, count = validate_yaml(normalized)
+                normalized, count, skipped = validate_yaml(normalized)
             except (OSError, ValueError, UnicodeError, yaml.YAMLError):
                 raise HTTPException(status_code=502, detail="personal source refresh failed") from None
             updated = {**personal_meta, "node_count": count,
+                       "skipped_nodes": skipped,
                        "updated_at": int(time.time())}
             result = _commit_personal(updated, normalized)
             return {"provider": provider_id, "ok": True, "updated": True,
-                    "node_count": result["node_count"]}
+                    "node_count": result["node_count"],
+                    "skipped_nodes": result["skipped_nodes"]}
         if via and via != "direct":
             require_visible(profile, via)
         # if_older_than (seconds): skip if the artifact is fresh enough

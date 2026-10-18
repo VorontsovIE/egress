@@ -32,16 +32,24 @@ def test_container_snapshot_private_and_no_raw_source(tmp_path, monkeypatch):
     api = TestClient(create_app())
     alice = {"Authorization": "Bearer token-alice"}
     bob = {"Authorization": "Bearer token-bob"}
-    snapshot = yaml.safe_dump({"proxies": [{"name": "test", "type": "socks5",
-                                          "server": "1.1.1.1", "port": 443}]})
+    snapshot = yaml.safe_dump({"proxies": [
+        {"name": "test", "type": "socks5", "server": "1.1.1.1", "port": 443},
+        {"name": "private", "type": "socks5", "server": "127.0.0.1", "port": 443},
+    ]})
     assert api.post("/v1/personal/providers", headers=alice,
                     json={"name": "forbidden", "kind": "file", "source": snapshot}).status_code == 403
     added = api.put("/v1/personal/providers/demo/snapshot", headers=alice,
                     json={"yaml": snapshot})
     assert added.status_code == 200
+    assert added.json()["node_count"] == 1
+    assert added.json()["skipped_nodes"] == 1
     provider = added.json()["provider_id"]
     assert api.get("/v1/personal/providers", headers=bob).json()["providers"] == []
-    assert api.get("/v1/personal/providers", headers=alice).json()["providers"][0]["alias"] == "demo"
+    listed = api.get("/v1/personal/providers", headers=alice).json()["providers"][0]
+    assert listed["alias"] == "demo"
+    assert listed["skipped_nodes"] == 1
+    assert [node["name"] for node in yaml.safe_load(
+        (providers / f"{provider}.yaml").read_text())["proxies"]] == ["test"]
     routes_a = api.get("/v1/routes", headers=alice).json()["routes"]
     routes_b = api.get("/v1/routes", headers=bob).json()["routes"]
     assert any(r.get("provider") == provider for r in routes_a)
@@ -71,8 +79,9 @@ def test_personal_provider_accepts_more_than_300_nodes():
         {"name": f"node-{i}", "type": "socks5", "server": "1.1.1.1", "port": 1080}
         for i in range(317)
     ]})
-    normalized, count = validate_yaml(raw)
+    normalized, count, skipped = validate_yaml(raw)
     assert count == 317
+    assert skipped == 0
     assert len(yaml.safe_load(normalized)["proxies"]) == 317
 
 
@@ -92,10 +101,28 @@ def test_personal_domain_is_pinned_before_mihomo_dials(monkeypatch):
     raw = yaml.safe_dump({"proxies": [{"name": "remote", "type": "trojan",
                                      "server": "public.example", "port": 443,
                                      "password": "fake-do-not-use"}]})
-    normalized, _ = personal.validate_yaml(raw)
+    normalized, _, _ = personal.validate_yaml(raw)
     node = yaml.safe_load(normalized)["proxies"][0]
     assert node["server"] == "1.1.1.1"
     assert node["servername"] == "public.example"
+
+
+def test_personal_provider_skips_unresolvable_nodes(monkeypatch):
+    from egressd import personal
+    monkeypatch.setattr(personal, "_public_addresses",
+                        lambda host: [] if host.startswith("bad") else ["1.1.1.1"])
+    raw = yaml.safe_dump({"proxies": [
+        {"name": f"node-{i}", "type": "socks5",
+         "server": f"bad-{i}.example" if i < 12 else "good.example", "port": 1080}
+        for i in range(317)
+    ]})
+    normalized, count, skipped = personal.validate_yaml(raw)
+    nodes = yaml.safe_load(normalized)["proxies"]
+    assert (count, skipped) == (305, 12)
+    assert len(nodes) == 305
+    assert all(node["server"] == "1.1.1.1" for node in nodes)
+    assert {node["name"] for node in nodes}.isdisjoint(
+        {f"node-{i}" for i in range(12)})
 
 
 def test_mihomo_default_groups_exclude_foreign_personal_provider():

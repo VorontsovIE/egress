@@ -325,12 +325,12 @@ def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
     class Stub:
         def upload_personal(self, name, yaml_text):
             sent.append((name, yaml_text))
-            return {"alias": name, "node_count": 1}
+            return {"alias": name, "node_count": 1, "skipped_nodes": 2}
 
     code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
                              "--file", str(raw), api_stub=Stub())
     assert code == 0, err
-    assert "source added: demo" in out
+    assert "source added: demo (1 node, 2 skipped)" in out
     assert sent == [("demo", "proxies: []\n")]
     local = tmp_path / "sources" / "demo.json"
     assert json.loads(local.read_text())["source"] == "private-source-marker"
