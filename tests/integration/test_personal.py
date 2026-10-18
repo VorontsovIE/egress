@@ -65,6 +65,27 @@ def test_reject_private_proxy_address():
         raise AssertionError("private address accepted")
 
 
+def test_personal_provider_accepts_more_than_300_nodes():
+    from egressd.personal import validate_yaml
+    raw = yaml.safe_dump({"proxies": [
+        {"name": f"node-{i}", "type": "socks5", "server": "1.1.1.1", "port": 1080}
+        for i in range(317)
+    ]})
+    normalized, count = validate_yaml(raw)
+    assert count == 317
+    assert len(yaml.safe_load(normalized)["proxies"]) == 317
+
+
+def test_personal_provider_rejects_empty_nodes():
+    from egressd.personal import validate_yaml
+    try:
+        validate_yaml("proxies: []\n")
+    except ValueError as exc:
+        assert "at least one node" in str(exc)
+    else:
+        raise AssertionError("empty personal provider accepted")
+
+
 def test_personal_domain_is_pinned_before_mihomo_dials(monkeypatch):
     from egressd import personal
     monkeypatch.setattr(personal, "_public_addresses", lambda host: ["1.1.1.1"])

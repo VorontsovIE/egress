@@ -21,7 +21,6 @@ import yaml
 
 ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
-MAX_NODES = 300
 MAX_PROVIDERS = 32
 ALLOWED_TYPES = {"vless", "vmess", "trojan", "ss", "hysteria2", "tuic",
                  "wireguard", "socks5", "http"}
@@ -164,8 +163,8 @@ def validate_yaml(text: str) -> tuple[str, int]:
     if not isinstance(data, dict) or not isinstance(data.get("proxies"), list):
         raise ValueError("personal provider needs a proxies list")
     proxies = data["proxies"]
-    if not 1 <= len(proxies) <= MAX_NODES:
-        raise ValueError("personal provider node count out of range")
+    if not proxies:
+        raise ValueError("personal provider needs at least one node")
     seen = set()
     for proxy in proxies:
         if not isinstance(proxy, dict) or proxy.get("type") not in ALLOWED_TYPES:
