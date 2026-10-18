@@ -348,6 +348,26 @@ def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
     assert local.stat().st_mtime_ns == before
 
 
+def test_source_url_can_be_read_from_stdin(monkeypatch, cfg_file, tmp_path):
+    import io
+    from vibelab_egress_client import personal_sources
+
+    url = "https://subscription.example/path?token=private-value"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(url + "\n"))
+    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    monkeypatch.setattr(personal_sources, "normalize", lambda name: "proxies: []\n")
+
+    class Stub:
+        def upload_personal(self, name, yaml_text):
+            return {"alias": name, "node_count": 1}
+
+    code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "private",
+                             "--url", "-", api_stub=Stub())
+    assert code == 0, err
+    assert url not in out + err
+    assert personal_sources.load("private") == {"kind": "url", "source": url}
+
+
 def test_source_add_missing_file_reports_usage_error(monkeypatch, cfg_file, tmp_path):
     missing = tmp_path / "missing-subscription.yaml"
     code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
@@ -411,3 +431,64 @@ def test_container_add_single_uri_without_file(monkeypatch, cfg_file, tmp_path):
                              "--uri", "-", api_stub=Stub())
     assert code == 0, err
     assert personal_sources.load("fromstdin") == {"kind": "uri", "source": uri}
+
+
+def test_benchmark_single_route_passes_bytes(monkeypatch, cfg_file):
+    seen = {}
+
+    class Stub:
+        def benchmark(self, route, bytes=None):
+            seen.update(route=route, bytes=bytes)
+            return {"results": [{"route": route, "ok": True,
+                                 "bytes": 1024 * 1024, "mbps": 10.0}]}
+
+    code, _, err = run_cli(monkeypatch, cfg_file, "benchmark", "direct",
+                           "--bytes", "1M", api_stub=Stub())
+    assert code == 0, err
+    assert seen == {"route": "direct", "bytes": "1M"}
+
+
+def test_network_checks_use_long_request_timeout(monkeypatch, cfg_file):
+    seen = []
+
+    class Stub:
+        def probe_domain(self, domain, all_routes=False, **options):
+            return {"results": []}
+
+        def best(self, **kwargs):
+            return {"best": None, "candidates": []}
+
+    monkeypatch.setattr(egressctl, "EgressApi",
+                        lambda cfg, timeout=15.0: (seen.append(timeout), Stub())[1])
+    code, _, err = run_cli(monkeypatch, cfg_file, "probe-domain",
+                           "example.com", "--all")
+    assert code == 0, err
+    code, _, err = run_cli(monkeypatch, cfg_file, "--json", "best",
+                           "--domain", "example.com")
+    assert code == 0, err
+    assert seen == [egressctl.NETWORK_TEST_TIMEOUT] * 2
+
+
+def test_probe_domain_forwards_all_options(monkeypatch, cfg_file):
+    seen = {}
+
+    class Stub:
+        def probe_domain(self, domain, all_routes=False, **options):
+            seen.update(domain=domain, all=all_routes, **options)
+            return {"count": 2, "results": [{"reachable": True},
+                                             {"reachable": False}]}
+
+    code, out, err = run_cli(
+        monkeypatch, cfg_file, "probe-domain", "example.com", "--all",
+        "--country", "FI", "--provider", "blanc", "--routes", "direct,blanc:fi-01",
+        "--parallel", "4", "--timeout", "12", "--scheme", "http", "--port", "8080",
+        "--path", "/health", "--method", "HEAD", "--expected-status", "204",
+        "--check", "dns,tcp,http", "--max-routes", "20", api_stub=Stub())
+    assert code == 0, err
+    assert "1 ok / 2 routes" in out
+    assert seen == {"domain": "example.com", "all": True, "country": "FI",
+                    "provider": "blanc", "routes": ["direct", "blanc:fi-01"],
+                    "parallel": 4, "timeout": 12.0, "scheme": "http",
+                    "port": 8080, "path": "/health", "method": "HEAD",
+                    "expected_status": "204", "check": ["dns", "tcp", "http"],
+                    "max_routes": 20}

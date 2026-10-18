@@ -127,12 +127,17 @@ class EgressApi:
             return self._request("POST", f"/v1/routes/{urllib.parse.quote(route_id)}/test")
         return self._request("POST", "/v1/test")
 
-    def probe_domain(self, domain: str, all_routes: bool = False) -> dict:
-        return self._request("POST", "/v1/probe-domain",
-                             {"domain": domain, "all": all_routes})
+    def probe_domain(self, domain: str, all_routes: bool = False,
+                     **options: Any) -> dict:
+        body = {"domain": domain, "all": all_routes}
+        body.update({key: value for key, value in options.items() if value is not None})
+        return self._request("POST", "/v1/probe-domain", body)
 
-    def benchmark(self, route_id: str) -> dict:
-        return self._request("POST", "/v1/benchmark", {"route": route_id})
+    def benchmark(self, route_id: str, bytes: str | None = None) -> dict:
+        body = {"route": route_id}
+        if bytes is not None:
+            body["bytes"] = bytes
+        return self._request("POST", "/v1/benchmark", body)
 
     def benchmark_shortlist(self, **filters: Any) -> dict:
         """Shortlist benchmark (spec 25): health/latency -> shortlist -> bench.

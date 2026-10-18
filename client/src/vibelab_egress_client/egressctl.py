@@ -29,6 +29,7 @@ EXIT_CONFIG = 3
 EXIT_AUTH = 4
 EXIT_IDENTITY = 5
 SOURCE_TIMEOUT = 300
+NETWORK_TEST_TIMEOUT = 150
 
 
 def _print_json(data: Any) -> None:
@@ -68,8 +69,9 @@ def _call(args: argparse.Namespace, fn, human_fn) -> Any:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(EXIT_RUNTIME)
     except TimeoutError:
-        print("error: request timed out; outcome unknown; check egressctl source list before retrying",
-              file=sys.stderr)
+        detail = ("; check egressctl source list before retrying"
+                  if getattr(args, "command", None) == "source" else "")
+        print(f"error: request timed out; outcome unknown{detail}", file=sys.stderr)
         sys.exit(EXIT_RUNTIME)
     except (OSError, ValueError, RuntimeError) as e:
         print(f"error: {type(e).__name__} in local source operation", file=sys.stderr)
@@ -172,7 +174,8 @@ def cmd_source_add(args) -> None:
     if not local.ALIAS.fullmatch(args.name):
         raise SystemExit("invalid source name")
     if args.url:
-        kind, value = "url", args.url
+        kind = "url"
+        value = sys.stdin.readline(local.MAX_SOURCE_BYTES + 1).strip() if args.url == "-" else args.url
     elif args.uri is not None:
         kind = "uri"
         value = sys.stdin.readline(local.MAX_SOURCE_BYTES + 1).strip() if args.uri == "-" else args.uri
@@ -258,16 +261,26 @@ def cmd_test(args) -> None:
 
 
 def cmd_probe_domain(args) -> None:
-    api = _api(args)
-    data = _call(args, lambda: api.probe_domain(args.domain, all_routes=args.all), None)
-    _emit(args, data, f"probe {args.domain}: {data.get('ok_count', '?')} ok / "
-                      f"{data.get('total', '?')} routes")
+    api = EgressApi(_load(args), timeout=NETWORK_TEST_TIMEOUT)
+    options = dict(country=args.country, provider=args.provider,
+                   routes=args.routes.split(",") if args.routes else None,
+                   parallel=args.parallel, timeout=args.timeout,
+                   scheme=args.scheme, port=args.port, path=args.path,
+                   method=args.method, expected_status=args.expected_status,
+                   check=args.check.split(",") if args.check else None,
+                   max_routes=args.max_routes)
+    data = _call(args, lambda: api.probe_domain(args.domain, all_routes=args.all,
+                                                **options), None)
+    results = data.get("results", [])
+    _emit(args, data, f"probe {args.domain}: "
+                      f"{sum(bool(r.get('reachable')) for r in results)} ok / "
+                      f"{data.get('count', len(results))} routes")
 
 
 def cmd_benchmark(args) -> None:
-    api = _api(args)
+    api = EgressApi(_load(args), timeout=NETWORK_TEST_TIMEOUT)
     if args.route:
-        data = _call(args, lambda: api.benchmark(args.route), None)
+        data = _call(args, lambda: api.benchmark(args.route, bytes=args.bytes), None)
     else:
         # shortlist pipeline (spec 25): health/latency -> shortlist -> bench
         q = {"top_latency": args.top_latency}
@@ -293,7 +306,7 @@ def _benchmark_human(data: Any) -> str:
 
 
 def cmd_best(args) -> None:
-    api = _api(args)
+    api = EgressApi(_load(args), timeout=NETWORK_TEST_TIMEOUT if args.domain else 15.0)
     data = _call(args, lambda: api.best(
         country=args.country, provider=args.provider, domain=args.domain,
         max_latency=args.max_latency, speed_aware=args.speed_aware), None)
@@ -525,7 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
     sa = ssub.add_parser("add", help="add a private subscription or proxy source")
     sa.add_argument("name")
     choice = sa.add_mutually_exclusive_group(required=True)
-    choice.add_argument("--url")
+    choice.add_argument("--url", help="subscription URL; use '-' to read a line from stdin")
     choice.add_argument("--file")
     choice.add_argument("--uri", help="one proxy URI; use '-' to read a line from stdin")
     sa.set_defaults(fn=cmd_source_add)
@@ -551,7 +564,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     pd = add("probe-domain", cmd_probe_domain, "probe a domain through routes")
     pd.add_argument("domain")
-    pd.add_argument("--all", action="store_true", help="all routes, not just default")
+    pd.add_argument("--all", action="store_true",
+                    help="catalog routes up to the backend per-request limit")
+    pd.add_argument("--country")
+    pd.add_argument("--provider")
+    pd.add_argument("--routes", help="comma-separated route IDs")
+    pd.add_argument("--parallel", type=int)
+    pd.add_argument("--timeout", type=float)
+    pd.add_argument("--scheme", choices=("http", "https"))
+    pd.add_argument("--port", type=int)
+    pd.add_argument("--path")
+    pd.add_argument("--method", choices=("HEAD", "GET"))
+    pd.add_argument("--expected-status")
+    pd.add_argument("--check", help="comma-separated stages: dns,tcp,tls,http")
+    pd.add_argument("--max-routes", type=int)
+    pd.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                    help="machine-readable output")
 
     bm = add("benchmark", cmd_benchmark,
              "throughput benchmark: one route, or a shortlist (spec 25)")
