@@ -1,3 +1,25 @@
+# Обновление подписки и состояния маршрутов
+
+Дата: 2026-10-19. Обновлена host personal subscription `batch2` командой
+`egressctl source refresh batch2`; `node_count` остался 306, timestamp
+источника обновился. До/после: 400 route ID, 0 добавлено и 0 удалено.
+У четырёх узлов полная конфигурация поменялась при прежнем ID: старый
+`healthy=false` сброшен в `null`; остальные 396 маршрутов сохранили прежние
+runtime-поля. Все 21 Hysteria2 после refresh всё ещё дали `tls_failure` на
+двух HTTPS целях (Cloudflare expected 200 и Google expected 204), 0/21
+успехов на каждой.
+
+Backend теперь вычисляет SHA-256 fingerprint каждой полной proxy-конфигурации
+в памяти и сохраняет fingerprint в локальной metrics SQLite. При неизменном
+fingerprint сохраняются health, delay, timestamp, GEO и benchmark; при
+изменении с тем же стабильным ID сбрасываются catalog runtime-поля и старые
+health/probe/benchmark/GEO samples. Latest health восстанавливается из SQLite
+после рестарта. Сырые YAML и credentials в fingerprint store не попадают.
+Проверено тестами сохранение при идентичном fingerprint и очистка при
+изменении endpoint/credentials; полный offline-набор — **379 passed**.
+Backend пересобран и healthy. Приватные снимки/результаты: каталог
+`~/.local/share/vibelab-egress-test/`, права 0600.
+
 # Установка host-клиента после локального QA
 
 Дата: 2026-10-19. Следующий инженер: host-клиент обновлён от имени root
