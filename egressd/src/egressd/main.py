@@ -677,8 +677,8 @@ def create_app() -> FastAPI:
         modes = profile.get("modes", ["proxy"])
         # A6 capability matrix (spec 21.5): tun availability is per-client,
         # set at provisioning from the environment's real capability
-        # (host-main: host-helper if installed; openscience-main: none, since
-        # gVisor has no /dev/net/tun / CAP_NET_ADMIN). Consistent with the
+        # (host-main: host-helper if installed; container-main: none, since
+        # container runtime has no /dev/net/tun / CAP_NET_ADMIN). Consistent with the
         # `mode set tun` / one-shot `mode=tun` checks below.
         tun_available = "tun" in modes
         return {

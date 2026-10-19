@@ -28,8 +28,8 @@ Security invariants (spec 21.4) -- each is enforced here and unit-tested:
   * audit events log op + route + outcome only -- never the command argv or
     environment by default.
 
-In an environment without CAP_NET_ADMIN / /dev/net/tun (e.g. the OpenScience
-gVisor container, or this sandbox) the `capability` op reports
+In an environment without CAP_NET_ADMIN / /dev/net/tun (e.g. the container
+container environment, or this sandbox) the `capability` op reports
 `tun: unsupported_in_environment` and `run` fails with an explicit,
 diagnosable error. There is NO silent fallback to proxy (spec 21.1/21.5).
 

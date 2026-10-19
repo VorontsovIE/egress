@@ -13,7 +13,7 @@
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
 
-ROOT="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}"
+ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
 SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
 REMOVE_DATA=0
 REMOVE_CLIENT=0

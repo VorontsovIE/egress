@@ -82,7 +82,7 @@ def _write_xeovo(path: Path) -> None:
 def egress(tmp_path, monkeypatch):
     clients = tmp_path / "clients"
     clients.mkdir()
-    for cid, env in (("host-main", "host"), ("openscience-main", "gvisor-container")):
+    for cid, env in (("host-main", "host"), ("container-main", "container")):
         (clients / f"{cid}.token").write_text(f"tok-{cid}\n")
         (clients / f"{cid}.profile.json").write_text(json.dumps(
             {"client_id": cid, "environment": env, "modes": ["proxy"]}))
@@ -110,7 +110,7 @@ def egress(tmp_path, monkeypatch):
         "provs": provs,
         "tmp": tmp_path,
         "host": {"Authorization": "Bearer tok-host-main"},
-        "os": {"Authorization": "Bearer tok-openscience-main"},
+        "os": {"Authorization": "Bearer tok-container-main"},
     }
 
 
@@ -161,15 +161,15 @@ def test_impersonation_denied(egress):
     # A client cannot name another client_id to change someone else's default.
     # The identity is bound to the token; a client_id field in the body is
     # ignored. host-main sets its own default even though the body claims to
-    # target openscience-main.
+    # target container-main.
     r = c.put("/v1/default", headers=host,
-              json={"route": "blanc:FI-Helsinki-1", "client_id": "openscience-main"})
+              json={"route": "blanc:FI-Helsinki-1", "client_id": "container-main"})
     assert r.status_code == 200
     assert r.json()["client_id"] == "host-main"  # applied to the token's client
 
-    # openscience-main's default is untouched by host-main's impersonation attempt.
+    # container-main's default is untouched by host-main's impersonation attempt.
     r = c.get("/v1/default", headers=os_)
-    assert r.json()["client_id"] == "openscience-main"
+    assert r.json()["client_id"] == "container-main"
     assert r.json()["route"] == "direct"
 
     # No endpoint exposes another client's state by naming it.

@@ -2,7 +2,7 @@
 
 Управляемый egress-слой на базе Mihomo для исследовательских и coding-агентов.
 Один backend (Docker Compose stack: `mihomo` + `egressd`) обслуживает несколько
-execution environments (host, OpenScience/gVisor, другие контейнеры/VM);
+execution environments (host, Docker container, другие контейнеры/VM);
 клиентский пакет (`egressctl` + `egress-run`, stdlib-only) ставится локально
 в каждую среду.
 
@@ -14,20 +14,23 @@ execution environments (host, OpenScience/gVisor, другие контейне�
 
 ```text
 Docker host
-├── OpenScience stack (workload)
+├── client containers (isolated workloads)
 └── vibelab-egress stack
     ├── mihomo            # pinned v1.19.32: providers, rules, GEO, listeners, TUN
     └── egressd           # authenticated /v1 control API + data-plane capabilities
         ▲
         │ (client token, per environment)
-host / OpenScience / other container
+host / container / other container
     ├── egressctl         # control plane: routes, defaults, providers, probes
     └── egress-run        # local exec: `egress-run ROUTE -- command`
 ```
 
 Ключевой invariant: `egress-run` запускает команду **локально** в среде
-вызова; backend никогда не получает arbitrary command payload и не является
-remote-exec service (TECH_SPEC §1.1, §10).
+вызова; отдельный запуск выбирает собственные route и mode, backend никогда
+не получает arbitrary command payload и не является remote-exec service
+(TECH_SPEC §1.1, §10). Для Docker-клиента установка package/config выполняется
+внутри его image или контейнера; подробные host/container инструкции — в
+`INSTALL.md`.
 
 ## Документация
 
@@ -65,7 +68,7 @@ egressctl config validate && egressctl whoami && egressctl doctor
 Оффлайн (без Docker, без root, stdlib-only):
 
 ```sh
-python3 -m pytest tests/ client/tests/ -q    # полный свит (в root-контейнере: 309 passed)
+python3 -m pytest tests/ client/tests/ -q    # полный свит (проверен: 380 passed)
 python3 -m pytest tests/security/ -q         # A8 security gate (54)
 python3 -m pytest tests/install/ -q          # оффлайн-свит install-скриптов, stubbed docker (56 checks)
 ```
@@ -87,7 +90,7 @@ python3 -m pytest tests/install/ -q          # оффлайн-свит install-�
 
 ## Текущий статус
 
-Фазы A0–A8 закрыты в части, реализуемой в среде разработки (OpenScience,
+Фазы A0–A8 закрыты в части, реализуемой в среде разработки (container,
 без Docker); live-acceptance на целевом хосте — см. «Next» в `STATUS.md`
 и `host/LIVE_ACCEPTANCE.md`. Свежая ветка install-logging: структурный
 лог установки, robust health gate, self-explaining harness, оффлайн-свит

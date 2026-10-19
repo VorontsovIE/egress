@@ -9,14 +9,14 @@
 #   host           -> /etc/vibelab-egress/ (client.yaml + secret files)
 #                     and the package under /usr/local/lib/vibelab-egress
 #                     with wrappers in /usr/local/bin
-#   gvisor-container -> a reproducible bundle dir (baked into the image or
+#   container -> a reproducible bundle dir (baked into the image or
 #                     mounted read-only per spec section 32); this script
 #                     stages the bundle and, when run INSIDE the container,
 #                     installs from the bundle into the container's
 #                     /etc/vibelab-egress + /run/secrets (if writable).
 #
 # Usage:
-#   install-client.sh --client <id> --target <host|gvisor-container> \
+#   install-client.sh --client <id> --target <host|container> \
 #       --bundle <bundle-dir> [--install-root <prefix>]
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error.
@@ -130,7 +130,9 @@ case "$TARGET" in
     chmod 755 /etc/vibelab-egress
     echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/vibelab-egress"
     ;;
-  gvisor-container)
+  container)
+    BUNDLE_TUN_BACKEND="$(sed -n 's/^tun_backend:[[:space:]]*//p' "$BUNDLE/client.yaml" | head -1)"
+    [ "$BUNDLE_TUN_BACKEND" != "host-helper" ] || die_env "container bundle cannot use host-helper; packet-only TUN is not implemented"
     # Inside the container: install into the container's own /etc and
     # /run/secrets. When staging from the host, set --install-root to the
     # bundle's target prefix; the image build (or a deterministic mount)
@@ -165,7 +167,7 @@ case "$TARGET" in
       ln -sf /run/secrets/vibelab-egress/default-proxy.auth \
              /run/secrets/vibelab_egress_default_proxy_auth
     fi
-    echo "installed client $CLIENT (gvisor-container) under $INSTALL_ROOT and /etc/vibelab-egress"
+    echo "installed client $CLIENT (container) under $INSTALL_ROOT and /etc/vibelab-egress"
     ;;
-  *) die_usage "--target must be host or gvisor-container" ;;
+  *) die_usage "--target must be host or container" ;;
 esac

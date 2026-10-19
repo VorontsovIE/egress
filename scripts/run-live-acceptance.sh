@@ -10,13 +10,13 @@
 #     host TUN systemd unit for section 50 checks).
 #   * The host client installed (egressctl + egress-run on PATH) with
 #     /etc/vibelab-egress/client.yaml + token + auth.
-#   * The OpenScience container running (its name is auto-detected; override with
-#     VIBELAB_EGRESS_OS_CONTAINER if detection fails).
+#   * The Docker container running (its name is auto-detected; override with
+#     VIBELAB_EGRESS_CONTAINER if detection fails).
 #   * The TUN helper socket present for the TUN checks (host systemd unit).
 #
 # Usage:
 #   bash scripts/run-live-acceptance.sh                 # default (non-destructive)
-#   bash scripts/run-live-acceptance.sh --recreate      # observe OpenScience
+#   bash scripts/run-live-acceptance.sh --recreate      # observe container
 #                                                       # identity after restart;
 #                                                       # full recreate is not automated
 #   bash scripts/run-live-acceptance.sh --out PATH      # write the report to PATH
@@ -25,9 +25,9 @@
 # host/live-acceptance.py unchanged.
 #
 # Optional environment overrides:
-#   VIBELAB_EGRESS_OS_CONTAINER   OpenScience container name (default: auto-detect)
+#   VIBELAB_EGRESS_CONTAINER   Docker container name (default: auto-detect)
 #   VIBELAB_EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health/liveliness)
-#   VIBELAB_EGRESS_OS_CONFIG      OpenScience bundle client.yaml (for static checks)
+#   VIBELAB_EGRESS_CONTAINER_CONFIG      container bundle client.yaml (for static checks)
 #   VIBELAB_EGRESS_TUN_HELPER_SOCKET  TUN helper socket (default /run/vibelab-egress/tun-helper.sock)
 #   VIBELAB_EGRESS_REPO           repo root (default: this script's repo)
 set -uo pipefail
@@ -38,7 +38,7 @@ REPO="${VIBELAB_EGRESS_REPO:-$(cd "$HERE/.." && pwd)}"
 # and the persistent data/secrets roots from these env vars; export them so a
 # bare `bash scripts/run-live-acceptance.sh` works from any checkout location.
 export VIBELAB_EGRESS_REPO="$REPO"
-export VIBELAB_EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}"
+export VIBELAB_EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
 export VIBELAB_EGRESS_SECRETS="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
 # Parse args: extract an optional `--out <path>` (or `--out=<path>`) for the
 # report location; everything else (e.g. --recreate, --no-tun, --check ...) is
@@ -63,15 +63,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# --- auto-detect the OpenScience container name -----------------------------
-detect_os_container() {
+# --- auto-detect the Docker container name -----------------------------
+detect_client_container() {
   local name
   # 1. explicit override
-  if [ -n "${VIBELAB_EGRESS_OS_CONTAINER:-}" ]; then
-    printf '%s' "$VIBELAB_EGRESS_OS_CONTAINER"; return
+  if [ -n "${VIBELAB_EGRESS_CONTAINER:-}" ]; then
+    printf '%s' "$VIBELAB_EGRESS_CONTAINER"; return
   fi
-  # 2. a running container whose name mentions openscience
-  name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i 'openscience' | head -1)"
+  # 2. a running container whose name is egress-test-client
+  name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i 'egress-test-client' | head -1)"
   if [ -n "$name" ]; then printf '%s' "$name"; return; fi
   # 3. a running container that has the egress client installed
   name="$(docker ps --format '{{.Names}}' 2>/dev/null | while read -r c; do
@@ -79,20 +79,20 @@ detect_os_container() {
           done | head -1)"
   if [ -n "$name" ]; then printf '%s' "$name"; return; fi
   # 4. fall back to the literal default
-  printf 'openscience'
+  printf 'egress-test-client'
 }
 
-OS_CONTAINER="$(detect_os_container)"
+CLIENT_CONTAINER="$(detect_client_container)"
 echo "[run-live-acceptance] repo=$REPO"
 echo "[run-live-acceptance] out=$OUT"
-echo "[run-live-acceptance] openscience container=$OS_CONTAINER"
+echo "[run-live-acceptance] Docker container=$CLIENT_CONTAINER"
 echo "[run-live-acceptance] litellm=${VIBELAB_EGRESS_LITELLM_URL:-http://127.0.0.1:4000/health/liveliness}"
 
 mkdir -p "$(dirname "$OUT")"
 
 python3 "$REPO/host/live-acceptance.py" \
   --out "$OUT" \
-  --os-container "$OS_CONTAINER" \
+  --container "$CLIENT_CONTAINER" \
   ${ARGS[@]+"${ARGS[@]}"}
 rc=$?
 

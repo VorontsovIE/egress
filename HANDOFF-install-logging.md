@@ -73,7 +73,7 @@ testability-флага).
 
 ## Окружение (где выполняется работа)
 
-- Контейнер (gVisor), работаем **root** (`id -u` = 0).
+- Контейнер (container runtime), работаем **root** (`id -u` = 0).
 - **Нет** Docker daemon, `systemctl`, `ufw`. Есть `findmnt`, `df`,
   `python3` 3.11.17, `pytest` 9.1.1, git 2.43.
 - `/etc/vibelab-egress` и `/usr/local/lib/vibelab-egress` в контейнере

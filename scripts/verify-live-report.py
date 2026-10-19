@@ -176,9 +176,9 @@ def rederive_pass(cid, c):
             return False, "docker gateway not direct"
         return True, "hard direct ok"
 
-    if cid == "openscience_tun_unsupported":
-        if not any(s in str(get("runtime", "")).lower() for s in ("runsc", "gvisor")):
-            return False, "container runtime is not gVisor"
+    if cid == "container_tun_unsupported":
+        if not any(s in str(get("runtime", "")).lower() for s in ("runsc", "gVisor")):
+            return False, "container runtime is not container runtime"
         if get("exit") != 6:
             return False, f"exit={get('exit')} (expected 6)"
         blob = (get("stderr", "") + get("stdout", "")).lower()
@@ -203,18 +203,18 @@ def rederive_pass(cid, c):
             return False, "missing independent helper capability"
         if host_tun != helper_tun:
             return False, f"host tun={host_tun!r} != helper tun={helper_tun!r}"
-        if get("openscience", {}).get("exit") != 0:
-            return False, "openscience capabilities did not exit successfully"
-        os_tun = str(get("openscience", {}).get("tun", "")).lower()
-        if os_tun not in UNSUPPORTED_TUN:
-            return False, f"openscience tun={os_tun!r} (expected unsupported)"
+        if get("container", {}).get("exit") != 0:
+            return False, "container capabilities did not exit successfully"
+        container_tun = str(get("container", {}).get("tun", "")).lower()
+        if container_tun != "none":
+            return False, f"container tun={container_tun!r} (expected no configured backend)"
         return True, "capabilities accurate"
 
-    if cid == "tun_no_gvisor_weakening":
+    if cid == "tun_helper_boundary":
         if get("issues"):
             return False, f"issues: {get('issues')}"
-        if get("os_tun_backend") not in (None, "none"):
-            return False, f"os tun_backend={get('os_tun_backend')!r}"
+        if get("container_tun_backend") not in (None, "none"):
+            return False, f"container tun_backend={get('container_tun_backend')!r}"
         return True, "minimal privilege grant"
 
     if cid == "a8_public_ports_closed":
@@ -224,7 +224,7 @@ def rederive_pass(cid, c):
             return False, f"egress ports on public NIC: {get('egress_ports_on_public')}"
         return True, "no egress port on a public NIC"
 
-    if cid == "a8_openscience_recreate_persists":
+    if cid == "a8_container_recreate_persists":
         return False, "docker restart does not prove persistence across recreation"
 
     if cid == "a8_litellm_reachable":

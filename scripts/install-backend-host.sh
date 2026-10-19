@@ -37,7 +37,7 @@
 #   снимает требование root; в production не используется.
 set -Eeuo pipefail
 
-ROOT="${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}"
+ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
 SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
 DOCKER_GATEWAY="${DOCKER_GATEWAY:-172.17.0.1}"
 SKIP_CLIENT=0

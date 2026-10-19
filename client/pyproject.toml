@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "vibelab-egress client package (egressctl + egress-run), stdlib-only"
 requires-python = ">=3.11"
 # Dependency-free on purpose: the same package must install in a bare host
-# and in a gVisor/OpenScience container without a package index.
+# and in a container runtime/Docker container without a package index.
 dependencies = []
 
 [project.scripts]

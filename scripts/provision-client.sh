@@ -12,12 +12,12 @@
 #     clients/<id>.proxy-creds   proxy credential (config generator input;
 #                                NEVER placed in any client bundle)
 #
-# The same script provisions host and OpenScience clients — only the
+# The same script provisions host and container clients — only the
 # environment label and paths differ. No provider/VPN secrets are ever
 # generated or copied here.
 #
 # Usage:
-#   provision-client.sh --client <id> --environment <host|gvisor-container> \
+#   provision-client.sh --client <id> --environment <host|container> \
 #       [--out <bundle-root>] [--secrets-dir <dir>] [--control-url <url>] \
 #       [--proxy-host <host>] [--default-port <p>] [--oneshot-port <p>] \
 #       [--tun-backend <none|host-helper>] [--tun-socket <path>]
@@ -25,14 +25,14 @@
 #   --tun-socket: LOCAL path of the TUN helper UNIX socket written to
 #   client.yaml (tun_helper_socket:) when tun_backend=host-helper. Default:
 #   /run/vibelab-egress/tun-helper.sock (host systemd unit; never mounted
-#   into OpenScience/gVisor).
+#   into Docker container).
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
 
 CLIENT=""
 ENVIRONMENT=""
-OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-/home/vibelab/openscience/egress/client-bundles}"
+OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-/var/lib/vibelab-egress/client-bundles}"
 SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
 CONTROL_URL=""
 PROXY_HOST=""
@@ -71,14 +71,15 @@ case "$ENVIRONMENT" in
     TOKEN_FILE="/etc/vibelab-egress/client.token"
     AUTH_FILE="/etc/vibelab-egress/default-proxy.auth"
     ;;
-  gvisor-container)
+  container)
     [ -n "$CONTROL_URL" ] || CONTROL_URL="http://host.docker.internal:9091"
     [ -n "$PROXY_HOST" ] || PROXY_HOST="host.docker.internal"
     [ -n "$TUN_BACKEND" ] || TUN_BACKEND="none"
+    [ "$TUN_BACKEND" != "host-helper" ] || die_usage "host-helper is host-only; packet-only container TUN is not implemented"
     TOKEN_FILE="/run/secrets/vibelab_egress_client_token"
     AUTH_FILE="/run/secrets/vibelab_egress_default_proxy_auth"
     ;;
-  *) die_usage "--environment must be host or gvisor-container" ;;
+  *) die_usage "--environment must be host or container" ;;
 esac
 
 command -v python3 >/dev/null || die_env "python3 not found"
@@ -134,7 +135,7 @@ default_proxy_auth_file: $AUTH_FILE
 environment: $ENVIRONMENT
 tun_backend: $TUN_BACKEND
 EOF
-# The host-native helper socket is local to the host. The OpenScience bundle
+# The host-native helper socket is local to the host. The container bundle
 # has tun_backend=none and never receives this path or socket mount.
 if [ "$TUN_BACKEND" = "host-helper" ]; then
   printf 'tun_helper_socket: %s\n' "$TUN_SOCKET" >> "$BUNDLE_DIR/client.yaml"

@@ -130,7 +130,7 @@ Task needs a specific exit location / provider / baseline?
 
 ```bash
 egressctl whoami
-# client_id=openscience-main environment=gvisor-container modes=proxy
+# client_id=container-main environment=container modes=proxy
 
 egressctl route current
 # default route: direct
@@ -190,7 +190,7 @@ egressctl whoami
 # modes=proxy  → tun not available in this environment
 
 egress-run --mode tun blanc:FI-Helsinki-1 -- command
-# egress-run: tun mode is not available in environment 'gvisor-container'
+# egress-run: tun mode is not available in environment 'container'
 # (tun_backend=none); use --mode proxy        [exit 6]
 ```
 
@@ -206,7 +206,7 @@ egressctl config show       # check tun_backend (none | host-helper)
 egressctl mode set tun      # server-side check; 400 unsupported_in_environment
 ```
 
-Meaning: this client profile's environment cannot provide TUN (e.g. gVisor
+Meaning: this client profile's environment cannot provide TUN (e.g. container runtime
 container without an approved local backend). Options: use proxy mode, or
 report the capability gap. Do not attempt host-level workarounds.
 

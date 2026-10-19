@@ -223,7 +223,7 @@ def generate(root: Path, secrets_dir: Path, oneshot_slots: int = 8,
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="egressd.bootstrap_config")
-    ap.add_argument("--root", default="/home/vibelab/openscience/egress")
+    ap.add_argument("--root", default="/var/lib/vibelab-egress")
     ap.add_argument("--secrets-dir", default="/etc/vibelab-egress/secrets")
     ap.add_argument("--oneshot-slots", type=int,
                     default=int(os.environ.get("EGRESSD_ONESHOT_SLOTS", "8")))

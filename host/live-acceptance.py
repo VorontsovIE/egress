@@ -27,9 +27,9 @@ Options:
     --out PATH            write the single JSON report here (default
                           host_acceptance_report.json)
     --config PATH         host client config (default /etc/vibelab-egress/client.yaml)
-    --osconfig PATH       OpenScience client config (default
-                          $VIBELAB_EGRESS_OS_CONFIG or
-                          /home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml)
+    --container-config PATH       container client config (default
+                          $VIBELAB_EGRESS_CONTAINER_CONFIG or
+                          /var/lib/vibelab-egress/client-bundles/container-main/client.yaml)
     --tun-helper-sock P   TUN helper UNIX socket (default:
                           $VIBELAB_EGRESS_TUN_HELPER_SOCKET, then
                           tun_helper_socket from the host client config,
@@ -37,9 +37,9 @@ Options:
     --litellm-url URL     LiteLLM endpoint to probe (default
                           $VIBELAB_EGRESS_LITELLM_URL or
                           http://127.0.0.1:4000/health/liveliness)
-    --os-container NAME   OpenScience container name (default
-                          $VIBELAB_EGRESS_OS_CONTAINER or openscience)
-    --recreate            enable the OpenScience restart observation;
+    --container NAME   Docker container name (default
+                          $VIBELAB_EGRESS_CONTAINER or container)
+    --recreate            enable the container restart observation;
                           full container recreation is not automated
     --no-tun              skip the TUN (section 50) checks
     --check ID[,ID...]    run only the named check(s)
@@ -69,16 +69,16 @@ from datetime import datetime, timezone
 # fixed configuration
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = "/etc/vibelab-egress/client.yaml"
-DEFAULT_OS_CONFIG = "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml"
+DEFAULT_CONTAINER_CONFIG = "/var/lib/vibelab-egress/client-bundles/container-main/client.yaml"
 DEFAULT_TUN_SOCK = "/run/vibelab-egress/tun-helper.sock"
 # /health/liveliness: 200 while the process is up. /health also reports
 # provider health and answers 503 when no provider is configured, which
 # is not a LiteLLM reachability failure (2026-10-15 live run: skip with
 # "not reachable" although the container was up and healthy).
 DEFAULT_LITELLM = "http://127.0.0.1:4000/health/liveliness"
-DEFAULT_OS_CONTAINER = "openscience"
+DEFAULT_CONTAINER = "container"
 SECRETS_DIR = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
-ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
+ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress")
 REPO = os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress")
 HOST_TEST = os.path.join(REPO, "host", "egress-host-test")
 PROBE_DOMAIN = "www.cloudflare.com"
@@ -134,8 +134,8 @@ def _collect_secret_values():
         os.path.join("/etc/vibelab-egress", "default-proxy.auth"),
     ):
         add(p, os.path.basename(p))
-    # client config token/auth file paths (host + openscience)
-    for cfg_path in (CTX.get("config"), CTX.get("osconfig")):
+    # client config token/auth file paths (host + container)
+    for cfg_path in (CTX.get("config"), CTX.get("container_config")):
         if cfg_path:
             for key in ("api_token_file", "default_proxy_auth_file"):
                 v = _flat_yaml_get(cfg_path, key)
@@ -150,7 +150,7 @@ def _collect_secret_values():
                 full = os.path.join(root_, fn)
                 add(full, os.path.relpath(full, SECRETS_DIR))
     # environment-provided secrets
-    for env in ("VIBELAB_EGRESS_OS_TOKEN", "VIBELAB_EGRESS_OS_AUTH"):
+    for env in ("VIBELAB_EGRESS_CONTAINER_TOKEN", "VIBELAB_EGRESS_CONTAINER_AUTH"):
         v = os.environ.get(env, "").strip()
         if v:
             vals.append((v, env))
@@ -346,11 +346,11 @@ def egress_run(args, config, timeout, redact, env=None):
                 timeout, redact, env=env)
 
 
-def os_exec(args, timeout, redact):
-    """Run a command INSIDE the OpenScience/gVisor container (spec 49: the
-    OpenScience client lives in the container; its token paths /run/secrets/*
-    and its gVisor environment only exist there)."""
-    return _run(["docker", "exec", CTX["os_container"]] + args, timeout, redact)
+def container_exec(args, timeout, redact):
+    """Run a command INSIDE the Docker container (spec 49: the
+    container client lives in the container; its token paths /run/secrets/*
+    and its container runtime environment only exist there)."""
+    return _run(["docker", "exec", CTX["container_name"]] + args, timeout, redact)
 
 
 def _client_version(host):
@@ -372,14 +372,14 @@ def _client_version(host):
         init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
         data = read_file(init)
     else:
-        r = os_exec(["cat", wrapper], timeout, redact)
+        r = container_exec(["cat", wrapper], timeout, redact)
         if r["rc"] != 0:
             return None
         m = re.search(r"sys\.path\.insert\(0,\s*'([^']+)'", r["stdout"])
         if not m:
             return None
         init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
-        r = os_exec(["cat", init], timeout, redact)
+        r = container_exec(["cat", init], timeout, redact)
         data = r["stdout"] if r["rc"] == 0 else None
     if not data:
         return None
@@ -789,42 +789,11 @@ def check_tun_hard_direct():
               "egress-run --mode tun direct -- localhost/docker-gateway (HARD DIRECT)", fn)
 
 
-def check_os_tun_unsupported():
-    def fn():
-        redact, timeout = CTX["redact"], CTX["timeout"]
-        cname = CTX["os_container"]
-        r = os_exec(["egress-run", "--mode", "tun", "direct", "--", "true"],
-                    timeout, redact)
-        ir = _run(["docker", "inspect", "--format", "{{.HostConfig.Runtime}}",
-                   cname], 15, redact)
-        runtime = ir["stdout"].strip()
-        ev = {"container": cname, "exit": r["rc"],
-              "stdout": r["stdout"], "stderr": r["stderr"],
-              "runtime": runtime}
-        if ir["rc"] != 0:
-            ev["reason"] = f"container {cname!r} is absent"
-            return ("skip", ev, ev["reason"])
-        if r["rc"] is None:
-            return ("skip", ev, f"cannot exec in container {cname!r}: {r['stderr'][:120]}")
-        # a missing in-container client is a prerequisite gap, not a product
-        # failure: 127 / "error finding executable" / "command not found".
-        blob = (r["stdout"] + r["stderr"]).lower()
-        if r["rc"] == 127 or "error finding executable" in blob \
-                or "command not found" in blob or "no such file" in blob:
-            return ("skip", ev, f"egress-run not installed in container {cname!r} "
-                                "(install the client bundle first)")
-        if r["rc"] == 0:
-            return ("fail", ev, "openscience tun unexpectedly succeeded")
-        if r["rc"] != 6:
-            return ("fail", ev, f"openscience tun exit={r['rc']} (expected 6 unsupported)")
-        if "no silent fallback" not in (r["stderr"] + r["stdout"]).lower():
-            return ("fail", ev, "missing explicit no-fallback message")
-        if not any(s in runtime.lower() for s in ("runsc", "gvisor")):
-            ev["reason"] = f"container runtime {runtime!r} is not gVisor"
-            return ("skip", ev, ev["reason"])
-        return ("pass", ev, "openscience tun -> explicit unsupported (exit 6), no fallback")
-    run_check("openscience_tun_unsupported", "spec50.9",
-              "egress-run --mode tun (openscience config) -> explicit unsupported", fn)
+def check_container_tun_packet_path():
+    run_check("container_tun_packet_path", "spec21.5",
+              "deferred: packet-only shared TUN helper is not implemented",
+              lambda: ("skip", {"container": CTX["container_name"]},
+                       "packet-only helper protocol and client-local TUN are pending"))
 
 
 def check_tun_no_fallback():
@@ -861,7 +830,7 @@ def check_tun_no_fallback():
 def check_tun_capabilities():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
-        osconfig = CTX["osconfig"]
+        container_config = CTX["container_config"]
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"},
                     "no live backend")
@@ -875,28 +844,27 @@ def check_tun_capabilities():
             return ("fail", ev, "host capabilities failed")
         if tun_host != ev["helper"]["status"]:
             return ("fail", ev, f"host tun={tun_host!r} != helper={ev['helper']['status']!r}")
-        rc_os = os_exec(["egressctl", "--json", "capabilities"], timeout, redact)
-        cap_os = _json(rc_os["stdout"]) or {}
-        tun_os = (cap_os.get("tun") or {}).get("status")
-        ev["openscience"] = {"exit": rc_os["rc"], "tun": tun_os,
-                             "raw": rc_os["stdout"][:600]}
-        if "no such container" in rc_os["stderr"].lower():
-            reason = f"container {CTX['os_container']!r} is absent"
+        rc_container = container_exec(["egressctl", "--json", "capabilities"], timeout, redact)
+        cap_container = _json(rc_container["stdout"]) or {}
+        tun_container = (cap_container.get("tun") or {}).get("status")
+        ev["container"] = {"exit": rc_container["rc"], "tun": tun_container,
+                             "raw": rc_container["stdout"][:600]}
+        if "no such container" in rc_container["stderr"].lower():
+            reason = f"container {CTX['container_name']!r} is absent"
             ev["reason"] = reason
             return ("skip", ev, reason)
-        if rc_os["rc"] is None:
-            reason = f"cannot exec in {CTX['os_container']!r}"
+        if rc_container["rc"] is None:
+            reason = f"cannot exec in {CTX['container_name']!r}"
             ev["reason"] = reason
             return ("skip", ev, reason)
-        if rc_os["rc"] != 0:
-            return ("fail", ev, f"openscience capabilities exit={rc_os['rc']}")
-        if str(tun_os).lower() not in (
-                "unsupported_in_environment", "unsupported", "false", "none"):
-            return ("fail", ev, f"openscience reports tun={tun_os!r} (expected unsupported)")
+        if rc_container["rc"] != 0:
+            return ("fail", ev, f"container capabilities exit={rc_container['rc']}")
+        if str(tun_container).lower() != "none":
+            return ("fail", ev, f"container reports tun={tun_container!r} (expected no configured backend)")
         return ("pass", ev, f"host tun={tun_host!r}; "
-                            f"openscience tun={ev.get('openscience', {}).get('tun')!r}")
+                            f"container tun={ev.get('container', {}).get('tun')!r}")
     run_check("tun_capabilities_accuracy", "spec50.12",
-              "egressctl capabilities (host + openscience) report tun accurately", fn)
+              "egressctl capabilities (host + container) report tun accurately", fn)
 
 
 def _yaml_lines(path):
@@ -933,21 +901,21 @@ def check_tun_static():
                 issues.append(f"unit missing {item}")
         if "docker.sock" in text or "--privileged" in text:
             issues.append("Docker privilege/socket in host helper unit")
-        osconfig = CTX["osconfig"]
-        os_tun = _flat_yaml_get(osconfig, "tun_backend") if osconfig else None
-        os_sock = _flat_yaml_get(osconfig, "tun_helper_socket") if osconfig else None
-        if os_tun and os_tun != "none":
-            issues.append(f"openscience tun_backend={os_tun!r}")
-        if os_sock:
-            issues.append("openscience config contains helper socket")
+        container_config = CTX["container_config"]
+        container_tun = _flat_yaml_get(container_config, "tun_backend") if container_config else None
+        container_sock = _flat_yaml_get(container_config, "tun_helper_socket") if container_config else None
+        if container_tun and container_tun != "none":
+            issues.append(f"container tun_backend={container_tun!r}")
+        if container_sock:
+            issues.append("container config contains helper socket")
         ev = {"host_unit": unit, "issues": issues,
-              "os_config_present": bool(osconfig and os.path.exists(osconfig)),
-              "os_tun_backend": os_tun, "os_tun_helper_socket": os_sock}
+              "container_config_present": bool(container_config and os.path.exists(container_config)),
+              "container_tun_backend": container_tun, "container_tun_helper_socket": container_sock}
         if issues:
             return ("fail", ev, "; ".join(issues))
-        return ("pass", ev, "host unit capabilities bounded; OpenScience has no helper access")
-    run_check("tun_no_gvisor_weakening", "spec50.10",
-              "static audit of host helper unit + OpenScience config", fn)
+        return ("pass", ev, "host unit capabilities bounded; container has no helper access")
+    run_check("tun_helper_boundary", "spec50.10",
+              "static audit of host helper unit + container config", fn)
 
 
 # ---------------------------------------------------------------------------
@@ -994,19 +962,19 @@ def check_a8_public_ports():
 def check_a8_recreate():
     def fn():
         redact, timeout = CTX["redact"], CTX["timeout"]
-        cname = CTX["os_container"]
+        cname = CTX["container_name"]
         if not CTX.get("recreate"):
-            return ("skip", {"reason": "destructive: restarts the OpenScience "
+            return ("skip", {"reason": "destructive: restarts the container "
                                         "container; run with --recreate to enable"},
                     "recreate check disabled by default")
-        osconfig = CTX["osconfig"]
-        tok = _flat_yaml_get(osconfig, "api_token_file")
+        container_config = CTX["container_config"]
+        tok = _flat_yaml_get(container_config, "api_token_file")
         tok_hash = None
         if tok:
-            r = os_exec(["sh", "-c", f"sha256sum {tok} | cut -c1-16"], timeout, redact)
+            r = container_exec(["sh", "-c", f"sha256sum {tok} | cut -c1-16"], timeout, redact)
             if r["rc"] == 0 and r["stdout"].strip():
                 tok_hash = r["stdout"].strip()
-        before = os_exec(["egressctl", "--json", "whoami"], timeout, redact)
+        before = container_exec(["egressctl", "--json", "whoami"], timeout, redact)
         before_id = (_json(before["stdout"]) or {}).get("client_id")
         if before["rc"] != 0 or not before_id:
             # Self-diagnosis: which config does the container client ACTUALLY
@@ -1014,10 +982,10 @@ def check_a8_recreate():
             # run: the container presented a HOST control URL, i.e. its
             # installed config was not the container's bundle).
             diag = {}
-            diag["installed_client_yaml"] = os_exec(
+            diag["installed_client_yaml"] = container_exec(
                 ["cat", "/etc/vibelab-egress/client.yaml"],
                 timeout, redact)["stdout"][:800]
-            diag["installed_egressctl_config_show"] = os_exec(
+            diag["installed_egressctl_config_show"] = container_exec(
                 ["egressctl", "config", "show"], timeout, redact)["stdout"][:800]
             ins = _run(["docker", "inspect", "--format", "{{json .Mounts}}",
                         cname], 15, redact)
@@ -1025,7 +993,7 @@ def check_a8_recreate():
             return ("skip",
                     {"reason": f"cannot whoami in {cname}: {before['stderr'][:200]}",
                      "diagnostics": diag},
-                    "openscience container not reachable")
+                    "Docker container not reachable")
         re_ = _run(["docker", "restart", cname], 120, redact)
         if re_["rc"] != 0:
             return ("fail", {"before_client_id": before_id,
@@ -1034,7 +1002,7 @@ def check_a8_recreate():
         # wait for the client to come back
         after = None
         for _ in range(12):
-            after = os_exec(["egressctl", "--json", "whoami"], timeout, redact)
+            after = container_exec(["egressctl", "--json", "whoami"], timeout, redact)
             if after["rc"] == 0:
                 break
             import time
@@ -1048,7 +1016,7 @@ def check_a8_recreate():
         # that an install survives docker rm + docker run / Compose recreate.
         ev["reason"] = "docker restart passed; container recreation not exercised"
         return ("skip", ev, ev["reason"])
-    run_check("a8_openscience_recreate_persists", "spec49.39",
+    run_check("a8_container_recreate_persists", "spec49.39",
               "docker exec whoami -> docker restart -> whoami (identity persists)", fn)
 
 
@@ -1299,7 +1267,7 @@ def check_a8_same_release():
         hv = _client_version(host=True)
         ov = _client_version(host=False)
         ev = {"host_version": hv, "os_version": ov,
-              "os_container": CTX["os_container"]}
+              "container_name": CTX["container_name"]}
         if hv is None or ov is None:
             return ("skip", ev, "could not read installed client __version__ "
                                 "on host and/or in the container")
@@ -1445,13 +1413,13 @@ ALL_CHECKS = [
     ("tun_no_root_escalation", check_tun_no_root),
     ("tun_stale_cleanup", check_tun_stale_cleanup),
     ("tun_hard_direct", check_tun_hard_direct),
-    ("openscience_tun_unsupported", check_os_tun_unsupported),
+    ("container_tun_packet_path", check_container_tun_packet_path),
     ("tun_no_silent_fallback", check_tun_no_fallback),
     ("tun_capabilities_accuracy", check_tun_capabilities),
-    ("tun_no_gvisor_weakening", check_tun_static),
+    ("tun_helper_boundary", check_tun_static),
     # section 49 -- host-only live
     ("a8_public_ports_closed", check_a8_public_ports),
-    ("a8_openscience_recreate_persists", check_a8_recreate),
+    ("a8_container_recreate_persists", check_a8_recreate),
     ("a8_litellm_reachable", check_a8_litellm),
     ("a8_parallel_oneshot", check_a8_parallel_oneshot),
     ("a8_egress_run_local", check_a8_local_exec),
@@ -1472,8 +1440,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="live-acceptance.py")
     ap.add_argument("--out", default="host_acceptance_report.json")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
-    ap.add_argument("--osconfig",
-                    default=os.environ.get("VIBELAB_EGRESS_OS_CONFIG", DEFAULT_OS_CONFIG))
+    ap.add_argument("--container-config",
+                    default=os.environ.get("VIBELAB_EGRESS_CONTAINER_CONFIG", DEFAULT_CONTAINER_CONFIG))
     ap.add_argument("--tun-helper-sock",
                     default=None,
                     help="TUN helper UNIX socket (default: "
@@ -1482,11 +1450,11 @@ def main(argv=None):
                          "then /run/vibelab-egress/tun-helper.sock)")
     ap.add_argument("--litellm-url",
                     default=os.environ.get("VIBELAB_EGRESS_LITELLM_URL", DEFAULT_LITELLM))
-    ap.add_argument("--os-container",
-                    default=os.environ.get("VIBELAB_EGRESS_OS_CONTAINER",
-                                           DEFAULT_OS_CONTAINER))
+    ap.add_argument("--container",
+                    default=os.environ.get("VIBELAB_EGRESS_CONTAINER",
+                                           DEFAULT_CONTAINER))
     ap.add_argument("--recreate", action="store_true",
-                    help="restart the OpenScience container to observe client "
+                    help="restart the Docker container to observe client "
                          "identity; full recreation is not automated")
     ap.add_argument("--no-tun", action="store_true", help="skip the TUN checks")
     ap.add_argument("--check", help="comma-separated check ids to run")
@@ -1502,10 +1470,10 @@ def main(argv=None):
                 or DEFAULT_TUN_SOCK)
     CTX.update({
         "config": args.config,
-        "osconfig": args.osconfig,
+        "container_config": args.container_config,
         "tun_sock": tun_sock,
         "litellm": args.litellm_url,
-        "os_container": args.os_container,
+        "container_name": args.container,
         "timeout": args.timeout,
         "recreate": args.recreate,
     })
@@ -1516,7 +1484,7 @@ def main(argv=None):
     for cid, fn in ALL_CHECKS:
         if selected and cid not in selected:
             continue
-        if args.no_tun and (cid.startswith("tun_") or cid == "openscience_tun_unsupported"):
+        if args.no_tun and (cid.startswith("tun_") or cid == "container_tun_packet_path"):
             continue
         fn()
 
@@ -1533,10 +1501,10 @@ def main(argv=None):
         "user": os.environ.get("USER", ""),
         "python": sys.version.split()[0],
         "config": args.config,
-        "osconfig": args.osconfig,
+        "container_config": args.container_config,
         "tun_helper_socket": tun_sock,
         "litellm_url": args.litellm_url,
-        "os_container": args.os_container,
+        "container_name": args.container,
         "redactions": redact_count["n"],
         "checks": RESULTS,
         "summary": summary,

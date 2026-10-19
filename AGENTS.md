@@ -6,7 +6,7 @@
 
 **vibelab-egress** — управляемый egress-слой на базе Mihomo для исследовательских
 и coding-агентов. Один backend (Docker Compose stack: `mihomo` + `egressd`)
-обслуживает несколько execution environments (host, OpenScience/gVisor, другие
+обслуживает несколько execution environments (host, Docker container, другие
 контейнеры). Клиенты (`egressctl` + `egress-run`) ставятся локально в каждую
 среду.
 
@@ -23,7 +23,7 @@
 Корень git-репозитория — корень проекта: репозиторий автономен (GitHub
 `VorontsovIE/egress`), «внешнего» окружения нет. В dev-контейнере корень
 репозитория смонтирован в `/srv/workspace`, на globe —
-`/home/vibelab/openscience/workspace`. Отслеживается 180 файлов, ~1.4 МБ
+`/srv/workspace`. Отслеживается 180 файлов, ~1.4 МБ
 (vendor-данные и бинарники — не в git, см. ниже).
 
 ```text
@@ -53,7 +53,7 @@
 │   ├── pyproject.toml
 │   ├── src/vibelab_egress_client/      # api, config, egressctl, egress_run (~1100 строк)
 │   ├── tests/                          # unit-тесты клиента
-│   └── examples/                       # client.host.yaml, client.openscience.yaml
+│   └── examples/                       # client.host.yaml, client.container.yaml
 │
 ├── adapters/                           # provider-адаптеры (spec §11.2): common.py + blanc/, xeovo/
 │                                       # detection/normalization/redaction/atomic-write+LKG
@@ -73,7 +73,7 @@
 │   ├── uninstall-backend-host.sh       # rollback (--remove-data — удалить persistent root)
 │   ├── verify-backend-host.sh          # compose, binds, socket, secrets, harness
 │   ├── provision-client.sh             # client bundle: client.yaml + token + proxy.auth
-│   ├── install-client.sh               # установка client package (host | gvisor-container)
+│   ├── install-client.sh               # установка client package (host | container)
 │   ├── verify-client.sh                # config validate/whoami/doctor + права на секреты
 │   ├── bootstrap-dev-access.sh         # один раз: devbridge token + unit + start
 │   ├── fetch-geo-data.sh               # GEO-скачивание по требованию (не в git; spec 14/41)
@@ -136,7 +136,7 @@
    секреты живут на host: `/etc/vibelab-egress/secrets/` (0600, mounted files,
    никогда env-переменные). Никогда не коммитить реальные токены/ключи/подписки.
 2. **Client package — stdlib-only.** `client/` должен устанавливаться в bare host
-   и gVisor-контейнер без package index. Не добавлять зависимости.
+   и Docker-контейнер без package index. Не добавлять зависимости.
 3. **Host-инструменты — fixed argv.** `host/egress-hostctl`, `egress-host-test`,
    `egress-devbridge`, `live-acceptance.py`: Python stdlib-only, фиксированный
    allowlist команд, без `shell=True`/`os.system`, без free-form command input.
@@ -149,7 +149,7 @@
    не публикуется, image pinned по tag + digest. Проверять через
    `scripts/verify-backend-host.sh` и `tests/security/`.
 6. **Тесты.** Оффлайн-свит: `python3 -m pytest tests/ client/tests/ -q`
-   (309 passed на 2026-10-13). Live-проверки требуют host с Docker +
+   (380 passed на 2026-10-19). Live-проверки требуют host с Docker +
    CAP_NET_ADMIN и не проходят в этом контейнере.
 7. **STATUS.md** обновляется после каждого завершённого шага; решения и
    найденные баги — в журнал в конце файла.

@@ -104,7 +104,7 @@ def _write_xeovo(path: Path) -> None:
 def egress(tmp_path, monkeypatch):
     clients = tmp_path / "clients"
     clients.mkdir()
-    for cid, env in (("host-main", "host"), ("openscience-main", "gvisor-container")):
+    for cid, env in (("host-main", "host"), ("container-main", "container")):
         (clients / f"{cid}.token").write_text(f"tok-{cid}\n")
         (clients / f"{cid}.profile.json").write_text(json.dumps(
             {"client_id": cid, "environment": env, "modes": ["proxy"]}))
@@ -132,7 +132,7 @@ def egress(tmp_path, monkeypatch):
         "provs": provs,
         "tmp": tmp_path,
         "host": {"Authorization": "Bearer tok-host-main"},
-        "os": {"Authorization": "Bearer tok-openscience-main"},
+        "os": {"Authorization": "Bearer tok-container-main"},
     }
 
 
@@ -255,14 +255,14 @@ class TestImpersonation:
         c, host, os_ = egress["client"], egress["host"], egress["os"]
         r = c.put("http://testserver/v1/default", headers=host,
                   json={"route": "blanc:FI-Helsinki-1",
-                        "client_id": "openscience-main"})
+                        "client_id": "container-main"})
         assert r.status_code == 200
         assert r.json()["client_id"] == "host-main"
         assert c.get("http://testserver/v1/default", headers=os_).json()["route"] == "direct"
 
     def test_query_client_id_ignored(self, egress):
         c, host, os_ = egress["client"], egress["host"], egress["os"]
-        r = c.put("http://testserver/v1/default?client_id=openscience-main",
+        r = c.put("http://testserver/v1/default?client_id=container-main",
                   headers=host, json={"route": "blanc:FI-Helsinki-1"})
         assert r.status_code == 200
         assert r.json()["client_id"] == "host-main"
@@ -271,9 +271,9 @@ class TestImpersonation:
     def test_no_endpoint_names_another_client(self, egress):
         """No public endpoint takes a target client_id in the path."""
         c, host = egress["client"], egress["host"]
-        for path in ("/v1/clients/openscience-main/default",
-                     "/v1/defaults/openscience-main",
-                     "/v1/clients/openscience-main",
+        for path in ("/v1/clients/container-main/default",
+                     "/v1/defaults/container-main",
+                     "/v1/clients/container-main",
                      "/v1/oneshot/active?client_id=host-main"):
             r = c.get("http://testserver" + path, headers=host)
             if path.endswith("client_id=host-main"):
@@ -285,7 +285,7 @@ class TestImpersonation:
 
     def test_oneshot_session_isolation(self, egress):
         c, host, os_ = egress["client"], egress["host"], egress["os"]
-        # openscience creates a session
+        # container creates a session
         r = c.post("http://testserver/v1/oneshot/session", headers=os_,
                    json={"route": "blanc:FI-Helsinki-1"})
         assert r.status_code == 200
@@ -296,7 +296,7 @@ class TestImpersonation:
         # host cannot close it
         r = c.delete(f"http://testserver/v1/oneshot/session/{sid}", headers=host)
         assert r.status_code == 404
-        # the session is still active for openscience
+        # the session is still active for container
         r = c.get("http://testserver/v1/oneshot/active", headers=os_)
         assert r.json()["count"] == 1
         # cleanup
@@ -308,7 +308,7 @@ class TestImpersonation:
         assert r.json()["client_id"] == "host-main"
         assert r.json()["username"] == "host-main-user"
         # the other client's credential must not be obtainable
-        assert "openscience-main-user" not in json.dumps(r.json())
+        assert "container-main-user" not in json.dumps(r.json())
 
 
 # ===========================================================================
@@ -626,10 +626,10 @@ class TestTunHelperPrivilege:
         assert "docker.sock" not in unit
         assert "--socket /run/vibelab-egress/tun-helper.sock" in unit
 
-    def test_openscience_client_cannot_reach_helper(self):
-        """The OpenScience client config has tun_backend=none and no helper
+    def test_container_client_cannot_reach_helper(self):
+        """The container client config has tun_backend=none and no helper
         socket, so it cannot reach the privileged helper (spec 21.5)."""
-        cfg = (ROOT / "client" / "examples" / "client.openscience.yaml").read_text()
+        cfg = (ROOT / "client" / "examples" / "client.container.yaml").read_text()
         assert "tun_backend: none" in cfg
         assert "tun_helper_socket" not in cfg
 

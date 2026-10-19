@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """egress-devbridge -- narrow dev/test bridge for vibelab-egress (A1).
 
-A small stdlib HTTP server that lets the OpenScience agent request a FIXED
+A small stdlib HTTP server that lets the container agent request a FIXED
 set of host operations (spec section 33.2) without any arbitrary shell
 access. It is the "bootstrap-dev-access" mechanism: an administrator starts
 it once (or via host/units/vibelab-egress-devbridge.service), and the agent
@@ -13,7 +13,7 @@ can then:
     POST /  {"op":"logs","service":"vibelab-egress-mihomo","tail":100}
     POST /  {"op":"run-acceptance"}
     POST /  {"op":"sync-docker-cidrs"}
-    POST /  {"op":"install-client","target":"host"|"openscience","bundle":"<path>"}
+    POST /  {"op":"install-client","target":"host"|"container","bundle":"<path>"}
 
 Security invariants:
   * Python 3 standard library only.
@@ -43,7 +43,7 @@ ALLOWED_OPS = {
     "run-acceptance", "sync-docker-cidrs", "install-client",
 }
 ALLOWED_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
-ALLOWED_TARGETS = ("host", "openscience")
+ALLOWED_TARGETS = ("host", "container")
 # fields allowed per op, beyond "op" itself
 ALLOWED_FIELDS = {
     "deploy": set(),

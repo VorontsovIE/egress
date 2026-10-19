@@ -108,7 +108,7 @@ def _write_xeovo(path: Path) -> None:
 def egress(tmp_path, monkeypatch):
     clients = tmp_path / "clients"
     clients.mkdir()
-    for cid, env in (("host-main", "host"), ("openscience-main", "gvisor-container")):
+    for cid, env in (("host-main", "host"), ("container-main", "container")):
         (clients / f"{cid}.token").write_text(f"tok-{cid}\n")
         (clients / f"{cid}.profile.json").write_text(json.dumps(
             {"client_id": cid, "environment": env, "modes": ["proxy"]}))
@@ -136,7 +136,7 @@ def egress(tmp_path, monkeypatch):
         "provs": provs,
         "tmp": tmp_path,
         "host": {"Authorization": "Bearer tok-host-main"},
-        "os": {"Authorization": "Bearer tok-openscience-main"},
+        "os": {"Authorization": "Bearer tok-container-main"},
     }
 
 

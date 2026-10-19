@@ -15,23 +15,23 @@ lang: ru-RU
 
 - Linux host `globe`, Ubuntu 24.04;
 - Docker Engine, cgroup v2;
-- одним из пользователей egress будет OpenScience внутри контейнера (он работает в Docker + gVisor; считается недоверенным execution environment)
-- LiteLLM работает на host и доступен OpenScience через host-side relay;
+- одним из пользователей egress будет container внутри контейнера (он работает в Docker + container runtime; считается недоверенным execution environment)
+- LiteLLM работает на host и доступен container через host-side relay;
 - основной networking/proxy engine нового egress-слоя — **Mihomo**;
 - production deployment должен использовать pinned stable Mihomo version/image digest, а не `latest`.
 
-Везде далее вместо OpenScience может подразумеваться любой другой docker-контейнер, пользующийся egress. Вместо LiteLLM — другой сервис в докер-контейнере в той же локальной сети или сервис в сети хоста, к которому OpenScience-like контейнер подключается напрямую.
+Везде далее термин «клиентский контейнер» означает произвольный Docker-контейнер, пользующийся egress. Вместо LiteLLM — другой сервис в докер-контейнере в той же локальной сети или сервис в сети хоста, к которому клиентский контейнер подключается напрямую.
 
 # 1. Краткое резюме решения
 
 Нужно развернуть отдельный Docker Compose stack `vibelab-egress` на базе Mihomo.
 
-`vibelab-egress` является отдельным deployment от OpenScience и других execution environments:
+`vibelab-egress` является отдельным deployment от container и других execution environments:
 
 - Mihomo и `egressd` работают в отдельном Docker Compose stack;
-- они НЕ запускаются внутри OpenScience-контейнера;
+- они НЕ запускаются внутри клиентского контейнера;
 - они НЕ устанавливаются как основной data/control plane непосредственно на host;
-- один backend обслуживает несколько execution environments: host, OpenScience/gVisor и при необходимости другие контейнеры/VM;
+- один backend обслуживает несколько execution environments: host, Docker container и при необходимости другие контейнеры/VM;
 - **`egressctl` и `egress-run` устанавливаются локально в каждую среду, в которой требуется выполнять код**;
 - локальные clients используют один и тот же protocol/API, но разные client profiles/configs и разные адреса подключения к backend;
 - `egress-run` всегда является тонким локальным execution wrapper: команда запускается в той же execution environment, где был запущен `egress-run`, а не удалённо на host/backend;
@@ -68,13 +68,13 @@ Deployment topology является нормативной частью арх�
 
 ### Backend Docker Compose stack `vibelab-egress`
 
-Основной egress stack MUST работать в Docker и MUST быть отдельным от OpenScience deployment.
+Основной egress stack MUST работать в Docker и MUST быть отдельным от container deployment.
 
 ```text
 Docker host
 |
-+-- OpenScience stack
-|   `-- openscience
++-- container stack
+|   `-- container
 |
 `-- vibelab-egress stack
     |-- mihomo
@@ -118,7 +118,7 @@ host environment
 ├── egress-run
 └── client.yaml
 
-OpenScience/gVisor
+Docker container
 ├── egressctl
 ├── egress-run
 ├── client.yaml
@@ -137,7 +137,7 @@ other container / VM
 Следовательно:
 
 - host `egress-run` запускает host process с host filesystem/environment;
-- OpenScience `egress-run` запускает process внутри OpenScience/gVisor с его filesystem/environment;
+- container `egress-run` запускает process внутри Docker container с его filesystem/environment;
 - backend никогда не получает arbitrary command payload для обычного proxy execution;
 - `egressd` не является remote-exec service.
 
@@ -160,14 +160,14 @@ VIBELAB_EGRESS_CONFIG=/path/to/client.yaml
 Минимальная схема:
 
 ```yaml
-client_id: openscience-main
+client_id: container-main
 control_url: http://host.docker.internal:9091
 proxy_host: host.docker.internal
 default_proxy_port: 1080
 oneshot_proxy_port: 1081
 api_token_file: /run/secrets/vibelab_egress_client_token
 default_proxy_auth_file: /run/secrets/vibelab_egress_default_proxy_auth
-environment: gvisor-container
+environment: container
 tun_backend: none
 ```
 
@@ -200,18 +200,18 @@ host-main:
   default route = direct
   default mode  = proxy
 
-openscience-main:
+container-main:
   default route = xeovo:fi-helsinki-03
   default mode  = proxy
 ```
 
-Изменение default в OpenScience не должно менять host default и наоборот.
+Изменение default в container не должно менять host default и наоборот.
 
 Для каждого provisioned client Mihomo/config generator SHOULD иметь отдельную selector group, например:
 
 ```text
 CLIENT::host-main
-CLIENT::openscience-main
+CLIENT::container-main
 ```
 
 `egressd` переключает только selector, относящийся к authenticated client.
@@ -254,7 +254,7 @@ HOST workload
     | config -> host.docker.internal
     | local egressctl / egress-run
     |
-OpenScience/gVisor workload
+Docker container workload
 ```
 
 Agent-facing endpoints публикуются:
@@ -267,14 +267,14 @@ Mihomo raw/admin API не публикуется ни на public interface, н�
 
 ### Privilege separation
 
-OpenScience MUST NOT получать ради egress:
+container MUST NOT получать ради egress:
 
 - Docker socket;
 - raw Mihomo admin API;
 - provider subscription secrets/private keys;
 - host root shell;
 - возможность изменять host nftables/routes;
-- `/dev/net/tun` или `CAP_NET_ADMIN`, если только отдельный будущий PoC не докажет безопасную sandbox-local реализацию без ослабления gVisor.
+- `/dev/net/tun` или `CAP_NET_ADMIN`, если только отдельный будущий PoC не докажет безопасную sandbox-local реализацию без ослабления container runtime.
 
 Если TUN implementation требует privileged helper, helper располагается в той execution environment/на том host, где это необходимо, и предоставляет только узкий local interface для сетевой изоляции процесса. Он не является generic root-exec API.
 
@@ -316,7 +316,7 @@ vless:personal-01
 
 ```text
 host-main
-openscience-main
+container-main
 research-container-02
 ```
 
@@ -373,14 +373,14 @@ route=direct, mode=tun
 - `egress-run` получает у backend нужную network capability/session и запускает локальную команду;
 - ни один из них не содержит provider secrets;
 - ни один из них не должен требовать Mihomo admin secret;
-- один и тот же client package должен работать на host и внутри OpenScience с разными configs.
+- один и тот же client package должен работать на host и внутри container с разными configs.
 
 # 3. Архитектурные принципы
 
 1. **Mihomo-first.** Не писать собственные protocol engines, provider updater, selector или latency engine, если это уже штатно делает Mihomo.
 2. **Local execution.** `egress-run` запускает command в той же execution environment, где запущен сам wrapper. Backend не исполняет command удалённо.
-3. **Один backend, много clients.** Host/OpenScience/другие среды используют один `vibelab-egress`, но имеют отдельные client profiles/configs/defaults.
-4. **OpenScience остаётся недоверенным.** Не выдавать ему Docker socket, host root shell, provider secrets или Mihomo admin secret.
+3. **Один backend, много clients.** Host/container/другие среды используют один `vibelab-egress`, но имеют отдельные client profiles/configs/defaults.
+4. **container остаётся недоверенным.** Не выдавать ему Docker socket, host root shell, provider secrets или Mihomo admin secret.
 5. **Public API parity.** Public `egressd` API и control capabilities `egressctl` должны быть изоморфны: `egressctl` — удобный клиент API, а не security boundary.
 6. **No hidden privileged CLI.** `egressctl` не получает скрытых административных endpoints/capabilities, недоступных прямому public API client с тем же credential.
 7. **Data plane и control plane разделены.** Control идёт через `egressd`; сетевой трафик — через Mihomo/data-plane endpoints.
@@ -433,16 +433,16 @@ route=direct, mode=tun
 - собственная реализация WireGuard/VLESS;
 - scraping web cabinets провайдеров;
 - full-fleet speed-test при каждом выборе;
-- отключение gVisor ради strict mode;
-- выдача OpenScience Docker socket;
+- отключение container runtime ради strict mode;
+- выдача container Docker socket;
 - generic privileged RPC / arbitrary host shell.
 
 # 6. Исходная инфраструктура и DIRECT control plane
 
-Текущая логика OpenScience → LiteLLM (напомню: вместо openscience и litellm могут быть другие пользователи сети в докер-контейнерах, обращающиеся друг к другу через внутреннюю докер-сеть):
+Текущая логика container → LiteLLM (напомню: вместо container и litellm могут быть другие пользователи сети в докер-контейнерах, обращающиеся друг к другу через внутреннюю докер-сеть):
 
 ```text
-OpenScience (gVisor)
+container (container runtime)
    |
    | Docker default bridge
    v
@@ -463,7 +463,7 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 
 ## 7.1. Недоверенные субъекты
 
-- OpenScience agent;
+- container agent;
 - команды/код, запущенные агентом;
 - любой client, имеющий только ordinary public API credential;
 - внешние websites/repositories;
@@ -483,8 +483,8 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 
 ## 7.3. Security invariants
 
-1. OpenScience не видит provider subscription URLs/private keys/VLESS secrets.
-2. OpenScience не видит Mihomo admin secret.
+1. container не видит provider subscription URLs/private keys/VLESS secrets.
+2. container не видит Mihomo admin secret.
 3. Mihomo admin API не публикуется на host/docker gateway как client-facing service.
 4. Public `egressd` API безопасен при прямом вызове без `egressctl`.
 5. Public API не предоставляет generic `exec`, arbitrary file access, arbitrary config patch или raw Mihomo API passthrough.
@@ -495,7 +495,7 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 10. Operator-defined HARD DIRECT destinations имеют приоритет над выбранным route.
 11. Provider subscription update по умолчанию выполняется DIRECT; update via route не должен требовать раскрытия provider secret client-side.
 12. Strict helper не превращается в root-shell API и не доступен удалённому container client как generic host exec.
-13. Никакой автоматический fallback `gVisor -> runc` недопустим.
+13. Никакой автоматический fallback `container runtime -> runc` недопустим.
 14. Provider config/subscription parser считается input-validation boundary.
 15. One client не может менять default route/mode другого client через public API.
 16. Provider/API credentials разных trust domains должны быть разделены.
@@ -506,7 +506,7 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 ```text
                               HOST
 
-   host workload                              OpenScience/gVisor workload
+   host workload                              Docker container workload
         |                                              |
    egressctl / egress-run                         egressctl / egress-run
         |                                              |
@@ -547,7 +547,7 @@ Never client-facing:
   generic host exec
 ```
 
-Host и OpenScience используют один backend, но разные client configs и credentials.
+Host и container используют один backend, но разные client configs и credentials.
 
 Default state различается по client profile; one-shot sessions дополнительно различаются по route/session и могут выполняться параллельно.
 
@@ -790,7 +790,7 @@ Default route является per-client.
 
 ```text
 CLIENT::host-main = select(direct + all allowed provider nodes)
-CLIENT::openscience-main = select(direct + all allowed provider nodes)
+CLIENT::container-main = select(direct + all allowed provider nodes)
 ```
 
 `egressd` public API действует относительно authenticated caller.
@@ -858,7 +858,7 @@ Backend `/self`/capabilities должен сообщать, какие modes р�
 
 ```text
 client-default:host-main       -> CLIENT::host-main
-client-default:openscience-main -> CLIENT::openscience-main
+client-default:container-main -> CLIENT::container-main
 ```
 
 Фактические usernames/passwords не обязаны буквально содержать client ID; предпочтительны opaque credentials.
@@ -933,7 +933,7 @@ egressctl oneshot active
 ```json
 {
   "id": "job-...",
-  "client_id": "openscience-main",
+  "client_id": "container-main",
   "route": "xeovo:us-new-york-02",
   "mode": "proxy",
   "started_at": "..."
@@ -1032,7 +1032,7 @@ host egress-run
   -> Internet
 ```
 
-Helper может fork/exec target command только потому, что он вызывается локальным host user и после network setup обязан drop privileges до caller UID/GID. Это НЕ remote-exec API и НЕ доступно OpenScience по сети.
+Helper может fork/exec target command только потому, что он вызывается локальным host user и после network setup обязан drop privileges до caller UID/GID. Это НЕ remote-exec API и НЕ доступно container по сети.
 
 Per-run netns позволяет параллельно выполнять strict one-shot через разные routes.
 
@@ -1057,30 +1057,36 @@ Helper должен:
 - разрешать upstream только через configured egress endpoints/capabilities;
 - писать audit events без sensitive env/command payload по умолчанию.
 
-## 21.5. OpenScience/gVisor
+## 21.5. Изолированный Docker-клиент и общий TUN helper
 
-OpenScience также имеет локальный `egress-run`, однако current gVisor container не получает `/dev/net/tun`, `CAP_NET_ADMIN`, Docker socket или host helper access.
+Клиентский Docker-контейнер остаётся изолированной execution environment:
+`egressctl`, `egress-run`, приложение и все дочерние процессы запускаются
+внутри него. Для каждого запуска `egress-run` можно выбрать свой route и mode
+(`proxy` или `tun`); параллельные запуски не разделяют выбранный маршрут.
 
-Поэтому Phase 0/2 обязана исследовать, можно ли реализовать local strict execution без ослабления sandbox, например через поддерживаемый unprivileged userspace network namespace/stack. Конкретная технология должна быть доказана PoC.
+Для `proxy` клиент локально запускает команду с proxy-переменными и
+одноразовыми credentials выбранного route. Backend не получает argv,
+environment или stdio команды.
 
-Запрещено ради TUN:
+Для `tun` допускается один общий helper-контейнер для нескольких клиентских
+контейнеров. Клиент создаёт собственную per-invocation TUN-сессию; в helper
+передаются только сетевые TUN-пакеты и ограниченные метаданные сессии,
+необходимые для выбора уже выданного route capability. Helper не получает
+argv, cwd, environment, stdin/stdout/stderr и не запускает клиентские
+процессы. Он не выполняет команды и не превращается в remote-exec API.
 
-- отключать gVisor;
-- переключать OpenScience на `runc`;
-- давать OpenScience Docker socket;
-- давать ему host root/host network namespace;
-- превращать backend в remote arbitrary-exec service.
+Каждая TUN-сессия должна быть изолирована по session capability, route,
+счётчикам и времени жизни. Закрытие запуска завершает только его сетевую
+сессию. Helper должен отбрасывать пакеты без действительной сессии и не
+принимать от клиента произвольные upstream/маршруты.
 
-До доказанной реализации:
-
-```text
-host-main          proxy=yes, tun=phase2/helper
-openscience-main   proxy=yes, tun=unsupported_in_environment
-```
-
-`egress-run --mode tun` внутри OpenScience обязан завершаться явной диагностируемой ошибкой, а Skill должен объяснять альтернативу (`proxy`) и её ограничения.
-
-Если позднее будет найден безопасный local gVisor-compatible strict backend, он подключается за тем же `egress-run` contract без изменения user-facing CLI.
+Текущий host-native helper с протоколом `run` (argv + stdio FD) не является
+реализацией этого Docker-контракта и не должен использоваться из клиентских
+контейнеров. До реализации packet-only протокола Docker-клиентский TUN
+считается не реализованным; proxy mode остаётся доступным. Acceptance должен
+проверять размещение всех процессов внутри тестового клиента, раздельные
+proxy-запуски и передачу helper только пакетного трафика до того, как TUN
+будет отмечен реализованным.
 
 # 22. Hard DIRECT bypass
 
@@ -1308,12 +1314,12 @@ Administrative provisioning clients/secrets/config generation должно ид�
 
 ```text
 host-main token
-openscience-main token
+container-main token
 ```
 
 Token связывается server-side с client profile и его permissions/capabilities.
 
-OpenScience token может разрешать:
+container token может разрешать:
 
 - self/status/list;
 - read/set **своего** default route/mode;
@@ -1359,7 +1365,7 @@ egressctl whoami
 
 При startup client SHOULD сравнить локальный expected `client_id` с `/v1/self`; mismatch является ошибкой конфигурации.
 
-Host и OpenScience configs должны генерироваться provisioning/install tooling, а не копироваться вручную с заменой секретов.
+Host и container configs должны генерироваться provisioning/install tooling, а не копироваться вручную с заменой секретов.
 
 # 30. CLI и `egress-run` contract
 
@@ -1454,7 +1460,7 @@ Skill должен обучить агента:
 
 1. Начинать с `egressctl whoami`/`status`, чтобы знать client profile и capabilities.
 2. Проверять `route current` перед изменением persistent default.
-3. Помнить, что default per-client: изменение OpenScience default не меняет host default.
+3. Помнить, что default per-client: изменение container default не меняет host default.
 4. Предпочитать one-shot для единичной geo-specific задачи.
 5. Использовать `direct` как обычный route, в том числе для baseline comparison.
 6. Не менять default route ради одной команды.
@@ -1470,7 +1476,7 @@ Skill должен обучить агента:
 16. Для country-specific задачи при необходимости подтверждать exit country через GEO lookup/exit-IP check.
 17. При параллельных задачах использовать независимые `egress-run ROUTE` invocations, не менять default.
 18. Понимать ограничения proxy mode (`proxychains`, UDP/QUIC, static/setuid binaries).
-19. Не пытаться получить host root/Docker socket для TUN из OpenScience.
+19. Не пытаться получить host root/Docker socket для TUN из container.
 
 Skill должен содержать decision tree и примеры минимум для:
 
@@ -1529,13 +1535,13 @@ scripts/bootstrap-dev-access.sh   # если используется narrow dev
 6. выполнить `egressctl whoami`;
 7. выполнить `egressctl doctor`/smoke tests.
 
-Production OpenScience installation должна быть reproducible: предпочтительно bake client package + Skill в image либо подключать их детерминированным read-only artifact/mount. Не полагаться только на ручную установку в writable container layer, которая исчезнет при recreate.
+Production container installation должна быть reproducible: предпочтительно bake client package + Skill в image либо подключать их детерминированным read-only artifact/mount. Не полагаться только на ручную установку в writable container layer, которая исчезнет при recreate.
 
-Provisioning tool должен уметь генерировать отдельные client bundles/config templates для host и OpenScience без provider secrets.
+Provisioning tool должен уметь генерировать отдельные client bundles/config templates для host и container без provider secrets.
 
-# 33. Особое ограничение: разработчик находится внутри OpenScience
+# 33. Особое ограничение: разработчик находится внутри container
 
-Coding/test agent предполагается запущенным **изнутри уже работающего OpenScience gVisor container**.
+Coding/test agent предполагается запущенным **изнутри уже работающего Docker container**.
 
 Он должен разрабатывать и тестировать local client именно из этой среды.
 
@@ -1548,19 +1554,19 @@ Implementation plan не может предполагать, что агент 
 - доступ к `/etc` host;
 - Mihomo admin API.
 
-## 33.1. Что агент должен уметь делать самостоятельно из OpenScience
+## 33.1. Что агент должен уметь делать самостоятельно из container
 
 После первоначального bootstrap/provisioning агент должен уметь:
 
 - редактировать repository в shared workspace;
 - запускать unit/parser/config-generation tests;
-- устанавливать/обновлять dev version local client package внутри OpenScience;
-- валидировать OpenScience `client.yaml`;
+- устанавливать/обновлять dev version local client package внутри container;
+- валидировать container `client.yaml`;
 - выполнять `egressctl whoami/status`;
 - обращаться к public `egressd` API через `egressctl` и напрямую в API parity tests;
 - обращаться к authenticated SOCKS endpoints;
 - читать/менять только свой default route/mode;
-- запускать local `egress-run` и убеждаться, что process остаётся внутри gVisor;
+- запускать local `egress-run` и убеждаться, что process остаётся внутри container runtime;
 - запускать concurrent one-shot proxy tests;
 - обновлять providers через public API;
 - запускать domain probes/benchmarks;
@@ -1587,7 +1593,7 @@ Mihomo и `egressd` не устанавливаются как постоянн�
 
 Один раз администратор вручную выполняет bootstrap либо использует заранее установленный narrow deployment/test interface.
 
-После этого OpenScience agent может:
+После этого container agent может:
 
 - validate staged backend/client bundle;
 - request deploy/redeploy только `vibelab-egress` из фиксированного path;
@@ -1602,7 +1608,7 @@ Mihomo и `egressd` не устанавливаются как постоянн�
 - arbitrary compose path/container management;
 - arbitrary file copy в `/etc`;
 - Docker socket passthrough;
-- generic host exec ради выполнения OpenScience workload.
+- generic host exec ради выполнения container workload.
 
 Для PoC допустим ручной administrator loop: агент подготавливает artifacts/instructions, пользователь выполняет host-only commands и возвращает structured test report. Production acceptance требует воспроизводимого installer/harness.
 
@@ -1626,10 +1632,10 @@ egress-host-test
 - host client config/token presence and permissions;
 - host `egressctl whoami` identity;
 - host current default route/mode;
-- per-client isolation assertion: тестовое изменение OpenScience default не меняет host default;
+- per-client isolation assertion: тестовое изменение container default не меняет host default;
 - strict helper privileges/capability, если установлен.
 
-OpenScience agent может запросить только фиксированный harness/report через narrow dev/test mechanism; harness не принимает arbitrary shell command.
+container agent может запросить только фиксированный harness/report через narrow dev/test mechanism; harness не принимает arbitrary shell command.
 
 # 35. Docker/internal CIDR synchronization
 
@@ -1686,7 +1692,7 @@ Network reachability сама по себе не заменяет application au
     custom_vless
   clients/
     host-main.token
-    openscience-main.token
+    container-main.token
 ```
 
 Client environment получает только свой API token и отдельный default-proxy credential; one-shot credentials/capabilities выдаются через public API и не являются provider secrets.
@@ -1699,7 +1705,7 @@ host:
   /etc/vibelab-egress/client.token
   /etc/vibelab-egress/default-proxy.auth
 
-OpenScience:
+container:
   /etc/vibelab-egress/client.yaml
   /run/secrets/vibelab_egress_client_token
   /run/secrets/vibelab_egress_default_proxy_auth
@@ -1716,7 +1722,7 @@ Provider/Mihomo secrets не должны попадать:
 - в public API responses;
 - в `docker inspect` environment, если можно использовать mounted files.
 
-Client token внутри OpenScience не считается тайной от code самого OpenScience; его permissions должны быть безопасны для всего trust domain этого container.
+Client token внутри container не считается тайной от code самого container; его permissions должны быть безопасны для всего trust domain этого container.
 
 # 38. Persistence
 
@@ -1725,7 +1731,7 @@ Persistent root configurable и должен находиться на дост�
 Пример:
 
 ```text
-/home/vibelab/openscience/egress/
+/var/lib/vibelab-egress/
   mihomo/
   providers/
   generated/
@@ -1817,7 +1823,7 @@ MetaCubeXD/Zashboard допустим только как admin convenience.
 Если установлен:
 
 - bind только на host loopback;
-- full Mihomo secret не доступен OpenScience;
+- full Mihomo secret не доступен container;
 - UI может быть отключён без влияния на agent workflows.
 
 # 43. MCP
@@ -1879,7 +1885,7 @@ vibelab-egress/
     tests/
     examples/
       client.host.yaml
-      client.openscience.yaml
+      client.container.yaml
 
   adapters/
     blanc/
@@ -1910,7 +1916,7 @@ vibelab-egress/
     security/
 ```
 
-Не должно быть двух независимых реализаций CLI для host и OpenScience: это один client package с разными configs/capabilities.
+Не должно быть двух независимых реализаций CLI для host и container: это один client package с разными configs/capabilities.
 
 # 45. Phase 0 — обязательный PoC
 
@@ -1924,7 +1930,7 @@ vibelab-egress/
 6. WireGuard route через Mihomo;
 7. provider manual update API;
 8. provider health/delay API;
-9. создание минимум двух per-client selector groups (`host-main`, `openscience-main`);
+9. создание минимум двух per-client selector groups (`host-main`, `container-main`);
 10. независимое query/set selector для каждого client;
 11. `direct` в каждом client selector;
 12. authenticated default proxy identity -> correct client selector;
@@ -1937,15 +1943,15 @@ vibelab-egress/
 19. domain probe через direct + минимум две locations;
 20. Mihomo admin API остаётся private;
 21. provider route disappearance: only affected client fallback to direct;
-22. один и тот же client package работает на host и OpenScience с разными configs;
+22. один и тот же client package работает на host и container с разными configs;
 23. `/v1/self` correctly binds token -> client identity;
 24. попытка подменить `client_id` не позволяет управлять другим profile;
 25. `egressctl` public operations воспроизводимы direct API calls с теми же permissions;
-26. `egress-run` внутри OpenScience запускает child внутри OpenScience/gVisor, а не на backend/host;
-27. proxy mode end-to-end из OpenScience;
+26. `egress-run` внутри container запускает child внутри Docker container, а не на backend/host;
+27. proxy mode end-to-end из container;
 28. proxy mode end-to-end с host client;
 29. provider update через explicit working `--via ROUTE` без shared selector race;
-30. исследовать feasibility local strict/TUN backend в host и gVisor environments и явно зафиксировать capability matrix.
+30. исследовать feasibility local strict/TUN backend в host и container runtime environments и явно зафиксировать capability matrix.
 
 Результат: `POC_REPORT.md` с версиями, configs, measured outcomes и решениями.
 
@@ -1964,19 +1970,19 @@ vibelab-egress/
 - доказать concurrency-safe route-addressable one-shot;
 - проверить реальный масштаб client×route mappings;
 - проверить GEO assets/domain probe;
-- проверить host/OpenScience client configs;
+- проверить host/container client configs;
 - доказать local-execution semantics `egress-run`;
 - исследовать TUN capability matrix.
 
 Skills/компетенции:
 
-- Linux/Docker/gVisor networking;
+- Linux/Docker/container runtime networking;
 - Mihomo/Clash Meta;
 - WireGuard/VLESS/SOCKS;
 - HTTP/TLS diagnostics;
 - process/network namespace semantics.
 
-A0 работает преимущественно из OpenScience; host-only assertions выполняются через administrator/harness.
+A0 работает преимущественно из container; host-only assertions выполняются через administrator/harness.
 
 Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, если PoC опровергнет предположения.
 
@@ -1992,7 +1998,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - persistent dirs/secrets/firewall;
 - host backend installer;
 - client provisioning;
-- install одного и того же client package на host/OpenScience;
+- install одного и того же client package на host/container;
 - генерация разных `client.yaml`/tokens;
 - uninstall/rollback;
 - Docker CIDR sync;
@@ -2005,8 +2011,8 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - Docker socket не смонтирован;
 - client tokens раздельны;
 - backend secrets отсутствуют в clients;
-- OpenScience не получает arbitrary host command;
-- recreate OpenScience не теряет production client installation/Skill.
+- container не получает arbitrary host command;
+- recreate container не теряет production client installation/Skill.
 
 ---
 
@@ -2079,7 +2085,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 - единый package с `egressctl` и `egress-run`;
 - config discovery/validation;
-- host/OpenScience endpoint differences только через config;
+- host/container endpoint differences только через config;
 - `/self` identity verification;
 - human output + JSON;
 - stable exit codes;
@@ -2088,7 +2094,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - doctor;
 - public API parity tests.
 
-Проверить и на host, и изнутри OpenScience:
+Проверить и на host, и изнутри container:
 
 - один и тот же release/package;
 - разные configs;
@@ -2134,13 +2140,13 @@ Phase 2, после полного proxy-mode acceptance.
 - route-specific upstream;
 - `direct + tun`;
 - concurrent host TUN jobs;
-- исследовать **local** OpenScience/gVisor strict backend без remote host exec и без sandbox weakening;
+- исследовать **local** Docker container strict backend без remote host exec и без sandbox weakening;
 - capability reporting.
 
 Критические запреты:
 
-- no gVisor disable/runc fallback;
-- no Docker socket to OpenScience;
+- no container runtime disable/runc fallback;
+- no Docker socket to container;
 - no generic remote host exec;
 - no shared mutable one-shot selector;
 - no silent proxy fallback.
@@ -2155,11 +2161,11 @@ Phase 2, после полного proxy-mode acceptance.
 
 - `skills/egress/SKILL.md`;
 - README user + agent sections;
-- host/OpenScience client install/config documentation;
+- host/container client install/config documentation;
 - usage examples/decision tree;
 - optional MCP only after CLI.
 
-Проверить на реальном OpenScience agent:
+Проверить на реальном container agent:
 
 - `whoami`/capabilities;
 - current/set own default;
@@ -2192,9 +2198,9 @@ Phase 2, после полного proxy-mode acceptance.
 Особенно проверить:
 
 - public API не мощнее documented egressctl control surface;
-- OpenScience может обойти CLI, но от этого не получает дополнительных privileges;
-- OpenScience не получает host shell/Docker socket/provider/Mihomo secrets;
-- host/OpenScience defaults независимы;
+- container может обойти CLI, но от этого не получает дополнительных privileges;
+- container не получает host shell/Docker socket/provider/Mihomo secrets;
+- host/container defaults независимы;
 - internal Docker/HARD DIRECT остаются DIRECT;
 - parallel one-shot не влияют друг на друга;
 - `egress-run` исполняет command локально;
@@ -2219,7 +2225,7 @@ A0 Architecture/PoC
                                                               |
                                                               +--> A7 Skill/docs
 
-Proxy-mode acceptance (host + OpenScience)
+Proxy-mode acceptance (host + container)
  |
  +--> A6 strict/TUN Phase 2
  |
@@ -2231,24 +2237,24 @@ A4/A5 могут частично идти параллельно после fre
 A7 Skill является частью v1 release, не optional documentation.
 A8 выполняется после proxy acceptance и повторяется/дополняется после TUN Phase 2.
 
-# 48. Testing strategy изнутри OpenScience
+# 48. Testing strategy изнутри container
 
-Поскольку основной coding/test agent находится внутри OpenScience, обязательны реальные integration tests из этой environment.
+Поскольку основной coding/test agent находится внутри container, обязательны реальные integration tests из этой environment.
 
 Минимальный набор:
 
 1. local client package installed and version reported;
 2. `egressctl config validate`;
-3. `egressctl whoami` -> `openscience-main`;
+3. `egressctl whoami` -> `container-main`;
 4. direct API `/v1/self` returns same identity/capabilities;
 5. попытка spoof другого `client_id` не меняет identity;
 6. `egressctl route current`;
 7. `egressctl route set direct`;
 8. `egressctl route set <VPN>`;
 9. host client default остаётся неизменным (через host harness assertion);
-10. default proxy exit IP соответствует OpenScience default;
-11. `egress-run direct -- ...` выполняет child внутри OpenScience/gVisor;
-12. `egress-run <VPN> -- ...` выполняет child внутри OpenScience/gVisor;
+10. default proxy exit IP соответствует container default;
+11. `egress-run direct -- ...` выполняет child внутри Docker container;
+12. `egress-run <VPN> -- ...` выполняет child внутри Docker container;
 13. 3+ concurrent one-shot routes, один `direct`;
 14. provider update;
 15. update blocked provider via working `--via ROUTE` where fixture/environment permits;
@@ -2258,10 +2264,10 @@ A8 выполняется после proxy acceptance и повторяется/
 19. bounded benchmark shortlist;
 20. Docker internal endpoint remains reachable DIRECT;
 21. LiteLLM continues to work during default switch/provider update/concurrent one-shot;
-22. raw Mihomo API fails from OpenScience;
+22. raw Mihomo API fails from container;
 23. direct public API gives no capability beyond egressctl;
-24. OpenScience cannot operate on host-main default;
-25. `--mode tun` returns explicit unsupported until approved local gVisor backend exists;
+24. container cannot operate on host-main default;
+25. Container `--mode tun` acceptance proves child processes stay local and the shared helper receives packets/session capability only; until that packet-only path exists, report it as deferred, not as a runtime-wide unsupported rule;
 26. host acceptance harness report passes.
 
 # 49. Acceptance criteria — v1 proxy mode
@@ -2274,10 +2280,10 @@ Release принимается только если:
 4. Custom VLESS works end-to-end.
 5. At least one WireGuard route works through Mihomo.
 6. `direct` exists in route catalog and works as default/one-shot.
-7. Host и OpenScience используют один и тот же client package release.
-8. Host и OpenScience имеют разные configs/tokens/endpoints where needed.
+7. Host и container используют один и тот же client package release.
+8. Host и container имеют разные configs/tokens/endpoints where needed.
 9. `egressctl whoami` returns authenticated profile, not blindly local `client_id`.
-10. Defaults are per-client; changing OpenScience default does not change host default.
+10. Defaults are per-client; changing container default does not change host default.
 11. Each client can query actual current route/mode.
 12. Disappearing selected route falls back to direct only for affected clients.
 13. `egressctl` control operations use documented public API only.
@@ -2297,17 +2303,17 @@ Release принимается только если:
 27. Docker-internal destination is DIRECT via default and one-shot proxy for container client.
 28. Operator-defined HARD DIRECT destination remains direct.
 29. LiteLLM remains reachable during route changes/provider updates/concurrency.
-30. Raw Mihomo API unavailable from OpenScience/ordinary clients.
+30. Raw Mihomo API unavailable from container/ordinary clients.
 31. Agent API and proxy endpoints authenticated.
 32. Public NIC cannot reach client-facing ports.
-33. Docker socket absent from egress stack/OpenScience.
+33. Docker socket absent from egress stack/container.
 34. Provider secrets absent from client configs/Git/API/logs/docker inspect env/artifacts.
 35. Benchmark bounded by bytes/time.
 36. `best --domain` uses actual domain probe, not GEO heuristics only.
 37. Skill installed and real agent completes documented workflows using local CLI.
 38. Backend + separate client install instructions reproduce deployment.
-39. OpenScience client install survives/reproduces container recreate by documented mechanism.
-40. Coding agent inside OpenScience can run integration suite without host root.
+39. container client install survives/reproduces container recreate by documented mechanism.
+40. Coding agent inside container can run integration suite without host root.
 41. Host-only assertions exposed through fixed harness, not generic host shell.
 42. API/client version mismatch is detected with actionable error/capability negotiation.
 
@@ -2323,10 +2329,11 @@ Release принимается только если:
 6. No generic root escalation/remote exec.
 7. stale netns/TUN resources cleaned.
 8. HARD DIRECT rules remain enforced where applicable.
-9. OpenScience `tun` is either implemented by an approved **local/sandbox-preserving** mechanism or explicitly reports `unsupported_in_environment`.
-10. No gVisor weakening, Docker socket, host root or runc fallback.
-11. No silent fallback from `tun` to `proxy`.
-12. `egressctl whoami/capabilities` accurately reports mode availability.
+9. Client container processes remain in their isolated container for every invocation.
+10. Shared helper receives only TUN packets and bounded session metadata; it never receives argv/env/cwd/stdio or launches a workload.
+11. No Docker socket or host root is granted to the client container.
+12. No silent fallback from `tun` to `proxy`.
+13. `egressctl whoami/capabilities` accurately reports mode availability.
 
 # 51. Upstream references to use during implementation
 

@@ -2,7 +2,7 @@
 
 This folder contains the tooling to test the part of the project that **requires
 host access** (Docker daemon, the live egress stack, the TUN helper, the
-OpenScience/gVisor container) and to hand the results back for **independent
+Docker container) and to hand the results back for **independent
 re-verification**.
 
 Two files do the work:
@@ -11,7 +11,7 @@ Two files do the work:
 |------|---------|------|
 | `host/live-acceptance.py` | the **host** | the *producer*: runs every live check and writes **one** JSON report |
 | `scripts/verify-live-report.py` | anywhere (no host access needed) | the *verifier*: re-derives every pass/fail from the report's raw evidence and checks a tamper hash |
-| `scripts/run-live-acceptance.sh` | the host | convenience wrapper: detects the OpenScience container, runs the producer, writes the report |
+| `scripts/run-live-acceptance.sh` | the host | convenience wrapper: detects the Docker container, runs the producer, writes the report |
 
 The design goal: the report is **self-contained and tamper-evident**. The
 verifier does **not** trust the stored status of a check — it re-derives it from
@@ -24,10 +24,10 @@ fake a pass.
 - **TECH_SPEC.md section 50 (Phase 2 TUN)** — all 12 items:
   `tun_tcp_client`, `tun_local_workload`, `tun_udp_quic`, `tun_concurrent`,
   `tun_direct_isolated`, `tun_no_root_escalation`, `tun_stale_cleanup`,
-  `tun_hard_direct`, `openscience_tun_unsupported`, `tun_no_silent_fallback`,
-  `tun_capabilities_accuracy`, `tun_no_gvisor_weakening`.
+  `tun_hard_direct`, `container_tun_packet_path`, `tun_no_silent_fallback`,
+  `tun_capabilities_accuracy`, `tun_helper_boundary`; packet-only container TUN is currently an explicit SKIP until implemented.
 - **TECH_SPEC.md section 49 (v1 proxy) — host-only live items**:
-  `a8_public_ports_closed` (49.32), `a8_openscience_recreate_persists` (49.39),
+  `a8_public_ports_closed` (49.32), `a8_container_recreate_persists` (49.39),
   `a8_litellm_reachable` (49.29), `a8_parallel_oneshot` (49.23),
   `a8_egress_run_local` (49.25), `a8_internal_hard_direct` (49.27),
   `a8_secrets_absent` (49.34), `a8_host_test_report` (49.41, runs the existing
@@ -47,9 +47,9 @@ evidence supports it.
    - `sudo bash scripts/install-tun-host.sh --user vibelab` (for host TUN checks)
 2. The **host** client is installed: `egressctl` and `egress-run` on `PATH`,
    with `/etc/vibelab-egress/client.yaml`, `client.token`, `default-proxy.auth`.
-3. The **OpenScience** container is running and has the client installed
+3. The **container** container is running and has the client installed
    (`/usr/local/bin/egressctl` inside it). Its name is auto-detected; override
-   with `VIBELAB_EGRESS_OS_CONTAINER` if detection fails.
+   with `VIBELAB_EGRESS_CONTAINER` if detection fails.
 4. For the TUN checks: `install-tun-host.sh` creates the helper socket at
    `/run/vibelab-egress/tun-helper.sock` via a host systemd unit. The harness
    resolves the path from the host client's `client.yaml` automatically;
@@ -65,7 +65,7 @@ bash scripts/run-live-acceptance.sh
 
 This writes the single report to `reports/host_acceptance_report.json`.
 
-To run the **restart** observation (it restarts the OpenScience container — do
+To run the **restart** observation (it restarts the Docker container — do
 this only if you can afford the brief interruption):
 
 ```bash
@@ -79,7 +79,7 @@ installation survives container removal and recreation.
 Optional environment overrides:
 
 ```bash
-VIBELAB_EGRESS_OS_CONTAINER=openscience \
+VIBELAB_EGRESS_CONTAINER=container \
 VIBELAB_EGRESS_LITELLM_URL=http://127.0.0.1:4000/health \
 bash scripts/run-live-acceptance.sh
 ```
@@ -90,7 +90,7 @@ bash scripts/run-live-acceptance.sh
 python3 host/live-acceptance.py \
   --out reports/host_acceptance_report.json \
   --config /etc/vibelab-egress/client.yaml \
-  --os-container openscience \
+  --container egress-test-client \
   --litellm-url http://127.0.0.1:4000/health
   # add --recreate to enable the destructive recreate check
   # add --no-tun to skip the TUN checks
@@ -131,8 +131,8 @@ edited evidence, an injected secret, and structural breaks.
 - The producer uses only the Python 3 standard library and a fixed command
   allowlist (`egressctl`, `egress-run`, `docker`, `ip`, `ss`, `python3`, and the
   sibling `egress-host-test`). There is no free-form shell input.
-- The OpenScience checks run **inside** the container via `docker exec`, because
-  the bundle's token paths (`/run/secrets/*`) and the gVisor environment only
+- The container checks run **inside** the container via `docker exec`, because
+  the bundle's token paths (`/run/secrets/*`) and the container runtime environment only
   exist there.
 - `a8_public_ports_closed` checks that the egress client-facing ports
   (1080/1081/9091) are not reachable on a public NIC; unrelated host services

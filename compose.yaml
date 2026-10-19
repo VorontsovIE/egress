@@ -2,7 +2,7 @@
 #
 # Security invariants enforced by this file:
 #   * NO public binds: every published port is bound to 127.0.0.1 (host
-#     clients) or ${DOCKER_GATEWAY} (container clients, e.g. OpenScience).
+#     clients) or ${DOCKER_GATEWAY} (container clients, e.g. container).
 #     Never 0.0.0.0 / public IP. The host firewall (install-backend-host.sh)
 #     is the second layer.
 #   * NO Docker socket mounted into any service.
@@ -13,7 +13,7 @@
 #   * Mihomo image is pinned by tag AND digest.
 #
 # Variables (set by install-backend-host.sh, sane defaults for dev):
-#   VIBELAB_EGRESS_ROOT   persistent data root (default /home/vibelab/openscience/egress)
+#   VIBELAB_EGRESS_ROOT   persistent data root (default /var/lib/vibelab-egress)
 #   VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
 #   DOCKER_GATEWAY        IP of the Docker bridge gateway for container
 #                         clients (default 172.17.0.1)
@@ -41,17 +41,17 @@ services:
       - "127.0.0.1:1080:18080"
       - "127.0.0.1:1081:18081"
       - "127.0.0.1:1081:18081/udp"
-      # container clients (OpenScience etc.) via the Docker bridge gateway
+      # container clients (container etc.) via the Docker bridge gateway
       - "${DOCKER_GATEWAY:-172.17.0.1}:1080:18080"
       - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081"
       - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081/udp"
     volumes:
       # persistent mihomo state (bbolt cache with stored selections, logs)
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/mihomo:/root/.config/mihomo
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/mihomo:/root/.config/mihomo
       # generated config (written by egressd, read by mihomo)
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/generated:/root/.config/mihomo/generated:ro
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/generated:/root/.config/mihomo/generated:ro
       # provider subscriptions (read-only; updates go through egressd)
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/providers:/root/.config/mihomo/providers:ro
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/providers:/root/.config/mihomo/providers:ro
       # GEO data is OPTIONAL and mihomo-managed: the generated config sets
       # geox-url + geo-auto-update (spec 14.1), so mihomo downloads/refreshes
       # GeoIP/GeoSite/ASN into its own persistent home dir (the `mihomo`
@@ -131,10 +131,10 @@ services:
       - "127.0.0.1:9091:9091"
       - "${DOCKER_GATEWAY:-172.17.0.1}:9091:9091"
     volumes:
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/egressd:/var/lib/egressd
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/egressd:/var/lib/egressd
       # generated config output (egressd writes, mihomo reads via its mount)
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/generated:/var/lib/egressd/generated
-      - ${VIBELAB_EGRESS_ROOT:-/home/vibelab/openscience/egress}/providers:/var/lib/egressd/providers
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/generated:/var/lib/egressd/generated
+      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/providers:/var/lib/egressd/providers
       # backend secrets (client tokens for auth, mihomo secret, provider subs)
       - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
     depends_on:

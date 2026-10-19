@@ -22,7 +22,7 @@ DEFAULT_ENROLL_SOCKET = "/run/vibelab-egress-enroll/enroll.sock"
 ENV_CONFIG = "VIBELAB_EGRESS_CONFIG"
 
 CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._\-]{1,64}")
-ENVIRONMENTS = ("host", "gvisor-container", "container", "vm")
+ENVIRONMENTS = ("host", "container", "vm")
 
 
 class ConfigError(Exception):
@@ -62,6 +62,8 @@ class ClientConfig:
             raise ConfigError(f"control_url must be http(s): {self.control_url!r}")
         if self.tun_backend not in ("none", "host-helper"):
             raise ConfigError(f"tun_backend must be none|host-helper: {self.tun_backend!r}")
+        if self.environment == "container" and self.tun_backend == "host-helper":
+            raise ConfigError("container cannot use host-helper; packet-only TUN is not implemented")
 
     # ---- secrets (read from files, never stored in the yaml) ----
     def api_token(self) -> str:

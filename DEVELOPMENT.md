@@ -4,20 +4,11 @@
 
 ## Окружение: мы внутри докер-контейнера
 
-Разработка ведётся **изнутри докер-контейнера** (OpenScience, gVisor).
-Контейнер примонтирован к хост-машине так:
-
-| host | container |
-|---|---|
-| `/home/vibelab/openscience/workspace` | `/srv/workspace` |
-| `/home/vibelab/openscience/state` | `/var/lib/openscience` |
-
-Практические следствия:
-
-- Рабочий каталог — `/srv/workspace`; всё, что в нём создано, видно на хосте
-  в `/home/vibelab/openscience/workspace` и переживает перезапуск контейнера.
-- `/var/lib/openscience` — state OpenScience (проекты, сессии, scratch);
-  это не место для артефактов проекта.
+Разработка и тестирование могут выполняться изнутри обычного Docker-контейнера.
+Путь checkout и постоянного состояния зависит от настроек конкретного
+контейнера; в примерах этого документа предполагается checkout в `/srv/workspace`.
+Данные приложения и временное состояние контейнера не следует использовать
+как место для артефактов проекта.
 - Контейнер — недоверенная execution environment по threat model проекта
   (spec §7.1). Backend (mihomo + egressd) **не запускается здесь** — он живёт
   на хосте в отдельном compose stack.
@@ -160,7 +151,7 @@ Phase-0 сборка (2026-10-10): `poc/mihomo` — sha256 `a2b70600…`
 ## Ключевые пути на host (persistent)
 
 ```text
-/home/vibelab/openscience/egress/     # persistent root (VIBELAB_EGRESS_ROOT)
+/var/lib/vibelab-egress/  # persistent root (VIBELAB_EGRESS_ROOT)
   mihomo/        # bbolt state (store-selected), logs
   providers/     # подписки (ro-mount)
   generated/     # config.yaml + docker-cidrs.yaml

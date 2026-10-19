@@ -44,10 +44,10 @@ except OSError:
 
 PROJ = "vibelab-egress"
 SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
-DEFAULT_ROOT = "/home/vibelab/openscience/egress"
+DEFAULT_ROOT = "/var/lib/vibelab-egress"
 DEFAULT_REPO = "/srv/workspace/vibelab-egress"
 HOST_INSTALL_DIR = "/etc/vibelab-egress"
-DEFAULT_CLIENT_BUNDLE_DIR = "/home/vibelab/openscience/egress/client-bundle"
+DEFAULT_CLIENT_BUNDLE_DIR = "/var/lib/vibelab-egress/client-bundle"
 # Docker >= 28 removed .Subnet/.Gateway from the `network ls` template context
 # (a network may carry multiple IPAM configs, so they are no longer flattened).
 # We therefore list name/id/driver via `ls` and read the IPAM config per network
@@ -332,10 +332,10 @@ def cmd_install_client(args):
     target = args.target
     if target == "host":
         dest = HOST_INSTALL_DIR
-    elif target == "openscience":
+    elif target == "container":
         dest = client_bundle_dir()
     else:
-        err("target must be 'host' or 'openscience' (got %r)" % target, 2)
+        err("target must be 'host' or 'container' (got %r)" % target, 2)
     bundle = os.path.realpath(args.bundle)
     if not os.path.isdir(bundle):
         err("bundle directory not found: %s" % args.bundle, 2)
@@ -387,7 +387,7 @@ def build_parser():
     s.set_defaults(fn=cmd_run_acceptance)
 
     s = sub.add_parser("install-client", help="install pre-built client bundle to fixed target")
-    s.add_argument("target", choices=["host", "openscience"])
+    s.add_argument("target", choices=["host", "container"])
     s.add_argument("--bundle", required=True)
     s.set_defaults(fn=cmd_install_client)
 

@@ -4,7 +4,7 @@
 
 - **A. Backend deployment** — один раз на Docker host (root).
 - **B. Client installation** — в каждую execution environment (host,
-  OpenScience/gVisor, другие контейнеры/VM) независимо.
+  Docker container, другие контейнеры/VM) независимо.
 
 Один и тот же client package (`egressctl` + `egress-run`, stdlib-only)
 устанавливается везде; различаются только `client.yaml` и secret files.
@@ -25,7 +25,7 @@
 
 ### Persistent paths
 
-Persistent root (по умолчанию `/home/vibelab/openscience/egress`,
+Persistent root (по умолчанию `/var/lib/vibelab-egress`; для уже существующей установки задайте её текущий root через `VIBELAB_EGRESS_ROOT`,
 настраивается `--root` / `VIBELAB_EGRESS_ROOT`):
 
 ```text
@@ -110,15 +110,15 @@ Mihomo image pinned: `metacubex/mihomo:v1.19.32` (override `MIHOMO_IMAGE`).
 # host client (обычно делает install-backend-host.sh сам)
 scripts/provision-client.sh --client host-main --environment host
 
-# OpenScience client
-scripts/provision-client.sh --client openscience-main --environment gvisor-container
+# container client
+scripts/provision-client.sh --client container-main --environment container
 ```
 
 Для каждого client генерируются: bundle (`client.yaml`, `client.token`,
 `default-proxy.auth`) + backend-секреты (`clients/<id>.*`). Provider
 secrets в bundle **не попадают**.
 
-### Dev/test bridge (нужен, если агент работает из OpenScience)
+### Dev/test bridge (нужен, если агент работает из container)
 
 ```bash
 scripts/bootstrap-dev-access.sh            # root, один раз
@@ -150,8 +150,9 @@ Backend secrets в подкаталоге `secrets/` сохраняют
 
 TUN-helper запускается отдельным host systemd unit. Он сохраняет host mount
 namespace для workload, передаёт текущий каталог и окружение клиента, а сетевой
-доступ изолирует в per-run netns. Контейнерный helper удалён: файловая система
-его контейнера не является файловой системой команды, вызванной на host.
+доступ изолирует в per-run netns. Host helper запускает host workload только для host-клиента. Клиентский
+Docker-контейнер к этому helper не подключается: его процессы остаются внутри
+контейнера; packet-only общий helper описан в TECH_SPEC §21.5 и пока отложен.
 
 На Docker host после установки backend:
 
@@ -164,7 +165,7 @@ systemctl status vibelab-egress-tun-helper.service
 создаёт отдельного непривилегированного worker и локальную группу доступа к
 `/run/vibelab-egress/tun-helper.sock`. После первого добавления пользователя в
 группу нужна новая login-сессия. Повторный запуск скрипта обновляет код и unit.
-`egress-run` внутри OpenScience/gVisor по-прежнему не получает этот сокет.
+`egress-run` внутри Docker container по-прежнему не получает этот сокет.
 
 Перед включением helper нужен host с `/dev/net/tun`, `ip`, `nft`, `iptables`,
 `setpriv` и systemd. Unit ограничен набором CAP_SYS_ADMIN, CAP_NET_ADMIN,
@@ -184,7 +185,7 @@ sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json
 
 **Где лежат логи.**
 - Установка: `<root>/install-backend-host.log` (append; по умолчанию
-  `/home/vibelab/openscience/egress/install-backend-host.log`).
+  `/var/lib/vibelab-egress/install-backend-host.log`).
 - Верификация: `<root>/verify-backend-host.log` (append, тот же формат).
 
 **Формат строк.** Каждая строка: `[<UTC timestamp>] [step N/10] <message>`,
@@ -253,7 +254,7 @@ docker cp <root>/client-bundles/<id> <container>:/root/egress-client-bundle
 авторизоваться старым токеном (`unknown token`), хотя на backend уже новый —
 легко спутать с багом авторизации egressd.
 
-В работающем OpenScience под `runsc` проверен случай, когда `docker cp`
+В работающем container под `runsc` проверен случай, когда `docker cp`
 сообщил об успехе, но файлы в `/tmp` не появились внутри контейнера.
 Передавайте bundle через stdin контейнера и проверяйте его там до установки:
 
@@ -263,7 +264,7 @@ sudo tar -C <root>/client-bundles/<id> -cf - . |
   'mkdir -p /tmp/vibelab-egress-client && tar -C /tmp/vibelab-egress-client -xf -'
 docker exec <container> test -s /tmp/vibelab-egress-client/client.token
 docker exec <container> bash /srv/workspace/vibelab-egress/scripts/install-client.sh \
-  --client <id> --target gvisor-container --bundle /tmp/vibelab-egress-client
+  --client <id> --target container --bundle /tmp/vibelab-egress-client
 docker exec <container> rm -rf /tmp/vibelab-egress-client
 ```
 
@@ -278,8 +279,8 @@ docker exec <container> rm -rf /tmp/vibelab-egress-client
    ```bash
    scripts/install-client.sh --client <id> --target host \
        --bundle <root>/client-bundles/<id>
-   # или внутри OpenScience:
-   scripts/install-client.sh --client <id> --target gvisor-container \
+   # или внутри container:
+   scripts/install-client.sh --client <id> --target container \
        --bundle <bundle>
    ```
 
@@ -289,12 +290,12 @@ docker exec <container> rm -rf /tmp/vibelab-egress-client
 
 3. **Отдельные read-only secrets**: API token + default-proxy auth в
    отдельных файлах (host: `/etc/vibelab-egress/*.token|*.auth` 0600;
-   OpenScience: `/run/secrets/vibelab_egress_*` read-only mount; в plain-
+   container: `/run/secrets/vibelab_egress_*` read-only mount; в plain-
    контейнере без такого маунта `install-client.sh` сам создаёт
    `/run/secrets` в writable rootfs).
 
 4. **Skill** (`skills/egress/SKILL.md`) — устанавливается, если
-   environment agent-capable (OpenScience).
+   environment agent-capable (container).
 
 5–7. **Проверки**:
 
@@ -306,11 +307,11 @@ docker exec <container> rm -rf /tmp/vibelab-egress-client
    scripts/verify-client.sh [--config <path>] [--offline]
    ```
 
-### Reproducible OpenScience installation
+### Reproducible container installation
 
-Production OpenScience: bake client package + Skill в image либо
+Production container: bake client package + Skill в image либо
 подключать детерминированным read-only artifact/mount (bundle из
-`<root>/client-bundles/openscience-main`). Не полагаться на ручную
+`<root>/client-bundles/container-main`). Не полагаться на ручную
 установку в writable layer — она исчезнет при recreate.
 `verify-client.sh` проверяет, что install root — persistent путь.
 
@@ -375,3 +376,25 @@ URL/файл не доступен и не управляется со стор�
 нужно включить в persistent volume или image, если они должны переживать
 пересоздание контейнера. Обновление контейнерного URL запускается внутри
 контейнера командой `egressctl source refresh <name>` (например, таймером).
+
+### Проверка из обычного Docker-контейнера
+
+Для проверки без заранее подготовленной среды создайте bundle на host и
+запустите одноразовый тестовый контейнер. В контейнер монтируется checkout и
+bundle; `install-client.sh`, `egressctl` и дочерняя команда `egress-run`
+выполняются внутри него. Контейнеру не выдаются Docker socket или host helper
+socket.
+
+```bash
+scripts/provision-client.sh --client egress-test-client --environment container
+bash tests/docker/run-client-container.sh \
+  /var/lib/vibelab-egress/client-bundles/egress-test-client blanc:FI-Helsinki-1
+```
+
+Сценарий собирает обычный `python:3.11-slim`-based image, добавляет только
+host-gateway DNS alias и выполняет `whoami`, локальность дочернего процесса и
+HTTPS-запрос через выбранный proxy route. Можно передать любой доступный
+provider route ID (не `direct`, который обходит proxy); повторные вызовы `egress-run` могут использовать
+разные route ID. Это proxy smoke test. Контейнерный TUN не считается
+реализованным до появления packet-only протокола общего helper; текущий
+host helper с запуском argv для этого не используется.

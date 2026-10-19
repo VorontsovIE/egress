@@ -71,7 +71,7 @@ Hysteria2-маршрутов не обнаружено. Это результа�
 Дальше повторить live acceptance после смены состояния маршрута; при
 необходимости проверить выбранный маршрут через `egressctl test` и
 `egressctl probe-domain`. Другие SKIP остаются обусловлены отсутствующим
-OpenScience и root-only проверками.
+container и root-only проверками.
 
 # Handoff: локальные QA фиксы и повторная приёмка
 
@@ -99,7 +99,7 @@ OpenScience и root-only проверками.
   закрытыми.
 - Acceptance использует SOCKS-aware проверки, сохраняет большие JSON,
   допускает изменение публичного direct IP, явно пропускает проверки при
-  отсутствии OpenScience. Независимый verifier перепроверяет HTTP статусы и
+  отсутствии container. Независимый verifier перепроверяет HTTP статусы и
   размер benchmark.
 
 ## Проверка после фиксов
@@ -114,7 +114,7 @@ OpenScience и root-only проверками.
   оба Compose сервиса healthy.
 - Host acceptance после фиксов: **23 PASS / 0 FAIL / 5 SKIP**.
   Проверки TUN TCP, UDP/QUIC, параллельных one-shot и ограниченного
-  benchmark прошли. SKIP: два OpenScience capability/TUN пункта и проверка
+  benchmark прошли. SKIP: два container capability/TUN пункта и проверка
   установленного client release связаны с отсутствующим контейнером;
   recreate check выключен по умолчанию; host harness требует root.
 - Для этого user acceptance CLI запускался из текущего `client/src` через
@@ -151,7 +151,7 @@ host harness здесь не удалось; соответствующий SKIP
 После получения root доступа обновить host client скриптом
 `scripts/install-client.sh` для используемого профиля и проверить файлы token
 и auth, затем повторить harness с установленным `/usr/local/bin` client.
-OpenScience контейнер в локальном Docker отсутствует, поэтому его recreate и
+container контейнер в локальном Docker отсутствует, поэтому его recreate и
 проверка установленной версии требуют среды с этим контейнером.
 
 # Handoff: A6 host-native strict/TUN
@@ -176,9 +176,9 @@ checks hash `1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca`,
   проверил direct и proxy TCP через фиктивный SOCKS5 (`poc/A6_POC.md`).
 - На globe §50.2 прошёл: UID/GID 1082:1083, host cwd и запись файла на host.
   §50.5 direct без tun0, §50.6 `CapEff=0`, §50.7 cleanup, §50.8 HARD DIRECT,
-  §50.9 настоящий OpenScience `runsc`, §50.11 отказ без helper и §50.12
+  §50.9 настоящий container `runsc`, §50.11 отказ без helper и §50.12
   capability accuracy прошли. Прочие доступные A8 проверки прошли.
-- OpenScience client установлен внутри `runsc`. `egressctl status` видит
+- container client установлен внутри `runsc`. `egressctl status` видит
   backend; `egressctl capabilities` сообщает `unsupported_in_environment`,
   `egress-run --mode tun direct -- true` завершается кодом 6 без fallback.
   Socket helper и host namespace туда не предоставлены. Bundle был передан
@@ -200,8 +200,8 @@ checks hash `1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca`,
    Если обнаружится дефект, добавь точечный regression test.
 3. Проверь concurrent proxy jobs, signal/cancel, timeout и restart helper:
    не должны оставаться netns/veth/firewall rules, `/etc/netns` и `/run` job
-   state. Не ослабляй gVisor и не добавляй Docker socket.
-4. Установка OpenScience client сейчас сделана в работающем контейнере.
+   state. Не ослабляй container runtime и не добавляй Docker socket.
+4. Установка container client сейчас сделана в работающем контейнере.
    Обеспечь воспроизводимую установку при его пересоздании; смонтированный
    `/srv/workspace/vibelab-egress` может содержать старую версию клиента.
    Проверь §49.39 на полном recreate и зафиксируй результат.
@@ -228,7 +228,7 @@ checks hash `1d527999d8c280d28676711212d117652958bf7b162d28441f0d67cad68152ca`,
 - Проверь unit capabilities: `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SETUID`,
   `CAP_SETGID`, `CAP_CHOWN`, `CAP_KILL`, `CAP_SETPCAP`; socket только локальный,
   клиентская команда с `CapEff=0`. Проверяй отсутствие секретов/команд/env
-  в audit, Docker socket в Compose и доступа OpenScience к host helper.
+  в audit, Docker socket в Compose и доступа container к host helper.
 - Текущий helper установлен и работает на globe. При обновлении используй
   `scripts/install-tun-host.sh`; старый контейнерный helper больше не должен
   работать. Не сбрасывай общие таблицы Docker/UFW при cleanup.

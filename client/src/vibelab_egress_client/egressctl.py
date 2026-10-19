@@ -432,14 +432,6 @@ def cmd_doctor(args) -> None:
     sys.exit(EXIT_OK if not failed else EXIT_RUNTIME)
 
 
-def _gvisor_kernel() -> bool:
-    """True when running under gVisor ('gvisor' in /proc/version)."""
-    try:
-        return "gvisor" in Path("/proc/version").read_text(
-            encoding="utf-8", errors="replace").lower()
-    except OSError:
-        return False
-
 
 def _tun_capability(cfg: ClientConfig) -> dict:
     """Local tun capability probe (spec 50.12 / phase A6).
@@ -449,11 +441,7 @@ def _tun_capability(cfg: ClientConfig) -> dict:
     """
     from . import __version__
 
-    if cfg.environment == "gvisor-container" or _gvisor_kernel():
-        status = "unsupported_in_environment"
-        reason = (f"gVisor environment (environment={cfg.environment!r}): "
-                  "no /dev/net/tun / CAP_NET_ADMIN")
-    elif cfg.tun_backend != "host-helper":
+    if cfg.tun_backend != "host-helper":
         status = "none"
         reason = f"tun_backend={cfg.tun_backend!r}"
     else:

@@ -23,14 +23,14 @@ from vibelab_egress_client.config import (  # noqa: E402
 
 def _write_config(path: Path, **overrides) -> Path:
     data = {
-        "client_id": "openscience-main",
+        "client_id": "container-main",
         "control_url": "http://127.0.0.1:9091",
         "proxy_host": "127.0.0.1",
         "default_proxy_port": "1080",
         "oneshot_proxy_port": "1081",
         "api_token_file": str(path.parent / "client.token"),
         "default_proxy_auth_file": str(path.parent / "default-proxy.auth"),
-        "environment": "gvisor-container",
+        "environment": "container",
         "tun_backend": "none",
     }
     data.update(overrides)
@@ -93,7 +93,7 @@ class TestDiscovery:
     def test_env_over_etc(self, env, monkeypatch):
         monkeypatch.setenv(ENV_CONFIG, str(env / "client.yaml"))
         cfg = load_config()
-        assert cfg.client_id == "openscience-main"
+        assert cfg.client_id == "container-main"
 
     def test_missing_config(self, env, monkeypatch):
         monkeypatch.setenv(ENV_CONFIG, str(env / "nope.yaml"))
@@ -138,8 +138,8 @@ class TestValidation:
 
     def test_valid_config(self, env):
         cfg = load_config(str(env / "client.yaml"))
-        assert cfg.client_id == "openscience-main"
-        assert cfg.environment == "gvisor-container"
+        assert cfg.client_id == "container-main"
+        assert cfg.environment == "container"
         assert cfg.tun_backend == "none"
         assert cfg.default_proxy_port == 1080
 

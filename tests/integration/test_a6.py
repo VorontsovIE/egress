@@ -491,9 +491,9 @@ def _write_blanc(path: Path) -> None:
 def egress(tmp_path, monkeypatch):
     clients = tmp_path / "clients"
     clients.mkdir()
-    # host-main has tun in its modes (host-helper installed); openscience does not
+    # host-main has tun in its modes (host-helper installed); container does not
     for cid, env, modes in (("host-main", "host", ["proxy", "tun"]),
-                            ("openscience-main", "gvisor-container", ["proxy"])):
+                            ("container-main", "container", ["proxy"])):
         (clients / f"{cid}.token").write_text(f"tok-{cid}\n")
         (clients / f"{cid}.profile.json").write_text(json.dumps(
             {"client_id": cid, "environment": env, "modes": modes}))
@@ -513,7 +513,7 @@ def egress(tmp_path, monkeypatch):
     return {
         "app": app, "client": TestClient(app), "tmp": tmp_path,
         "host": {"Authorization": "Bearer tok-host-main"},
-        "os": {"Authorization": "Bearer tok-openscience-main"},
+        "os": {"Authorization": "Bearer tok-container-main"},
     }
 
 
@@ -527,7 +527,7 @@ class TestCapabilitiesTun:
         assert tun["status"] == "supported"
         assert tun["backend"] == "host-helper"
 
-    def test_openscience_tun_unsupported(self, egress):
+    def test_container_tun_unsupported(self, egress):
         r = egress["client"].get("http://testserver/v1/capabilities",
                                  headers=egress["os"])
         tun = r.json()["tun"]
@@ -541,7 +541,7 @@ class TestCapabilitiesTun:
         # host: supported -> mode set tun is accepted
         assert c.put("http://testserver/v1/default/mode", headers=host,
                      json={"mode": "tun"}).status_code == 200
-        # openscience: unsupported -> explicit 400, no silent fallback
+        # container: unsupported -> explicit 400, no silent fallback
         r = c.put("http://testserver/v1/default/mode", headers=os_,
                   json={"mode": "tun"})
         assert r.status_code == 400

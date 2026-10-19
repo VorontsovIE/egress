@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bootstrap-dev-access.sh — set up the narrow dev/test bridge so the
-# OpenScience agent can request fixed host operations (spec section 33.2).
+# container agent can request fixed host operations (spec section 33.2).
 #
 # This is the ONE-TIME administrator step. After it runs, the agent can
 # POST to the devbridge (fixed ops only: deploy/redeploy/status/logs/

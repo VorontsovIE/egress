@@ -39,14 +39,14 @@ def cfg_file(tmp_path, monkeypatch):
     auth.write_text("os-user:os-pass\n")
     cfg = tmp_path / "client.yaml"
     cfg.write_text(
-        "client_id: openscience-main\n"
+        "client_id: container-main\n"
         "control_url: http://127.0.0.1:9091\n"
         "proxy_host: 127.0.0.1\n"
         "default_proxy_port: 1080\n"
         "oneshot_proxy_port: 1081\n"
         f"api_token_file: {token}\n"
         f"default_proxy_auth_file: {auth}\n"
-        "environment: gvisor-container\n"
+        "environment: container\n"
         "tun_backend: none\n"
     )
     return str(cfg)
@@ -295,7 +295,7 @@ class TestTun:
         """tun_backend=host-helper but the helper socket is absent: explicit
         unsupported (helper not running), no silent proxy fallback."""
         cfg = Path(cfg_file)
-        text = cfg.read_text().replace("tun_backend: none",
+        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
                                        "tun_backend: host-helper")
         text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
         cfg.write_text(text)
@@ -309,7 +309,7 @@ class TestTun:
         import io
         from contextlib import redirect_stderr
         cfg = Path(cfg_file)
-        text = cfg.read_text().replace("tun_backend: none",
+        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
                                        "tun_backend: host-helper")
         text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
         cfg.write_text(text)
@@ -341,7 +341,7 @@ class TestTunHelper:
     def _host_helper_cfg(self, cfg_file, tmp_path):
         cfg = Path(cfg_file)
         sock = tmp_path / "tun.sock"
-        text = cfg.read_text().replace("tun_backend: none",
+        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
                                        "tun_backend: host-helper")
         cfg.write_text(text + f"tun_helper_socket: {sock}\n")
         return str(cfg), sock

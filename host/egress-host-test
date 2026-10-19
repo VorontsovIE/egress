@@ -25,7 +25,7 @@ redacted log tails) and each failed live check's detail gets an
 actionable "next: <command>" line.
 
 Environment:
-  VIBELAB_EGRESS_ROOT   persistent data root (default /home/vibelab/openscience/egress)
+  VIBELAB_EGRESS_ROOT   persistent data root (default /var/lib/vibelab-egress)
   VIBELAB_EGRESS_REPO   repo root with compose.yaml (default /srv/workspace/vibelab-egress)
   VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
 """
@@ -44,7 +44,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/home/vibelab/openscience/egress")
+ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress")
 # Default repo root = parent of the host/ dir containing this script, so the
 # harness finds compose.yaml from any checkout location (no env var needed).
 _DEFAULT_REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))

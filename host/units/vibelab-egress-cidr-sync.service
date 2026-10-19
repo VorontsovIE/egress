@@ -16,7 +16,7 @@ ExecStart=/usr/bin/env python3 ${VIBELAB_EGRESS_HOSTCTL} sync-docker-cidrs
 User=root
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/vibelab/openscience/egress
+ReadWritePaths=/var/lib/vibelab-egress
 
 [Install]
 WantedBy=multi-user.target

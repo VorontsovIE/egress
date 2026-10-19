@@ -192,7 +192,7 @@ def test_pass_rules_supported(tmp_path):
                    {"exit": 0, "exit_ip": "1.1.1.1",
                     "host_public_ip": "1.1.1.1", "tun_device_present": False,
                     "lines": ["1.1.1.1", "False"]}),
-        make_check("openscience_tun_unsupported", "spec50.9", "pass", "egress-run",
+        make_check("container_tun_unsupported", "spec50.9", "pass", "egress-run",
                    {"exit": 6, "stdout": "", "stderr": "no silent fallback",
                     "runtime": "runsc"}),
         make_check("a8_probe_domain_all", "spec49.20", "pass", "probe-domain",
@@ -218,17 +218,16 @@ def test_hard_direct_requires_successful_connect_ex(tmp_path):
 
 
 def test_restart_cannot_prove_recreate_persistence(tmp_path):
-    check = make_check("a8_openscience_recreate_persists", "spec49.39", "pass",
-                       "docker restart", {"before_client_id": "openscience-main",
-                       "after_client_id": "openscience-main", "restart_rc": 0})
+    check = make_check("a8_container_recreate_persists", "spec49.39", "pass",
+                       "docker restart", {"before_client_id": "container-main",
+                       "after_client_id": "container-main", "restart_rc": 0})
     out, _ = verifier.verify(write(tmp_path, make_report([check])))
     assert out["verdict"] == "REJECTED"
 
 
-def test_runc_does_not_verify_gvisor_unsupported(tmp_path):
-    check = make_check("openscience_tun_unsupported", "spec50.9", "pass",
-                       "egress-run", {"exit": 6, "stdout": "",
-                       "stderr": "no silent fallback", "runtime": "runc"})
+def test_container_tun_is_deferred_until_packet_helper_exists(tmp_path):
+    check = make_check("container_tun_packet_path", "spec21.5", "pass",
+                       "egress-run", {"exit": 0, "helper_received": "argv"})
     out, _ = verifier.verify(write(tmp_path, make_report([check])))
     assert out["verdict"] == "REJECTED"
 
@@ -239,8 +238,7 @@ def test_tun_capabilities_must_match_helper(tmp_path):
                            "host": {"exit": 0, "tun": "supported"},
                            "helper": {"status": "unsupported_in_environment",
                                       "reason": "missing CAP_SYS_ADMIN"},
-                           "openscience": {"exit": 0,
-                                           "tun": "unsupported_in_environment"}})
+                           "container": {"exit": 0, "tun": "none"}})
     out, _ = verifier.verify(write(tmp_path, make_report([check])))
     assert out["verdict"] == "REJECTED"
     check["evidence"]["host"]["tun"] = "unsupported_in_environment"
