@@ -291,24 +291,32 @@ class MihomoAdmin:
 # --------------------------------------------------------------------------
 # provider inventory (file providers egressd controls)
 # --------------------------------------------------------------------------
-def _read_provider_file(path: Path) -> tuple[list[str], dict[str, str], int]:
-    """Read a provider YAML file -> (clean_names, {clean: type}, mtime).
+def _read_provider_file(path: Path) -> tuple[
+        list[str], dict[str, str], int, dict[str, str]]:
+    """Read provider YAML -> names, types, mtime and opaque node fingerprints.
 
     The file is the adapter output: ``proxies: [{name: <clean>, type: ...}]``.
     Clean names are what the catalog uses; the mihomo-visible name is
     ``<prefix><clean>`` (additional-prefix, spec 11.1).
     """
+    import hashlib
+    import json
     import yaml
 
     data = yaml.safe_load(path.read_text())
     proxies = data.get("proxies", []) if isinstance(data, dict) else []
     names: list[str] = []
     types: dict[str, str] = {}
+    identities: dict[str, str] = {}
     for p in proxies:
         if isinstance(p, dict) and p.get("name"):
-            names.append(str(p["name"]))
-            types[str(p["name"])] = str(p.get("type", "unknown"))
-    return names, types, int(path.stat().st_mtime)
+            name = str(p["name"])
+            names.append(name)
+            types[name] = str(p.get("type", "unknown"))
+            canonical = json.dumps(p, sort_keys=True, separators=(",", ":"),
+                                   ensure_ascii=False, default=str)
+            identities[name] = hashlib.sha256(canonical.encode()).hexdigest()
+    return names, types, int(path.stat().st_mtime), identities
 
 
 def scan_providers(providers_dir: Path) -> dict[str, dict[str, Any]]:
@@ -335,7 +343,7 @@ def scan_providers(providers_dir: Path) -> dict[str, dict[str, Any]]:
     for provider_id in sorted(ids):
         p = providers_dir / f"{provider_id}.yaml"
         try:
-            _, _, mtime = _read_provider_file(p)
+            _, _, mtime, _ = _read_provider_file(p)
         except Exception:
             mtime = 0
         source = load_source(provider_id)
@@ -366,23 +374,42 @@ def rebuild_catalog(app: FastAPI) -> Any:
     manifest = scan_providers(providers_dir)
     app.state.provider_manifest = manifest
 
+    previous_catalog = getattr(app.state, "catalog", None)
     providers: dict[str, list[str]] = {}
     prefixes: dict[str, str] = {}
     protocols: dict[str, dict[str, str]] = {}
+    identities: dict[str, dict[str, str]] = {}
     owners: dict[str, str] = {}
     for prov, meta in manifest.items():
         try:
-            names, types, _ = _read_provider_file(Path(meta["path"]))
+            names, types, _, node_identities = _read_provider_file(Path(meta["path"]))
         except Exception:
             log.warning("provider read failed", extra={"provider": prov})
-            names, types = [], {}
+            names, types, node_identities = [], {}, {}
         providers[prov] = names
         prefixes[prov] = meta.get("prefix", f"{prov}-")
         protocols[prov] = types
+        identities[prov] = node_identities
         if meta.get("owner"):
             owners[prov] = meta["owner"]
 
-    catalog = RouteCatalog().build(providers, prefixes, protocols, owners)
+    catalog = RouteCatalog().build(providers, prefixes, protocols, owners,
+                                   identities)
+    app.state.metrics.sync_route_identities(catalog._identities)
+    if previous_catalog is not None:
+        catalog.preserve_runtime_from(previous_catalog)
+    # Restore the latest health sample on process restart. Changed route
+    # definitions are purged by sync_route_identities before this read.
+    try:
+        for row in app.state.metrics.latest_health_samples():
+            route = catalog.get(row["route_id"])
+            if route is not None:
+                route.healthy = bool(row["healthy"])
+                route.latency_ms = row["latency_ms"]
+                route.last_test_at = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                   time.gmtime(row["ts"]))
+    except Exception as e:
+        log.warning("health enrichment failed", extra={"error": str(e)})
     # enrich with the most recent benchmark sample per route (spec 25/26:
     # the throughput score in `best --speed-aware` and the route listing).
     try:

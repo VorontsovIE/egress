@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "egressd" / "src"))
 
 from egressd.catalog import RouteCatalog  # noqa: E402
+from egressd.metrics import MetricsDB  # noqa: E402
 from egressd.probe import (  # noqa: E402
     CONNECTION_RESET,
     DNS_FAILURE,
@@ -587,3 +588,84 @@ class TestProbeParallelCap:
         # all four completed even though only 2 slots exist (allocator
         # blocks/retries instead of dropping)
         assert len(calls) == 4
+
+
+def test_catalog_refresh_preserves_runtime_state_only_for_unchanged_route():
+    old = RouteCatalog().build(
+        {"personal": ["FI-node"]},
+        identities={"personal": {"FI-node": "fingerprint-a"}},
+    )
+    route = old.get("personal:FI-node")
+    route.healthy, route.latency_ms = True, 42
+    route.exit_ip, route.exit_country, route.asn = "203.0.113.1", "FI", 123
+    route.last_test_at = "2026-10-19T10:00:00Z"
+    route.benchmark_mbps, route.benchmark_at = 88.0, "2026-10-19T10:01:00Z"
+
+    unchanged = RouteCatalog().build(
+        {"personal": ["FI-node"]},
+        identities={"personal": {"FI-node": "fingerprint-a"}},
+    )
+    unchanged.preserve_runtime_from(old)
+    assert unchanged.get("personal:FI-node").to_dict() == route.to_dict()
+
+    changed = RouteCatalog().build(
+        {"personal": ["FI-node"]},
+        identities={"personal": {"FI-node": "fingerprint-b"}},
+    )
+    changed.preserve_runtime_from(old)
+    reset = changed.get("personal:FI-node")
+    assert reset.healthy is None
+    assert reset.latency_ms is None
+    assert reset.exit_ip is None and reset.exit_country is None and reset.asn is None
+    assert reset.last_test_at is None
+    assert reset.benchmark_mbps is None and reset.benchmark_at is None
+
+
+def test_provider_fingerprint_tracks_config_not_yaml_key_order(tmp_path):
+    from egressd.main import _read_provider_file
+
+    provider = tmp_path / "provider.yaml"
+    provider.write_text(
+        "proxies:\n  - name: FI-node\n    type: hysteria2\n"
+        "    server: 203.0.113.2\n    port: 443\n    password: first\n"
+    )
+    _, _, _, first = _read_provider_file(provider)
+    provider.write_text(
+        "proxies:\n  - password: first\n    port: 443\n"
+        "    server: 203.0.113.2\n    type: hysteria2\n    name: FI-node\n"
+    )
+    _, _, _, reordered = _read_provider_file(provider)
+    assert first == reordered
+
+    provider.write_text(
+        "proxies:\n  - name: FI-node\n    type: hysteria2\n"
+        "    server: 203.0.113.2\n    port: 443\n    password: second\n"
+    )
+    _, _, _, changed = _read_provider_file(provider)
+    assert first["FI-node"] != changed["FI-node"]
+
+
+def test_metrics_drop_stale_samples_when_route_definition_changes(tmp_path):
+    db = MetricsDB(tmp_path / "metrics.sqlite3")
+    try:
+        identity = {"personal:FI-node": "fingerprint-a"}
+        db.sync_route_identities(identity)
+        db.add_health("personal:FI-node", "host-main", True, 42)
+        db.add_probe("personal:FI-node", "host-main", "example.com",
+                     True, 200, 80, None, {})
+        db.add_benchmark("personal:FI-node", "host-main", 88.0, 1024, True, {})
+        db.set_geo("test-key", "personal:FI-node", "203.0.113.1", "FI", 123)
+
+        db.sync_route_identities(identity)
+        assert len(db.latest_health_samples()) == 1
+        assert len(db._query("SELECT route_id FROM probe_samples")) == 1
+        assert len(db._query("SELECT route_id FROM benchmark_samples")) == 1
+        assert db.get_geo("test-key") is not None
+
+        db.sync_route_identities({"personal:FI-node": "fingerprint-b"})
+        assert db.latest_health_samples() == []
+        assert db._query("SELECT route_id FROM probe_samples") == []
+        assert db._query("SELECT route_id FROM benchmark_samples") == []
+        assert db.get_geo("test-key") is None
+    finally:
+        db.close()

@@ -105,6 +105,10 @@ class RouteCatalog:
         self._mihomo_to_id: dict[str, str] = {}
         self._id_to_mihomo: dict[str, str] = {}
         self._prefixes: dict[str, str] = {}
+        # Opaque hashes of the route definitions. These never leave the
+        # backend; they let catalog rebuilds distinguish an unchanged stable
+        # ID from a provider replacing its endpoint or credentials in place.
+        self._identities: dict[str, str] = {}
 
     # ---- construction -----------------------------------------------------
     def build(
@@ -113,11 +117,13 @@ class RouteCatalog:
         prefixes: dict[str, str] | None = None,
         protocols: dict[str, dict[str, str]] | None = None,
         owners: dict[str, str] | None = None,
+        identities: dict[str, dict[str, str]] | None = None,
     ) -> "RouteCatalog":
         """Rebuild the catalog. ``protocols`` maps provider -> {clean: type}."""
         prefixes = prefixes or {}
         protocols = protocols or {}
         owners = owners or {}
+        identities = identities or {}
         by_id: dict[str, RouteInfo] = {}
         mihomo_to_id: dict[str, str] = {}
         id_to_mihomo: dict[str, str] = {}
@@ -149,10 +155,35 @@ class RouteCatalog:
                 mihomo_to_id[mihomo_name] = rid
                 id_to_mihomo[rid] = mihomo_name
 
+        self._identities = {
+            f"{provider}:{clean}": fingerprint
+            for provider, nodes in identities.items()
+            for clean, fingerprint in nodes.items()
+        }
+
         self._by_id = by_id
         self._mihomo_to_id = mihomo_to_id
         self._id_to_mihomo = id_to_mihomo
         return self
+
+    def same_identity(self, route_id: str, other: "RouteCatalog") -> bool:
+        """Whether a route ID still points to the same provider definition."""
+        current = self._identities.get(route_id)
+        previous = other._identities.get(route_id)
+        return current is not None and current == previous
+
+    def preserve_runtime_from(self, previous: "RouteCatalog") -> None:
+        """Carry health and performance data only for unchanged definitions."""
+        fields = (
+            "healthy", "latency_ms", "exit_ip", "exit_country", "asn",
+            "last_test_at", "benchmark_mbps", "benchmark_at",
+        )
+        for route_id, route in self._by_id.items():
+            old = previous.get(route_id)
+            if old is None or not self.same_identity(route_id, previous):
+                continue
+            for field_name in fields:
+                setattr(route, field_name, getattr(old, field_name))
 
     # ---- lookups ----------------------------------------------------------
     def route_id(self, provider: str, clean: str) -> str:

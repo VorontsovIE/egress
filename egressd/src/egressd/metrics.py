@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS routes (
     city TEXT,
     updated_at REAL
 );
+CREATE TABLE IF NOT EXISTS route_identities (
+    route_id TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS health_samples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL,
@@ -204,6 +209,48 @@ class MetricsDB:
         )
 
     # ---- routes -----------------------------------------------------------
+    def sync_route_identities(self, identities: dict[str, str]) -> None:
+        """Persist opaque route fingerprints and discard stale measurements.
+
+        Stable route IDs can be reused by subscription providers for changed
+        nodes. When the underlying definition changes, health, probe,
+        benchmark and GEO samples no longer describe that route and are
+        removed. The fingerprints are hashes only; provider YAML is not stored.
+        """
+        if not identities:
+            return
+        now = time.time()
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                for route_id, fingerprint in identities.items():
+                    row = self._conn.execute(
+                        "SELECT fingerprint FROM route_identities WHERE route_id=?",
+                        (route_id,),
+                    ).fetchone()
+                    if row is not None and row["fingerprint"] != fingerprint:
+                        for table in ("health_samples", "probe_samples",
+                                      "benchmark_samples", "geo_cache"):
+                            self._conn.execute(
+                                f"DELETE FROM {table} WHERE route_id=?", (route_id,))
+                    self._conn.execute(
+                        "INSERT INTO route_identities(route_id, fingerprint, updated_at)"
+                        " VALUES(?,?,?) ON CONFLICT(route_id) DO UPDATE SET"
+                        " fingerprint=excluded.fingerprint, updated_at=excluded.updated_at",
+                        (route_id, fingerprint, now),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def latest_health_samples(self) -> list[dict[str, Any]]:
+        return self._query(
+            "SELECT h.route_id, h.healthy, h.latency_ms, h.ts FROM health_samples h"
+            " JOIN (SELECT route_id, MAX(ts) AS ts FROM health_samples GROUP BY route_id) latest"
+            " ON latest.route_id=h.route_id AND latest.ts=h.ts"
+        )
+
     def upsert_route(self, r: dict[str, Any]) -> None:
         self._exec(
             """INSERT INTO routes(route_id, provider, display_name, protocol, country, city, updated_at)
