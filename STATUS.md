@@ -2,6 +2,20 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Установка host-клиента — 2026-10-19
+
+Через `pkexec` установлен текущий клиент в `/usr/local` и профиль
+`host-uid-1000` в `/etc/vibelab-egress`; `egressctl whoami` подтвердил ID и
+режимы host, а `egress-run direct -- /usr/bin/true` завершился успешно.
+Повторный live acceptance через установленный `/usr/local/bin` клиент дважды
+дал **18 PASS / 3 FAIL / 7 SKIP**; оба отчёта независимо проверены как
+`VERIFIED`. Два FAIL касаются TUN TCP/UDP, один — bounded benchmark; все три
+выбрали один Hysteria2 маршрут, у которого не было публичного exit IP,
+UDP-ответа и HTTP headers. До установки acceptance был **23 PASS / 0 FAIL /
+5 SKIP**, поэтому текущие повторы указывают на доступность маршрута, не на
+ошибку CLI установки. Закрытые отчёты находятся в
+`~/.local/share/vibelab-egress-test/live-user-installed-client*.json`.
+
 ## Закрытие локального QA — 2026-10-19
 
 Плановые четыре блока закоммичены отдельно: `2379d91`, `3734942`, `5a3aba2`,

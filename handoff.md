@@ -1,3 +1,35 @@
+# Установка host-клиента после локального QA
+
+Дата: 2026-10-19. Следующий инженер: host-клиент обновлён от имени root
+через `pkexec` из текущего дерева. В `/usr/local` установлены
+`egressctl`/`egress-run`, конфигурация `/etc/vibelab-egress/client.yaml`
+указывает на проверенный профиль `host-uid-1000`. `egressctl --json whoami`
+подтвердил профиль; `egress-run direct -- /usr/bin/true` прошёл. Каталог
+конфигурации root-owned с группой пользователя, token и proxy auth имеют
+права 0600 и владельца пользователя.
+
+Полный acceptance установленного клиента выполнен дважды. Оба результата:
+**18 PASS / 3 FAIL / 7 SKIP**; оба отчёта независимо дали `VERIFIED` с
+успешной проверкой secret scan. FAIL повторились на одном маршруте
+Hysteria2: TUN TCP не получил публичный exit IP, TUN UDP не получил ответ,
+bounded benchmark не получил HTTP headers. До установки полный acceptance
+был **23 PASS / 0 FAIL / 5 SKIP**. Это воспроизводится как состояние
+конкретного маршрута; установленный CLI и backend аутентификация работают.
+Не объявлять live acceptance полностью зелёным, пока узел не восстановится
+или не будет выбран другой пригодный маршрут.
+
+Закрытые отчёты (0600), verifier `VERIFIED`, hashes:
+
+- `~/.local/share/vibelab-egress-test/live-user-installed-client.json` —
+  `886b27818e3fbeb2eedd06ec2f153845156dc7668647501a3e7266dd6474afce`
+- `~/.local/share/vibelab-egress-test/live-user-installed-client-recheck.json` —
+  `e99fbb4f25531733381b509b6320cad5625992491a19b5857de4abb58d5ca298`
+
+Дальше повторить live acceptance после смены состояния маршрута; при
+необходимости проверить выбранный маршрут через `egressctl test` и
+`egressctl probe-domain`. Другие SKIP остаются обусловлены отсутствующим
+OpenScience и root-only проверками.
+
 # Handoff: локальные QA фиксы и повторная приёмка
 
 Дата: 2026-10-19. Получатель — следующий инженер, продолжающий локальную
