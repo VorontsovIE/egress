@@ -29,6 +29,16 @@ HTTP 200 как в proxy, так и в TUN. Значит, TUN работает �
 Данные пока не позволяют разделить неисправность конкретных узлов и
 несовместимость Hysteria2-конфигурации с серверной стороной.
 
+## Текущая доступность Hysteria2 — 2026-10-19
+
+`egressctl list --json` показал 21 Hysteria2-маршрут. Все 21 проверены
+ограниченным `probe-domain` (parallel 8, timeout 10 секунд) на двух
+независимых HTTPS целях: `www.cloudflare.com/cdn-cgi/trace` (ожидался 200)
+и `www.google.com/generate_204` (ожидался 204). Обе проверки дали
+**0/21 успехов, 21/21 tls_failure**. На момент прогона доступных
+Hysteria2-маршрутов не обнаружено. Это результат HTTPS-проверок из текущей
+среды, а не доказательство постоянной недоступности узлов.
+
 Закрытые отчёты (0600), verifier `VERIFIED`, hashes:
 
 - `~/.local/share/vibelab-egress-test/live-user-installed-client.json` —
