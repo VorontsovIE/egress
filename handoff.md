@@ -1,3 +1,84 @@
+# Handoff: локальные QA фиксы и повторная приёмка
+
+Дата: 2026-10-19. Получатель — следующий инженер, продолжающий локальную
+проверку. Четыре кодовых блока из исходного плана закоммичены отдельно:
+
+1. `2379d91 fix(client): complete probe and benchmark CLI contracts`
+2. `3734942 fix(egressd): bound probes and handle route timeouts`
+3. `5a3aba2 fix(install): handle external cwd and host permissions`
+4. `fd055f7 fix(acceptance): verify complete proxy results`
+
+## Что сделано
+
+- `probe-domain` клиента покрывает параметры §24: country/provider, явный
+  список routes, parallel, timeout, scheme/port/path/method, expected status,
+  stages и max-routes. Сохранены ACL на каждый выбранный маршрут, stdin ввод
+  приватной URL подписки, увеличенный timeout сетевых запросов и передача
+  `benchmark --bytes`.
+- Backend валидирует опции, ограничивает parallel числом one-shot слотов,
+  ограничивает каталог текущим лимитом и отклоняет явный список сверх лимита.
+  Сетевая работа `probe-domain` выполняется вне event loop. Сохранены TLS
+  timeout classification и ограниченная загрузка benchmark.
+- Installer фиксирует корень репозитория независимо от cwd; каталог host
+  клиента доступен для прохода service UID, а файлы credentials остаются
+  закрытыми.
+- Acceptance использует SOCKS-aware проверки, сохраняет большие JSON,
+  допускает изменение публичного direct IP, явно пропускает проверки при
+  отсутствии OpenScience. Независимый verifier перепроверяет HTTP статусы и
+  размер benchmark.
+
+## Проверка после фиксов
+
+- Полный offline-набор:
+  `EGRESSD_METRICS_DB=/tmp/egressd-local-qa-tests.sqlite3 uv run --with pytest --with fastapi --with uvicorn --with httpx --with pyyaml --with aiosqlite --with cryptography python -m pytest tests/ client/tests/ -q`
+  — **376 passed**.
+- `bash tests/install/test_install_scripts.sh` — **75 passed, 0 failed**.
+- Python compile, Bash syntax checks для `scripts/` и shell-файлов `host/`,
+  `git diff --check` — успешно.
+- Backend пересобран и перезапущен с `/etc/vibelab-egress/compose.env`;
+  оба Compose сервиса healthy.
+- Host acceptance после фиксов: **23 PASS / 0 FAIL / 5 SKIP**.
+  Проверки TUN TCP, UDP/QUIC, параллельных one-shot и ограниченного
+  benchmark прошли. SKIP: два OpenScience capability/TUN пункта и проверка
+  установленного client release связаны с отсутствующим контейнером;
+  recreate check выключен по умолчанию; host harness требует root.
+- Для этого user acceptance CLI запускался из текущего `client/src` через
+  приватные локальные wrappers и профиль UID 1000. `/usr/local/bin` client
+  отдельно не переустанавливался: для этого требуется root.
+- `verify-live-report.py` запущен внутри backend контейнера, чтобы проверить
+  отчёт против полного набора секретов: **VERIFIED**, hash OK, 23 PASS
+  подтверждены, secret scan выполнен; checks hash:
+  `5149d64dd01ea67645d9cf1bb6d89d1ee22251a34e1e2db42e42a3cdd3005417`.
+  JSON отчёта закрыт правами 0600:
+  `~/.local/share/vibelab-egress-test/live-user-after-fixes.json`.
+- Повторный TLS probe охватил 401 маршрут по источникам и протоколам,
+  партиями до 50 и parallel 8 (8 слотов), на двух HTTPS целях с ожидаемыми
+  200/204. Сводка: **33** маршрута прошли обе цели, **346** получили
+  TLS failure на обеих целях, **22** дали target-specific/нестабильный
+  результат. Разбивка по batch и протоколу записана в
+  `reports/local_subscriptions_2026-10-18.md`; агрегированный JSON без
+  route ID хранится приватно в
+  `~/.local/share/vibelab-egress-test/probe-domain-groups.json`.
+
+Повторные TLS ошибки совместимы с блокировкой или несовместимостью отдельных
+узлов, но не доказывают причину у провайдера. 33 Shadowsocks маршрута ответили
+ожидаемыми статусами на обе цели; полный acceptance прошёл TCP, UDP/QUIC,
+parallel checks и benchmark на отобранных здоровых маршрутах. Приватные URL,
+credentials и сырые конфиги в git и tracked отчёты не добавлялись.
+
+### Следующий шаг
+
+Для обновления acceptance на машине с root-доступом запустить
+`scripts/run-live-acceptance.sh`, затем
+`sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json`.
+`sudo -n true` в текущей сессии запросил пароль, поэтому повторить root-only
+host harness здесь не удалось; соответствующий SKIP отражён в user report.
+После получения root доступа обновить host client скриптом
+`scripts/install-client.sh` для используемого профиля и проверить файлы token
+и auth, затем повторить harness с установленным `/usr/local/bin` client.
+OpenScience контейнер в локальном Docker отсутствует, поэтому его recreate и
+проверка установленной версии требуют среды с этим контейнером.
+
 # Handoff: A6 host-native strict/TUN
 
 Дата: 2026-10-16. Последний live-отчёт globe от 16:30:40 UTC:

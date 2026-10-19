@@ -2,6 +2,26 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Закрытие локального QA — 2026-10-19
+
+Плановые четыре блока закоммичены отдельно: `2379d91`, `3734942`, `5a3aba2`,
+`fd055f7`. Полный offline-набор: **376 passed**; install harness:
+**75 passed, 0 failed**; Python/Bash syntax и `git diff --check` прошли.
+Локальный backend пересобран из текущего дерева и healthy.
+
+Полный user live acceptance: **23 PASS / 0 FAIL / 5 SKIP**. Независимый
+`verify-live-report.py` подтвердил hash, все PASS и secret scan: **VERIFIED**.
+Отчёт с правами 0600 хранится вне репозитория в
+`~/.local/share/vibelab-egress-test/live-user-after-fixes.json`.
+OpenScience отсутствует; root-only harness не удалось повторить, так как
+`sudo -n` требует пароль. Эти причины указаны в handoff.
+
+Повторный probe всех **401** маршрутов по двум независимым HTTPS целям,
+ожидаемые статусы 200/204, parallel 8, партии до 50: **33** ответили по обеим
+целям, **346** повторно дали `tls_failure`, **22** дали target-specific или
+нестабильный результат. Подробная таблица и передача следующему инженеру —
+`reports/local_subscriptions_2026-10-18.md` и `handoff.md`.
+
 ## Передача локального QA — 2026-10-18
 
 - CLI/API клиента: `probe-domain` принимает и передаёт фильтры, список маршрутов,
