@@ -47,6 +47,7 @@ host / container / other container
 **Backend** (один раз на Docker host, root) — `INSTALL.md`, шаг A:
 
 ```sh
+scripts/build-tun-engine.sh             # once; requires Go 1.26.3
 bash scripts/install-backend-host.sh      # 10 шагов, лог <root>/install-backend-host.log
 bash scripts/verify-backend-host.sh       # pass/fail по каждому сервису
 ```
@@ -54,9 +55,15 @@ bash scripts/verify-backend-host.sh       # pass/fail по каждому сер
 **Client** (в каждую execution environment) — `INSTALL.md`, шаг B:
 
 ```sh
-bash scripts/provision-client.sh --client host-main --environment host  # backend-side: bundle
-bash scripts/install-client.sh --client host-main --target host   # host: package + /etc
+sudo scripts/setup-egress-client.sh --client host-main --environment host
 egressctl config validate && egressctl whoami && egressctl doctor
+```
+
+Одноразовый тест из обычного Docker-контейнера (после установки backend):
+
+```sh
+sudo scripts/setup-egress-client.sh --client egress-test-client \
+  --environment container --docker-test --route blanc:FI-Helsinki-1
 ```
 
 Дальше — обычный workflow: `egress-run <route> -- command`,

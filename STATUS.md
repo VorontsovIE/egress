@@ -17,7 +17,9 @@ Provisioning включает pinned static engine build в bundle для host/c
 installation проверяет SHA256 и архитектуру. DNS настраивается через
 `tun_dns_servers` (default `1.1.1.1,1.0.0.1`). Добавлен generic Docker
 end-to-end harness, который выполняет proxy и TUN workload внутри тестового
-контейнера. Старый helper удаляется отдельной миграцией, которая отказывается
+контейнера. Добавлен `scripts/setup-egress-client.sh`: одной командой собирает
+engine при необходимости, provision-ит и устанавливает host-клиент либо
+запускает generic Docker harness. Старый helper удаляется отдельной миграцией, которая отказывается
 работать при наличии записей активных/застрявших TUN jobs и сохраняет backend
 и client данные.
 

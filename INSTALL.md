@@ -158,6 +158,17 @@ namespace receives only the TUN file descriptor and forwards packets to the
 selected one-shot SOCKS route. The helper service, helper socket, and
 `CAP_NET_ADMIN` on the outer client container are not used.
 
+For an already installed backend, this one command prepares and installs a host
+client profile (and reuses its existing bundle without rotating credentials).
+It builds the packet engine when missing; Go 1.26.3 is needed only for that
+build. For a fresh backend install, build the engine first as shown below, then
+`install-backend-host.sh` provisions and installs `host-main` automatically.
+
+```bash
+sudo scripts/setup-egress-client.sh --client host-main --environment host
+egressctl capabilities
+```
+
 Build the pinned packet engine before provisioning client bundles:
 
 ```bash
@@ -173,17 +184,28 @@ egressctl capabilities
 egress-run --mode tun <route> -- curl -fsS https://example.com/
 ```
 
-For an ordinary Docker client container, build with the same engine included
-in its bundle and start the container with `/dev/net/tun` plus the repository
+For a one-command check in an ordinary Docker test container, run this after
+the backend is installed. It builds the engine if needed, provisions a bundle,
+builds a plain test image, installs the client inside it, and checks the chosen
+proxy route in proxy and TUN modes:
+
+```bash
+sudo scripts/setup-egress-client.sh --client egress-test-client \
+  --environment container --docker-test --route blanc:FI-Helsinki-1
+```
+
+The same test harness can be run directly with an existing bundle:
+
+```bash
+sudo bash tests/docker/run-client-container.sh \
+  /var/lib/vibelab-egress/client-bundles/egress-test-client blanc:FI-Helsinki-1
+```
+
+The harness starts an ordinary Docker client with `/dev/net/tun` plus the repository
 profile `client/seccomp-tun.json`. The Docker profile allows the exact nested
 namespace tuple used by the client; do not add `--privileged` or
 `CAP_NET_ADMIN`. Install `util-linux` and `iproute2` in the image. The generic
-test image and launch flags are in `tests/docker/`:
-
-```bash
-scripts/provision-client.sh --client container-main --environment container
-tests/docker/run-client-container.sh /var/lib/vibelab-egress/client-bundles/container-main <route>
-```
+test image and launch flags are in `tests/docker/`.
 
 For removal of older privileged helper installations, first let all jobs drain,
 then run `sudo scripts/remove-legacy-tun-helper.sh`. The script stops the host
