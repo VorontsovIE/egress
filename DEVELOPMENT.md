@@ -100,7 +100,7 @@ scripts/uninstall-backend-host.sh      # rollback
 egressctl config validate && egressctl whoami && egressctl doctor
 egressctl route current            # текущий default
 egress-run <route> -- <command>    # one-shot, не меняет default
-egress-run --mode tun <route> -- <command>   # только host (tun_backend=host-helper)
+egress-run --mode tun <route> -- <command>   # отдельный user/net/mount namespace для каждого запуска
 ```
 
 Правила использования — `skills/egress/SKILL.md` (обязательны для агентов).

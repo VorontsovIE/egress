@@ -675,11 +675,8 @@ def create_app() -> FastAPI:
     def capabilities(request: Request) -> dict[str, Any]:
         profile = auth_profile(request)
         modes = profile.get("modes", ["proxy"])
-        # A6 capability matrix (spec 21.5): tun availability is per-client,
-        # set at provisioning from the environment's real capability
-        # (host-main: host-helper if installed; container-main: none, since
-        # container runtime has no /dev/net/tun / CAP_NET_ADMIN). Consistent with the
-        # `mode set tun` / one-shot `mode=tun` checks below.
+        # Local user/network namespace TUN is a client capability, not a
+        # privileged host service. Provisioning advertises it per profile.
         tun_available = "tun" in modes
         return {
             "client_id": profile["client_id"],
@@ -688,7 +685,7 @@ def create_app() -> FastAPI:
             "oneshot_free": app.state.allocator.free_count(),
             "tun": {
                 "available": tun_available,
-                "backend": "host-helper" if tun_available else "none",
+                "backend": "local-userns" if tun_available else "none",
                 "status": "supported" if tun_available
                           else "unsupported_in_environment",
             },

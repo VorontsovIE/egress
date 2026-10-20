@@ -176,15 +176,16 @@ def rederive_pass(cid, c):
             return False, "docker gateway not direct"
         return True, "hard direct ok"
 
-    if cid == "container_tun_unsupported":
-        if not any(s in str(get("runtime", "")).lower() for s in ("runsc", "gVisor")):
-            return False, "container runtime is not container runtime"
-        if get("exit") != 6:
-            return False, f"exit={get('exit')} (expected 6)"
-        blob = (get("stderr", "") + get("stdout", "")).lower()
-        if "no silent fallback" not in blob:
-            return False, "missing no-fallback message"
-        return True, "explicit unsupported"
+    if cid == "container_tun_packet_path":
+        if get("exit") != 0:
+            return False, f"exit={get('exit')}"
+        if not get("workload_inside_client_container"):
+            return False, "workload did not stay inside client container"
+        if not get("engine_received_tun_fd_only"):
+            return False, "packet engine input boundary missing"
+        if get("workload_argv_sent_to_engine"):
+            return False, "workload argv reached packet engine"
+        return True, "generic container TUN path passed"
 
     if cid == "tun_no_silent_fallback":
         if get("exit") != 6:
@@ -196,26 +197,21 @@ def rederive_pass(cid, c):
     if cid == "tun_capabilities_accuracy":
         if get("host", {}).get("exit") != 0:
             return False, "host capabilities did not exit successfully"
-        host_tun = str(get("host", {}).get("tun", "")).lower()
-        helper = get("helper", {})
-        helper_tun = str(helper.get("status", "")).lower()
-        if helper_tun not in ("supported", "unsupported_in_environment", "helper_not_running"):
-            return False, "missing independent helper capability"
-        if host_tun != helper_tun:
-            return False, f"host tun={host_tun!r} != helper tun={helper_tun!r}"
+        host_tun = get("host", {}).get("tun", {})
         if get("container", {}).get("exit") != 0:
             return False, "container capabilities did not exit successfully"
-        container_tun = str(get("container", {}).get("tun", "")).lower()
-        if container_tun != "none":
-            return False, f"container tun={container_tun!r} (expected no configured backend)"
+        container_tun = get("container", {}).get("tun", {})
+        for label, value in (("host", host_tun), ("container", container_tun)):
+            if not isinstance(value, dict) or value.get("backend") not in ("local-userns", "none"):
+                return False, f"{label} TUN backend is invalid"
         return True, "capabilities accurate"
 
-    if cid == "tun_helper_boundary":
+    if cid == "tun_local_namespace_boundary":
         if get("issues"):
             return False, f"issues: {get('issues')}"
-        if get("container_tun_backend") not in (None, "none"):
+        if get("container_tun_backend") not in (None, "local-userns"):
             return False, f"container tun_backend={get('container_tun_backend')!r}"
-        return True, "minimal privilege grant"
+        return True, "client-local namespace boundary"
 
     if cid == "a8_public_ports_closed":
         # spec 49.32: only the egress client-facing ports matter; other host

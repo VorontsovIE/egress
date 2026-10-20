@@ -36,7 +36,7 @@ lang: ru-RU
 - локальные clients используют один и тот же protocol/API, но разные client profiles/configs и разные адреса подключения к backend;
 - `egress-run` всегда является тонким локальным execution wrapper: команда запускается в той же execution environment, где был запущен `egress-run`, а не удалённо на host/backend;
 - agent Skill устанавливается в agent environment рядом с локальными client tools;
-- host-side privileged helper допускается только для локального strict/TUN исполнения там, где оно действительно требует host privileges.
+- TUN выполняется клиентом в локальном per-run namespace; privileged host service не используется.
 
 Mihomo должен выполнять максимально возможную часть работы штатными механизмами:
 
@@ -57,7 +57,7 @@ Mihomo должен выполнять максимально возможную
 3. provider adapters — **только если** BlancVPN/Xeovo/другой провайдер не дают Mihomo-compatible subscription;
 4. bounded throughput benchmark;
 5. domain availability probe across routes;
-6. optional environment-specific strict/TUN helper/backend;
+6. client-local strict/TUN namespace bootstrap and packet engine;
 7. обязательного agent Skill `skills/egress/SKILL.md`;
 8. install/bootstrap scripts и тестового harness;
 9. `README.md` для пользователей, включающего отдельный раздел для агентов.
@@ -168,7 +168,8 @@ oneshot_proxy_port: 1081
 api_token_file: /run/secrets/vibelab_egress_client_token
 default_proxy_auth_file: /run/secrets/vibelab_egress_default_proxy_auth
 environment: container
-tun_backend: none
+tun_backend: local-userns
+tun_dns_servers: 1.1.1.1,1.0.0.1
 ```
 
 Для host:
@@ -182,7 +183,8 @@ oneshot_proxy_port: 1081
 api_token_file: /etc/vibelab-egress/client.token
 default_proxy_auth_file: /etc/vibelab-egress/default-proxy.auth
 environment: host
-tun_backend: host-helper
+tun_backend: local-userns
+tun_dns_servers: 1.1.1.1,1.0.0.1
 ```
 
 `client_id` в локальном config нужен для диагностики, но server MUST определять реальную client identity по credential/token. Нельзя доверять произвольному `client_id`, присланному клиентом.
@@ -228,7 +230,7 @@ Provisioning/removal client profiles является administrative/bootstrap o
 4. fixed acceptance/test harness;
 5. narrow deployment helper;
 6. Docker-CIDR synchronization helper;
-7. optional local privileged strict/TUN helper для host-native `egress-run`.
+7. client-local strict/TUN namespace and static packet engine.
 
 Host client package является обычным пользователем backend и не получает Mihomo admin API/provider secrets.
 
@@ -274,9 +276,9 @@ container MUST NOT получать ради egress:
 - provider subscription secrets/private keys;
 - host root shell;
 - возможность изменять host nftables/routes;
-- `/dev/net/tun` или `CAP_NET_ADMIN`, если только отдельный будущий PoC не докажет безопасную sandbox-local реализацию без ослабления container runtime.
+- TUN получает только через `/dev/net/tun` и отдельный per-run user/network namespace; outer container не получает `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, host networking или privileged mode.
 
-Если TUN implementation требует privileged helper, helper располагается в той execution environment/на том host, где это необходимо, и предоставляет только узкий local interface для сетевой изоляции процесса. Он не является generic root-exec API.
+Клиент сам создаёт nested user/network namespaces; dataplane engine получает только открытый TUN file descriptor и selected route credentials. Engine не запускает workload и не является generic exec API.
 
 # 2. Термины
 
@@ -476,7 +478,7 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 - pinned Mihomo image/binary;
 - `egressd`;
 - install/bootstrap scripts;
-- environment-specific optional strict runner/helper;
+- local per-invocation TUN namespace bootstrap;
 - provider secret store.
 
 `egressctl` и `egress-run` не являются security boundary: недоверенный code может повторить их public API calls самостоятельно.
@@ -494,7 +496,7 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 9. Internal Docker CIDRs всегда DIRECT в default, one-shot, probe и strict modes для container clients.
 10. Operator-defined HARD DIRECT destinations имеют приоритет над выбранным route.
 11. Provider subscription update по умолчанию выполняется DIRECT; update via route не должен требовать раскрытия provider secret client-side.
-12. Strict helper не превращается в root-shell API и не доступен удалённому container client как generic host exec.
+12. Local TUN bootstrap не превращается в root-shell API; workload capabilities сбрасываются до exec.
 13. Никакой автоматический fallback `container runtime -> runc` недопустим.
 14. Provider config/subscription parser считается input-validation boundary.
 15. One client не может менять default route/mode другого client через public API.
@@ -533,8 +535,8 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
                          |                           |
                  metrics/catalog/state         Internet/VPN
 
-host-only optional:
-  egress-tun-helper (local UNIX socket / privileged helper)
+client-local per-run optional:
+  nested user/network namespace + TUN packet engine
 
 Agent/client-facing:
   :1080  authenticated per-client default proxy listener
@@ -610,7 +612,7 @@ Production version должна быть pinned по tag + digest после PoC
 
 `egressctl` не имеет скрытых privileged endpoints. Прямой HTTP client с тем же token должен иметь ровно те же permissions, что `egressctl`.
 
-Исключение: local execution mechanics `egress-run` (например local `exec()` или host-only TUN helper) не являются server control-plane capabilities и поэтому не обязаны быть REST endpoints.
+Исключение: local execution mechanics `egress-run` (например local `exec()` или per-run TUN namespace) не являются server control-plane capabilities и поэтому не обязаны быть REST endpoints.
 
 # 11. Providers/subscriptions
 
@@ -844,7 +846,7 @@ egressctl mode set tun
 
 Default mode используется `egress-run --default` локально в конкретной execution environment.
 
-Backend `/self`/capabilities должен сообщать, какие modes разрешены для client profile. Локальный client также проверяет наличие соответствующего local backend/helper.
+Backend `/self`/capabilities должен сообщать, какие modes разрешены для client profile. Локальный client также проверяет наличие локальной namespace/TUN capability.
 
 Если `tun` недоступен, операция должна вернуть явный `unsupported`/`unsupported_in_environment`, без silent fallback в `proxy`.
 
@@ -1006,87 +1008,33 @@ Command/argv не отправляется backend для исполнения.
 
 # 21. Strict/TUN mode
 
-## 21.1. Общая семантика
+`egress-run --mode tun ROUTE -- command ...` выполняет command локально в
+вызывающей среде и направляет его сеть через отдельный TUN на каждый запуск.
+Это одинаково работает на Linux host и в произвольном Docker-контейнере.
+`proxy` и `tun` являются независимыми per-invocation режимами; каждый вызов
+может выбирать собственный route. При ошибке setup TUN команда не запускается
+и переключения на proxy нет.
 
-```bash
-egress-run --mode tun ROUTE -- command ...
-```
+Клиент создаёт вложенные user и network namespaces, поднимает TUN и default
+routes внутри нового network namespace, проксирует loopback DNS через TUN и
+запускает workload после передачи TUN fd packet engine.
+Workload, его argv, environment, cwd и stdio остаются в клиентской среде.
+Engine получает только TUN fd и одноразовый SOCKS endpoint/credential для
+выбранного route; он не получает argv и не запускает workload. Для route
+direct используется direct packet forwarding. Закрытие команды останавливает
+её engine и освобождает namespace.
 
-должен означать: command запускается **локально в текущей execution environment**, но получает network-enforced route, не зависящий от proxy-awareness приложения.
+На host требуются Linux, доступ к /dev/net/tun, util-linux unshare, iproute2 и
+разрешённые unprivileged user namespaces. Для Docker-контейнера дополнительно
+передаётся только /dev/net/tun и точечный seccomp profile, допускающий нужный
+набор флагов unshare. Не выдавать outer container CAP_NET_ADMIN,
+CAP_SYS_ADMIN, host networking, privileged mode или Docker socket. После
+сетевой настройки workload теряет capabilities, получает no_new_privs и
+запрет на создание/переход в другие namespaces.
 
-`egress-run` остаётся thin client/coordinator; TUN/netns implementation принадлежит environment-specific helper/backend.
-
-Silent fallback в proxy запрещён.
-
-## 21.2. Host-native implementation
-
-Для host рекомендуется local privileged helper:
-
-```text
-host egress-run
-  -> public egressd: obtain route/session capability
-  -> local egress-tun-helper over UNIX socket / controlled invocation
-  -> dedicated per-run netns
-  -> TUN/tun2socks or equivalent
-  -> route-specific Mihomo one-shot proxy
-  -> Internet
-```
-
-Helper может fork/exec target command только потому, что он вызывается локальным host user и после network setup обязан drop privileges до caller UID/GID. Это НЕ remote-exec API и НЕ доступно container по сети.
-
-Per-run netns позволяет параллельно выполнять strict one-shot через разные routes.
-
-## 21.3. `direct + tun`
-
-`egress-run --mode tun direct -- ...` валиден.
-
-Isolated network context должен использовать direct upstream/NAT без VPN, сохраняя strict isolation semantics.
-
-## 21.4. Security требования к local helper
-
-Helper должен:
-
-- быть доступен только локально;
-- определять caller UID/GID из OS credentials, а не из request body;
-- принимать только фиксированный protocol операций;
-- не принимать arbitrary namespace path;
-- не принимать arbitrary privileged network commands;
-- разрешать target command только как часть local caller invocation;
-- после setup запускать target с caller UID/GID;
-- ограничивать lifetime/resources и очищать stale netns;
-- разрешать upstream только через configured egress endpoints/capabilities;
-- писать audit events без sensitive env/command payload по умолчанию.
-
-## 21.5. Изолированный Docker-клиент и общий TUN helper
-
-Клиентский Docker-контейнер остаётся изолированной execution environment:
-`egressctl`, `egress-run`, приложение и все дочерние процессы запускаются
-внутри него. Для каждого запуска `egress-run` можно выбрать свой route и mode
-(`proxy` или `tun`); параллельные запуски не разделяют выбранный маршрут.
-
-Для `proxy` клиент локально запускает команду с proxy-переменными и
-одноразовыми credentials выбранного route. Backend не получает argv,
-environment или stdio команды.
-
-Для `tun` допускается один общий helper-контейнер для нескольких клиентских
-контейнеров. Клиент создаёт собственную per-invocation TUN-сессию; в helper
-передаются только сетевые TUN-пакеты и ограниченные метаданные сессии,
-необходимые для выбора уже выданного route capability. Helper не получает
-argv, cwd, environment, stdin/stdout/stderr и не запускает клиентские
-процессы. Он не выполняет команды и не превращается в remote-exec API.
-
-Каждая TUN-сессия должна быть изолирована по session capability, route,
-счётчикам и времени жизни. Закрытие запуска завершает только его сетевую
-сессию. Helper должен отбрасывать пакеты без действительной сессии и не
-принимать от клиента произвольные upstream/маршруты.
-
-Текущий host-native helper с протоколом `run` (argv + stdio FD) не является
-реализацией этого Docker-контракта и не должен использоваться из клиентских
-контейнеров. До реализации packet-only протокола Docker-клиентский TUN
-считается не реализованным; proxy mode остаётся доступным. Acceptance должен
-проверять размещение всех процессов внутри тестового клиента, раздельные
-proxy-запуски и передачу helper только пакетного трафика до того, как TUN
-будет отмечен реализованным.
+Docker acceptance использует обычный временный контейнер и проверяет proxy,
+TUN, локальность workload и реальный HTTPS-запрос. Общий helper и передача
+workload/его control-процесса вне client container не используются.
 
 # 22. Hard DIRECT bypass
 
@@ -1587,7 +1535,7 @@ Host privilege требуется для:
 - Docker-CIDR synchronization;
 - host client provisioning/install;
 - host acceptance harness;
-- optional host strict/TUN helper.
+- local client TUN namespace and static packet engine.
 
 Mihomo и `egressd` не устанавливаются как постоянные host daemons.
 
@@ -1633,7 +1581,7 @@ egress-host-test
 - host `egressctl whoami` identity;
 - host current default route/mode;
 - per-client isolation assertion: тестовое изменение container default не меняет host default;
-- strict helper privileges/capability, если установлен.
+- client-local namespace, TUN fd handoff, capability drop и seccomp policy.
 
 container agent может запросить только фиксированный harness/report через narrow dev/test mechanism; harness не принимает arbitrary shell command.
 
@@ -1862,8 +1810,8 @@ vibelab-egress/
   README.md
   INSTALL.md
   compose.yaml
-  host/units/vibelab-egress-tun-helper.service
-  scripts/install-tun-host.sh
+  scripts/build-tun-engine.sh
+  scripts/remove-legacy-tun-helper.sh
 
   mihomo/
     config.template.yaml
@@ -1894,7 +1842,7 @@ vibelab-egress/
   host/
     egress-hostctl
     egress-host-test
-    strict-helper/
+    client/tun-engine/
     units/
 
   skills/
@@ -1951,7 +1899,7 @@ vibelab-egress/
 27. proxy mode end-to-end из container;
 28. proxy mode end-to-end с host client;
 29. provider update через explicit working `--via ROUTE` без shared selector race;
-30. исследовать feasibility local strict/TUN backend в host и container runtime environments и явно зафиксировать capability matrix.
+30. проверить local strict/TUN backend на host и generic Docker container; зафиксировать обязательные runtime capabilities и их fail-closed поведение.
 
 Результат: `POC_REPORT.md` с версиями, configs, measured outcomes и решениями.
 
@@ -1972,7 +1920,7 @@ vibelab-egress/
 - проверить GEO assets/domain probe;
 - проверить host/container client configs;
 - доказать local-execution semantics `egress-run`;
-- исследовать TUN capability matrix.
+- verify client-local nested user/network namespace support on host and ordinary Docker containers.
 
 Skills/компетенции:
 
@@ -2131,17 +2079,17 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 ## A6 — Strict/TUN Agent
 
-Phase 2, после полного proxy-mode acceptance.
+Выполнено в client-local per-invocation backend.
 
-Задачи:
+Задачи/контракт:
 
-- host local privileged helper;
-- per-run netns/TUN/tun2socks or equivalent;
-- route-specific upstream;
-- `direct + tun`;
-- concurrent host TUN jobs;
-- исследовать **local** Docker container strict backend без remote host exec и без sandbox weakening;
-- capability reporting.
+- nested user/network namespace и новый TUN на каждый вызов;
+- отдельный packet engine получает TUN fd и route-specific SOCKS credentials;
+- `direct + tun` и разные route в параллельных запусках;
+- workload остаётся в host или исходном Docker-контейнере;
+- очистка engine, DNS forwarder и namespace после завершения/timeout;
+- ordinary Docker profile разрешает только фиксированную пару namespace flags;
+- fail-closed без fallback в proxy.
 
 Критические запреты:
 
@@ -2227,7 +2175,7 @@ A0 Architecture/PoC
 
 Proxy-mode acceptance (host + container)
  |
- +--> A6 strict/TUN Phase 2
+ +--> A6 strict/TUN implementation
  |
  +--> A8 independent security/integration gate
 ```
@@ -2235,7 +2183,7 @@ Proxy-mode acceptance (host + container)
 A1/A2 могут идти параллельно после A0.
 A4/A5 могут частично идти параллельно после freeze public API/session contracts.
 A7 Skill является частью v1 release, не optional documentation.
-A8 выполняется после proxy acceptance и повторяется/дополняется после TUN Phase 2.
+A8 проверяет proxy и client-local TUN boundaries.
 
 # 48. Testing strategy изнутри container
 
@@ -2267,7 +2215,7 @@ A8 выполняется после proxy acceptance и повторяется/
 22. raw Mihomo API fails from container;
 23. direct public API gives no capability beyond egressctl;
 24. container cannot operate on host-main default;
-25. Container `--mode tun` acceptance proves child processes stay local and the shared helper receives packets/session capability only; until that packet-only path exists, report it as deferred, not as a runtime-wide unsupported rule;
+25. Generic Docker `--mode tun` acceptance proves child processes stay local and per-invocation namespace routing works through the TUN fd;
 26. host acceptance harness report passes.
 
 # 49. Acceptance criteria — v1 proxy mode
@@ -2321,8 +2269,8 @@ Release принимается только если:
 
 Дополнительно:
 
-1. Host-native `egress-run --mode tun ROUTE -- command` works for proxy-unaware TCP client.
-2. Command still runs as local host workload with caller UID/GID and host filesystem/environment.
+1. `egress-run --mode tun ROUTE -- command` works for proxy-unaware TCP client on host and generic Docker container.
+2. Command remains in the calling environment with caller filesystem/environment and mapped caller identity.
 3. UDP/QUIC test works when route/protocol/backend supports it.
 4. Concurrent host TUN one-shot jobs through different routes work independently.
 5. `direct + tun` works as isolated direct path.
@@ -2330,7 +2278,7 @@ Release принимается только если:
 7. stale netns/TUN resources cleaned.
 8. HARD DIRECT rules remain enforced where applicable.
 9. Client container processes remain in their isolated container for every invocation.
-10. Shared helper receives only TUN packets and bounded session metadata; it never receives argv/env/cwd/stdio or launches a workload.
+10. The packet engine receives only a TUN fd and bounded selected-route credentials; it never receives argv/env/cwd/stdio or launches a workload.
 11. No Docker socket or host root is granted to the client container.
 12. No silent fallback from `tun` to `proxy`.
 13. `egressctl whoami/capabilities` accurately reports mode availability.

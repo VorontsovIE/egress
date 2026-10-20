@@ -22,6 +22,9 @@
   (если GEO-URL недоступны — до установки выполнить `sh scripts/fetch-geo-data.sh`:
   скрипт-установки seed-ит mihomo из `host/geo/`, иначе mihomo скачает сам
   через `geox-url`).
+- Для TUN в клиентских bundle заранее собрать static engine на доверенной
+  build-машине: `scripts/build-tun-engine.sh` (Go 1.26.3; результат в
+  `client/tun-engine/dist/`).
 
 ### Persistent paths
 
@@ -146,40 +149,49 @@ root-owned (0755), чтобы enrollment-служба могла пройти к
 Backend secrets в подкаталоге `secrets/` сохраняют
 собственные ограничения доступа.
 
-### Установка и обновление host-native TUN-helper
+### TUN prerequisites and per-run setup
 
-TUN-helper запускается отдельным host systemd unit. Он сохраняет host mount
-namespace для workload, передаёт текущий каталог и окружение клиента, а сетевой
-доступ изолирует в per-run netns. Host helper запускает host workload только для host-клиента. Клиентский
-Docker-контейнер к этому helper не подключается: его процессы остаются внутри
-контейнера; packet-only общий helper описан в TECH_SPEC §21.5 и пока отложен.
+TUN mode runs locally in the execution environment. Each `egress-run --mode
+tun` creates a fresh user and network namespace; the workload remains
+inside that environment. A small static packet engine outside the nested
+namespace receives only the TUN file descriptor and forwards packets to the
+selected one-shot SOCKS route. The helper service, helper socket, and
+`CAP_NET_ADMIN` on the outer client container are not used.
 
-На Docker host после установки backend:
+Build the pinned packet engine before provisioning client bundles:
 
 ```bash
-sudo bash scripts/install-tun-host.sh --user vibelab
-systemctl status vibelab-egress-tun-helper.service
+scripts/build-tun-engine.sh
 ```
 
-Скрипт ставит pinned Mihomo v1.19.32 из Docker image с проверкой SHA256,
-создаёт отдельного непривилегированного worker и локальную группу доступа к
-`/run/vibelab-egress/tun-helper.sock`. После первого добавления пользователя в
-группу нужна новая login-сессия. Повторный запуск скрипта обновляет код и unit.
-`egress-run` внутри Docker container по-прежнему не получает этот сокет.
-
-Перед включением helper нужен host с `/dev/net/tun`, `ip`, `nft`, `iptables`,
-`setpriv` и systemd. Unit ограничен набором CAP_SYS_ADMIN, CAP_NET_ADMIN,
-CAP_SETUID, CAP_SETGID: первый нужен для `ip netns add`; перед exec workload
-все capabilities сбрасываются. Helper слушает только UNIX socket, не получает
-Docker socket. Проверка после установки:
+Install on a Linux host with `/dev/net/tun`, `unshare` (util-linux), `ip`
+(iproute2), and unprivileged user namespaces enabled. Install the host client
+as in step B, then verify the local capability:
 
 ```bash
 egressctl capabilities
-bash scripts/run-live-acceptance.sh
-sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json
+egress-run --mode tun <route> -- curl -fsS https://example.com/
 ```
 
-Секреты и generated config в отчёт и git не переносить.
+For an ordinary Docker client container, build with the same engine included
+in its bundle and start the container with `/dev/net/tun` plus the repository
+profile `client/seccomp-tun.json`. The Docker profile allows the exact nested
+namespace tuple used by the client; do not add `--privileged` or
+`CAP_NET_ADMIN`. Install `util-linux` and `iproute2` in the image. The generic
+test image and launch flags are in `tests/docker/`:
+
+```bash
+scripts/provision-client.sh --client container-main --environment container
+tests/docker/run-client-container.sh /var/lib/vibelab-egress/client-bundles/container-main <route>
+```
+
+For removal of older privileged helper installations, first let all jobs drain,
+then run `sudo scripts/remove-legacy-tun-helper.sh`. The script stops the host
+helper before checking its job records, freezes a legacy helper container while
+checking it, and removes only helper files. If host job records remain, it
+refuses deletion and leaves the host helper stopped so no new job can race the
+check; inspect/drain those records and rerun the script. Client credentials and
+backend data are preserved.
 
 ### Логи и диагностика установки
 
@@ -297,6 +309,10 @@ docker exec <container> rm -rf /tmp/vibelab-egress-client
 4. **Skill** (`skills/egress/SKILL.md`) — устанавливается, если
    environment agent-capable (container).
 
+Для TUN host и container требуют статический packet engine, собранный
+командой `scripts/build-tun-engine.sh` (Go 1.26.3). Provisioning включает его
+в bundle; установка проверяет checksum и выбирает сборку по архитектуре.
+
 5–7. **Проверки**:
 
    ```bash
@@ -382,8 +398,8 @@ URL/файл не доступен и не управляется со стор�
 Для проверки без заранее подготовленной среды создайте bundle на host и
 запустите одноразовый тестовый контейнер. В контейнер монтируется checkout и
 bundle; `install-client.sh`, `egressctl` и дочерняя команда `egress-run`
-выполняются внутри него. Контейнеру не выдаются Docker socket или host helper
-socket.
+выполняются внутри него. Контейнеру не выдаются Docker socket или
+`CAP_NET_ADMIN`.
 
 ```bash
 scripts/provision-client.sh --client egress-test-client --environment container
@@ -393,8 +409,9 @@ bash tests/docker/run-client-container.sh \
 
 Сценарий собирает обычный `python:3.11-slim`-based image, добавляет только
 host-gateway DNS alias и выполняет `whoami`, локальность дочернего процесса и
-HTTPS-запрос через выбранный proxy route. Можно передать любой доступный
-provider route ID (не `direct`, который обходит proxy); повторные вызовы `egress-run` могут использовать
-разные route ID. Это proxy smoke test. Контейнерный TUN не считается
-реализованным до появления packet-only протокола общего helper; текущий
-host helper с запуском argv для этого не используется.
+HTTPS-запросы в proxy и TUN mode через выбранный route. Для TUN Docker
+получает `/dev/net/tun` и профиль `client/seccomp-tun.json`; профиль не выдаёт
+контейнеру `CAP_NET_ADMIN` и не включает `--privileged`. Каждое выполнение
+создаёт свой namespace, так что параллельные запуски могут выбирать разные
+route ID. Пакетный engine получает только TUN fd и выбранную SOCKS-сессию;
+команда и её дочерние процессы остаются в клиентском контейнере.

@@ -12,7 +12,7 @@
       "ok": true,
       "detail": "type=Selector all=['DIRECT', 'vless-node', 'wg-node', 'blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'blanc-NL-Ams-1', 'xeovo-US-NY-1', 'xeovo-DE-FRA-1']"
     },
-    "P03_selector_openscience-main": {
+    "P03_selector_container-main": {
       "ok": true,
       "detail": "type=Selector all=['DIRECT', 'vless-node', 'wg-node', 'blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'blanc-NL-Ams-1', 'xeovo-US-NY-1', 'xeovo-DE-FRA-1']"
     },
@@ -32,7 +32,7 @@
       "ok": true,
       "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 61\\r\\n\\r\\nNODE:blanc-FI-Helsinki-1\\ndst:203.0.1'"
     },
-    "P08_default_proxy_openscience": {
+    "P08_default_proxy_container": {
       "ok": true,
       "detail": "status=200 body='HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nConnection: close\\r\\nContent-Length: 55\\r\\n\\r\\nNODE:xeovo-US-NY-1\\ndst:203.0.113.1:8'"
     },

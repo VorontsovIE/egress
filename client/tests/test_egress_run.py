@@ -47,7 +47,7 @@ def cfg_file(tmp_path, monkeypatch):
         f"api_token_file: {token}\n"
         f"default_proxy_auth_file: {auth}\n"
         "environment: container\n"
-        "tun_backend: none\n"
+        "tun_backend: local-userns\n"
     )
     return str(cfg)
 
@@ -282,179 +282,63 @@ class TestProxy:
 
 
 # ---------------------------------------------------------------------------
-# tun: explicit unsupported, no silent fallback
+# per-run local TUN: explicit failures, no fallback, private namespace runner
 # ---------------------------------------------------------------------------
 class TestTun:
-    def test_tun_unsupported_none_backend(self, monkeypatch, cfg_file):
-        """tun_backend=none: explicit unsupported, no silent proxy fallback."""
-        code = run_egress_run(monkeypatch, cfg_file,
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == egress_run.EXIT_UNSUPPORTED
+    def test_unsupported_probe_fails_closed(self, monkeypatch, cfg_file):
+        from vibelab_egress_client import tun_runtime
+        monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "unsupported_in_environment", "reason": "no userns"})
+        assert run_egress_run(monkeypatch, cfg_file,
+                              ["--mode", "tun", "direct", "--", "true"]) == egress_run.EXIT_UNSUPPORTED
 
-    def test_tun_host_helper_not_running(self, monkeypatch, cfg_file):
-        """tun_backend=host-helper but the helper socket is absent: explicit
-        unsupported (helper not running), no silent proxy fallback."""
-        cfg = Path(cfg_file)
-        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
-                                       "tun_backend: host-helper")
-        text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
-        cfg.write_text(text)
-        code = run_egress_run(monkeypatch, str(cfg),
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == egress_run.EXIT_UNSUPPORTED
-
-    def test_tun_helper_not_running_message(self, monkeypatch, cfg_file):
-        """helper-not-running must state there is no silent fallback
-        (spec 50.9; the live acceptance check greps this wording)."""
-        import io
-        from contextlib import redirect_stderr
-        cfg = Path(cfg_file)
-        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
-                                       "tun_backend: host-helper")
-        text += f"tun_helper_socket: {cfg.parent / 'missing-helper.sock'}\n"
-        cfg.write_text(text)
-        err = io.StringIO()
-        code = 0
-        with redirect_stderr(err):
-            try:
-                egress_run.main(["--config", str(cfg),
-                                 "--mode", "tun", "direct", "--", "true"])
-            except SystemExit as e:
-                code = e.code if isinstance(e.code, int) else 0
-        assert code == egress_run.EXIT_UNSUPPORTED
-        assert "no silent fallback to proxy" in err.getvalue().lower()
-
-    def test_tun_checked_before_direct(self, monkeypatch, cfg_file):
-        """--mode tun must fail even for the direct route (no fallback)."""
-        def run_env(env, cmd):
-            raise AssertionError("direct must not run when --mode tun is given")
-        monkeypatch.setattr(egress_run, "_run_local", run_env)
-        code = run_egress_run(monkeypatch, cfg_file,
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == egress_run.EXIT_UNSUPPORTED
-
-
-# ---------------------------------------------------------------------------
-# tun: full flow through a local helper (A6)
-# ---------------------------------------------------------------------------
-class TestTunHelper:
-    def _host_helper_cfg(self, cfg_file, tmp_path):
-        cfg = Path(cfg_file)
-        sock = tmp_path / "tun.sock"
-        text = cfg.read_text().replace("environment: container", "environment: host").replace("tun_backend: none",
-                                       "tun_backend: host-helper")
-        cfg.write_text(text + f"tun_helper_socket: {sock}\n")
-        return str(cfg), sock
-
-    def test_tun_direct_via_helper(self, monkeypatch, cfg_file, tmp_path):
-        """direct + tun: no upstream, helper runs the command, exit preserved."""
-        cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
+    def test_workload_uses_local_tun_runner(self, monkeypatch, cfg_file):
+        from vibelab_egress_client import tun_runtime
+        monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "ok"})
         seen = {}
+        def fake_run(command, **kwargs):
+            seen.update(command=command, **kwargs)
+            return 7
+        monkeypatch.setattr(tun_runtime, "run", fake_run)
+        assert run_egress_run(monkeypatch, cfg_file,
+                              ["--mode", "tun", "direct", "--", "sh", "-c", "exit 7"]) == 7
+        assert seen["command"] == ["sh", "-c", "exit 7"]
+        assert seen["upstream"] is None
+        assert seen["dns_servers"] == ("1.1.1.1", "1.0.0.1")
 
-        def fake_call(sock_path, req, timeout):
-            if req["op"] == "capability":
-                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
-            seen.update(sock=sock_path, req=req)
-            return {"ok": True, "exit_code": 7}
-        monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
-        code = run_egress_run(monkeypatch, cfg,
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == 7
-        # direct+tun: no upstream in the request (spec 21.3)
-        assert seen["req"]["route"] == "direct"
-        assert "upstream" not in seen["req"]
-        assert seen["req"]["command"] == ["true"]
-
-    def test_tun_route_obtains_oneshot_upstream(self, monkeypatch, cfg_file,
-                                                tmp_path):
-        """A non-direct route obtains a one-shot session (route-specific
-        upstream) and passes it to the helper; the session is closed after."""
-        cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
-        calls = {"created": [], "closed": [], "helper": None}
-
-        class Stub:
-            def get_default(self):
-                return {"route": "direct"}
-
+    def test_route_specific_socks_capability_is_closed_after_run(self, monkeypatch, cfg_file):
+        from vibelab_egress_client import tun_runtime
+        monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "ok"})
+        seen = {}
+        class Api:
             def oneshot_session(self, route):
-                calls["created"].append(route)
-                return {"id": "job-1", "capability": {
-                    "host": "127.0.0.1", "port": 18081,
-                    "username": "os_0", "password": "pw-0"}}
-
-            def oneshot_close(self, sid):
-                calls["closed"].append(sid)
-                return {}
-        def fake_call(sock_path, req, timeout):
-            if req["op"] == "capability":
-                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
-            calls["helper"] = req
-            return {"ok": True, "exit_code": 0}
-        monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
-        code = run_egress_run(monkeypatch, cfg,
+                seen["route"] = route
+                return {"id": "session-1", "capability": {
+                    "username": "route-user", "password": "route-pass"}}
+            def oneshot_close(self, session_id):
+                seen["closed"] = session_id
+        def fake_run(command, **kwargs):
+            seen.update(upstream=kwargs["upstream"])
+            return 0
+        monkeypatch.setattr(tun_runtime, "run", fake_run)
+        assert run_egress_run(monkeypatch, cfg_file,
                               ["--mode", "tun", "blanc:FI-Helsinki-1", "--", "true"],
-                              api_stub=Stub())
-        assert code == 0
-        assert calls["created"] == ["blanc:FI-Helsinki-1"]
-        assert calls["closed"] == ["job-1"]  # closed in finally
-        # host/port come from the CLIENT's own vantage (the published
-        # one-shot endpoint, cfg port 1081), the credential from the
-        # server capability (whose host/port 127.0.0.1:18081 describe the
-        # backend's vantage and must NOT be used by the client)
-        assert calls["helper"]["upstream"]["host"] == "127.0.0.1"
-        assert calls["helper"]["upstream"]["port"] == 1081
-        assert calls["helper"]["upstream"]["username"] == "os_0"
-        assert calls["helper"]["upstream"]["password"] == "pw-0"
-        assert calls["helper"]["route"] == "blanc:FI-Helsinki-1"
+                              api_stub=Api()) == 0
+        assert seen["route"] == "blanc:FI-Helsinki-1"
+        assert seen["upstream"] == {
+            "host": "127.0.0.1", "port": 1081,
+            "username": "route-user", "password": "route-pass"}
+        assert seen["closed"] == "session-1"
 
-    def test_tun_helper_unsupported_env(self, monkeypatch, cfg_file, tmp_path):
-        """Helper reports unsupported_in_environment -> exit 6, no fallback."""
-        cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
-        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
-            "ok": False, "error": "unsupported_in_environment",
-            "capability": {"reason": "missing CAP_NET_ADMIN"}})
-        code = run_egress_run(monkeypatch, cfg,
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == egress_run.EXIT_UNSUPPORTED
+    def test_none_backend_fails_without_fallback(self, monkeypatch, cfg_file):
+        path = Path(cfg_file)
+        path.write_text(path.read_text().replace("tun_backend: local-userns", "tun_backend: none"))
+        assert run_egress_run(monkeypatch, cfg_file,
+                              ["--mode", "tun", "direct", "--", "true"]) == egress_run.EXIT_UNSUPPORTED
 
-    def test_tun_helper_error_runtime(self, monkeypatch, cfg_file, tmp_path):
-        """A netns setup failure is a runtime error (exit 1), not a fallback."""
-        cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
-        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda sock, req, timeout: (
-            {"ok": True, "capability": {"status": "supported", "protocol": 2}}
-            if req["op"] == "capability" else
-            {"ok": False, "error": "netns_setup_failed", "detail": "boom"}))
-        code = run_egress_run(monkeypatch, cfg,
-                              ["--mode", "tun", "direct", "--", "true"])
-        assert code == egress_run.EXIT_RUNTIME
-
-    def test_tun_default_resolves_route(self, monkeypatch, cfg_file, tmp_path):
-        """--default with --mode tun resolves the default route first."""
-        cfg, sock = self._host_helper_cfg(cfg_file, tmp_path)
-        calls = {"helper": None}
-
-        class Stub:
-            def get_default(self):
-                return {"route": "xeovo:US-New-York-1"}
-
-            def oneshot_session(self, route):
-                return {"id": "job-2", "capability": {
-                    "host": "127.0.0.1", "port": 18081,
-                    "username": "os_1", "password": "pw-1"}}
-
-            def oneshot_close(self, sid):
-                return {}
-        def fake_call(sock_path, req, timeout):
-            if req["op"] == "capability":
-                return {"ok": True, "capability": {"status": "supported", "protocol": 2}}
-            calls["helper"] = req
-            return {"ok": True, "exit_code": 0}
-        monkeypatch.setattr(egress_run, "_tun_helper_call", fake_call)
-        code = run_egress_run(monkeypatch, cfg,
-                              ["--mode", "tun", "--default", "--", "true"],
-                              api_stub=Stub())
-        assert code == 0
-        assert calls["helper"]["route"] == "xeovo:US-New-York-1"
+    def test_runtime_has_no_helper_socket_protocol(self):
+        from vibelab_egress_client import tun_runtime
+        assert not hasattr(egress_run, "_tun_helper_call")
+        assert "--net" in Path(tun_runtime.__file__).read_text()
 
 
 # ---------------------------------------------------------------------------

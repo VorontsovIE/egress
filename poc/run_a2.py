@@ -60,7 +60,7 @@ SECRET = "a2-mihomo-secret"
 
 CLIENTS = {
     "host-main": ("host-user", "host-pass"),
-    "openscience-main": ("os-user", "os-pass"),
+    "container-main": ("os-user", "os-pass"),
 }
 OS_SLOTS = 4
 OS_SECRETS = [f"os-pass-{i}" for i in range(OS_SLOTS)]
@@ -377,7 +377,7 @@ def main():
     st, ver = mihomo_api("GET", "/version")
     st2, groups = mihomo_api("GET", "/proxies")
     group_names = set(groups.get("proxies", {}).keys()) if isinstance(groups, dict) else set()
-    need_groups = {"host-main", "openscience-main", "os_0", "os_1", "os_2", "os_3"}
+    need_groups = {"host-main", "container-main", "os_0", "os_1", "os_2", "os_3"}
     st3, rules = mihomo_api("GET", "/rules")
     rule_list = rules.get("rules", []) if isinstance(rules, dict) else []
     # provider nodes are members of the select groups (not top-level /proxies
@@ -420,10 +420,10 @@ def main():
     # 3. client selector isolation
     # =========================================================================
     mihomo_api("PUT", "/proxies/host-main", {"name": blanc0})
-    mihomo_api("PUT", "/proxies/openscience-main", {"name": xeovo0})
+    mihomo_api("PUT", "/proxies/container-main", {"name": xeovo0})
     time.sleep(0.5)
     _, gh = mihomo_api("GET", "/proxies/host-main")
-    _, go = mihomo_api("GET", "/proxies/openscience-main")
+    _, go = mihomo_api("GET", "/proxies/container-main")
     now_h = gh.get("now") if isinstance(gh, dict) else None
     now_o = go.get("now") if isinstance(go, dict) else None
     # prove isolation by data plane: each client's default proxy hits its own node

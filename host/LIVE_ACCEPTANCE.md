@@ -1,142 +1,45 @@
-# Live acceptance — host-side run + re-verification
+# Live acceptance — host and generic Docker client
 
-This folder contains the tooling to test the part of the project that **requires
-host access** (Docker daemon, the live egress stack, the TUN helper, the
-Docker container) and to hand the results back for **independent
-re-verification**.
+`host/live-acceptance.py` produces a JSON report for checks requiring the live
+backend, Docker, or network access. `scripts/verify-live-report.py` independently
+re-derives checks from report evidence and verifies its hash.
 
-Two files do the work:
+The TUN backend is client-local. Every `egress-run --mode tun` starts a fresh
+user and network namespace; the workload and all its child processes
+stay in the calling host or container. The packet engine receives only the TUN
+file descriptor and the selected one-shot SOCKS route. The generic Docker test
+uses a plain test image, `/dev/net/tun`, and `client/seccomp-tun.json`; it does
+not use host networking, `--privileged`, or `CAP_NET_ADMIN`.
 
-| File | Runs on | Role |
-|------|---------|------|
-| `host/live-acceptance.py` | the **host** | the *producer*: runs every live check and writes **one** JSON report |
-| `scripts/verify-live-report.py` | anywhere (no host access needed) | the *verifier*: re-derives every pass/fail from the report's raw evidence and checks a tamper hash |
-| `scripts/run-live-acceptance.sh` | the host | convenience wrapper: detects the Docker container, runs the producer, writes the report |
+## Prerequisites
 
-The design goal: the report is **self-contained and tamper-evident**. The
-verifier does **not** trust the stored status of a check — it re-derives it from
-the evidence, and a `checks_hash` over each check's `{id, spec, command,
-evidence}` detects any post-hoc edit. So a buggy or hand-edited report cannot
-fake a pass.
-
-## What is covered
-
-- **TECH_SPEC.md section 50 (Phase 2 TUN)** — all 12 items:
-  `tun_tcp_client`, `tun_local_workload`, `tun_udp_quic`, `tun_concurrent`,
-  `tun_direct_isolated`, `tun_no_root_escalation`, `tun_stale_cleanup`,
-  `tun_hard_direct`, `container_tun_packet_path`, `tun_no_silent_fallback`,
-  `tun_capabilities_accuracy`, `tun_helper_boundary`; packet-only container TUN is currently an explicit SKIP until implemented.
-- **TECH_SPEC.md section 49 (v1 proxy) — host-only live items**:
-  `a8_public_ports_closed` (49.32), `a8_container_recreate_persists` (49.39),
-  `a8_litellm_reachable` (49.29), `a8_parallel_oneshot` (49.23),
-  `a8_egress_run_local` (49.25), `a8_internal_hard_direct` (49.27),
-  `a8_secrets_absent` (49.34), `a8_host_test_report` (49.41, runs the existing
-  `host/egress-host-test`), `a8_docker_socket_absent` (49.33),
-  `a8_mihomo_unreachable` (49.30), `a8_client_same_release` (49.7),
-  `a8_version_negotiation` (49.42), `a8_probe_domain_all` (49.20),
-  `a8_benchmark_bounded` (49.35), `a8_best_domain` (49.36).
-
-Checks that cannot run in the given environment are reported as `skip` with a
-reason (never silently dropped, never faked). A check is `pass` only if its raw
-evidence supports it.
-
-## Prerequisites (on the host)
-
-1. Docker daemon running; the egress stack is up:
-   - `docker compose -f compose.yaml up -d` (always)
-   - `sudo bash scripts/install-tun-host.sh --user vibelab` (for host TUN checks)
-2. The **host** client is installed: `egressctl` and `egress-run` on `PATH`,
-   with `/etc/vibelab-egress/client.yaml`, `client.token`, `default-proxy.auth`.
-3. The **container** container is running and has the client installed
-   (`/usr/local/bin/egressctl` inside it). Its name is auto-detected; override
-   with `VIBELAB_EGRESS_CONTAINER` if detection fails.
-4. For the TUN checks: `install-tun-host.sh` creates the helper socket at
-   `/run/vibelab-egress/tun-helper.sock` via a host systemd unit. The harness
-   resolves the path from the host client's `client.yaml` automatically;
-   override with `VIBELAB_EGRESS_TUN_HELPER_SOCKET`
-   or `--tun-helper-sock`.
-
-## Run it (one command)
+1. Docker and the egress backend are running.
+2. Build the static TUN engine with `scripts/build-tun-engine.sh` before
+   provisioning the client bundle.
+3. Host client is installed and `egressctl status` succeeds.
+4. The generic container test needs a route ID and Docker access:
 
 ```bash
-cd /srv/workspace/vibelab-egress
+scripts/provision-client.sh --client container-main --environment container
+ tests/docker/run-client-container.sh /var/lib/vibelab-egress/client-bundles/container-main <route>
+```
+
+The harness builds and runs an ordinary Docker image, installs the bundled
+client in the container, checks `whoami` and `doctor`, then runs proxy and TUN
+workloads inside the same container. It checks the child process sees the
+container marker and makes a real HTTPS request.
+
+## Run host acceptance
+
+```bash
 bash scripts/run-live-acceptance.sh
+sudo python3 scripts/verify-live-report.py reports/host_acceptance_report.json
 ```
 
-This writes the single report to `reports/host_acceptance_report.json`.
+TUN checks that cannot run because the host disallows unprivileged user
+namespaces or lacks `/dev/net/tun` are reported as `skip` with their reason.
+The generic container TUN end-to-end check is run separately by the Docker
+harness above.
 
-To run the **restart** observation (it restarts the Docker container — do
-this only if you can afford the brief interruption):
-
-```bash
-bash scripts/run-live-acceptance.sh --recreate
-```
-
-This check reports `skip` for spec 49.39 even when the restart succeeds:
-`docker restart` keeps the writable layer and cannot prove that a client
-installation survives container removal and recreation.
-
-Optional environment overrides:
-
-```bash
-VIBELAB_EGRESS_CONTAINER=container \
-VIBELAB_EGRESS_LITELLM_URL=http://127.0.0.1:4000/health \
-bash scripts/run-live-acceptance.sh
-```
-
-### Run the producer directly (advanced)
-
-```bash
-python3 host/live-acceptance.py \
-  --out reports/host_acceptance_report.json \
-  --config /etc/vibelab-egress/client.yaml \
-  --container egress-test-client \
-  --litellm-url http://127.0.0.1:4000/health
-  # add --recreate to enable the destructive recreate check
-  # add --no-tun to skip the TUN checks
-  # add --check a8_secrets_absent,tun_tcp_client to run a subset
-```
-
-## Send back
-
-Send **one file**: `reports/host_acceptance_report.json`. That is the entire
-deliverable for re-verification. It contains every check's command, exit code,
-and (truncated) output, plus a summary and the tamper hash. **No secrets are
-written to it** — token values, default-proxy credentials, the mihomo secret and
-provider subscription values are read from the known secret locations and
-redacted out of every captured output (the redaction count is recorded in the
-report).
-
-## Re-verification (what the lead runs on the returned file)
-
-```bash
-python3 scripts/verify-live-report.py reports/host_acceptance_report.json
-```
-
-Output is a verdict:
-
-- `VERIFIED` — structure is valid, the tamper hash matches, **every stored pass
-  is independently supported by its own evidence**, and no secret value is
-  present. Exit code 0.
-- `REJECTED` — any of the above failed. The output lists the exact
-  discrepancies (e.g. `stored=pass rederived=fail (exit_ip not public)`) and
-  problems (e.g. `checks_hash mismatch`, `SECRET LEAK`). Exit code 1.
-
-The verifier re-derivation rules are covered by
-`tests/test_verify_live_report.py`, which proves it catches a flipped status,
-edited evidence, an injected secret, and structural breaks.
-
-## Notes / limits
-
-- The producer uses only the Python 3 standard library and a fixed command
-  allowlist (`egressctl`, `egress-run`, `docker`, `ip`, `ss`, `python3`, and the
-  sibling `egress-host-test`). There is no free-form shell input.
-- The container checks run **inside** the container via `docker exec`, because
-  the bundle's token paths (`/run/secrets/*`) and the container runtime environment only
-  exist there.
-- `a8_public_ports_closed` checks that the egress client-facing ports
-  (1080/1081/9091) are not reachable on a public NIC; unrelated host services
-  (e.g. an IDE) are out of scope and reported but not failed.
-- `a8_host_test_report` runs the existing `host/egress-host-test` harness and
-  folds its result in, so the static host checks (49.15, 49.31, …) are covered
-  in the same single report.
+The report contains redacted command output, statuses, and a tamper hash. Do not
+copy secrets or generated configs into the repository.

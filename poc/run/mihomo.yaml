@@ -106,7 +106,7 @@ proxy-groups:
   use:
   - blanc
   - xeovo
-- name: openscience-main
+- name: container-main
   type: select
   proxies:
   - DIRECT
@@ -194,7 +194,7 @@ rules:
 - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
 - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
 - IN-USER,host-user,host-main
-- IN-USER,os-user,openscience-main
+- IN-USER,os-user,container-main
 - IN-USER,os_0,os_0
 - IN-USER,os_1,os_1
 - IN-USER,os_2,os_2

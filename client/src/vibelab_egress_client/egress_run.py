@@ -138,91 +138,20 @@ def _run_local(env: dict[str, str], command: list[str]) -> int:
     return rc
 
 
-def _tun_helper_call(sock_path: str, req: dict, timeout: float) -> dict:
-    """Talk to the local strict/TUN helper over its UNIX socket (A6).
-
-    The helper is a local-only privileged helper (spec 21.4); the command
-    argv is passed to it but it runs the command LOCALLY as the caller's
-    UID/GID after setting up a per-run netns. It is not a remote-exec API.
-    """
-    import array
-    import json
-    import socket
-    import struct
-
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    try:
-        s.connect(sock_path)
-        body = json.dumps(req).encode("utf-8")
-        frame = struct.pack(">I", len(body)) + body
-        if req.get("op") == "run":
-            stdio = array.array("i", (0, 1, 2))
-            sent = s.sendmsg([frame], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
-                                        stdio.tobytes())])
-            if sent < len(frame):
-                s.sendall(frame[sent:])
-        else:
-            s.sendall(frame)
-        # read length-prefixed response
-        hdr = b""
-        while len(hdr) < 4:
-            chunk = s.recv(4 - len(hdr))
-            if not chunk:
-                break
-            hdr += chunk
-        if len(hdr) < 4:
-            return {"ok": False, "error": "no_response"}
-        (length,) = struct.unpack(">I", hdr)
-        if length < 2 or length > 1024 * 1024:
-            return {"ok": False, "error": "invalid_response"}
-        data = b""
-        while len(data) < length:
-            chunk = s.recv(length - len(data))
-            if not chunk:
-                break
-            data += chunk
-        if len(data) != length:
-            return {"ok": False, "error": "no_response"}
-        response = json.loads(data.decode("utf-8"))
-        return response if isinstance(response, dict) else {"ok": False, "error": "invalid_response"}
-    except (ValueError, UnicodeError):
-        return {"ok": False, "error": "invalid_response"}
-    except FileNotFoundError:
-        return {"ok": False, "error": "helper_not_running",
-                "detail": f"tun helper socket not found: {sock_path}"}
-    except ConnectionRefusedError:
-        return {"ok": False, "error": "helper_not_running",
-                "detail": f"tun helper socket not accepting: {sock_path}"}
-    except (socket.timeout, OSError) as e:
-        return {"ok": False, "error": "helper_error", "detail": str(e)}
-    finally:
-        s.close()
-
-
 def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
              timeout: float | None) -> int:
-    """Execute ``command`` in strict/TUN mode via the local helper (A6).
+    """Run a local workload in a private per-invocation TUN namespace."""
+    from . import tun_runtime
 
-    Flow (spec 21.2): obtain a route-specific one-shot upstream from the
-    public egressd API, then ask the LOCAL helper to run the command in a
-    per-run netns pinned to that upstream. For ``direct`` there is no
-    upstream (isolated direct path, spec 21.3).
-
-    There is NO silent fallback to proxy: any failure here is reported
-    explicitly (spec 21.1/21.5).
-    """
-    sock = cfg.tun_helper_socket()
-    timeout = timeout or 300.0
-
-    ready = _tun_helper_call(sock, {"op": "capability"}, 10.0)
-    cap_status = (ready.get("capability") or {}).get("status")
-    if not ready.get("ok") or cap_status != "supported" or \
-            (ready.get("capability") or {}).get("protocol") != 2:
-        reason = (ready.get("capability") or {}).get("reason") or \
-                 ready.get("detail") or ready.get("error") or "unknown"
+    if cfg.tun_backend != "local-userns":
         _die(EXIT_UNSUPPORTED,
-             f"tun mode is not available in this environment ({reason}); "
+             f"local TUN is disabled by tun_backend={cfg.tun_backend!r}; "
+             "there is no silent fallback to proxy")
+    capability = tun_runtime.probe()
+    if capability.get("status") != "supported":
+        _die(EXIT_UNSUPPORTED,
+             f"TUN mode is not available in this environment "
+             f"({capability.get('reason', 'unknown')}); "
              "there is no silent fallback to proxy")
 
     upstream = None
@@ -230,70 +159,37 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
     try:
         if route != "direct":
             try:
-                sess = api.oneshot_session(route)
-            except ApiError as e:
-                if e.status in (401, 403):
-                    _die(EXIT_AUTH, f"authentication error: {e.detail}")
-                _die(EXIT_RUNTIME,
-                     f"cannot create one-shot session for {route!r}: {e}")
-            session_id = sess.get("id")
-            cap = sess.get("capability", {})
-            # The capability host/port describe the backend's own vantage
-            # (inside the egressd container). The LOCAL helper reaches the
-            # published endpoint from its own vantage, so take host/port
-            # from the client config and only the credential from the
-            # server capability.
+                session = api.oneshot_session(route)
+            except ApiError as exc:
+                if exc.status in (401, 403):
+                    _die(EXIT_AUTH, f"authentication error: {exc.detail}")
+                _die(EXIT_USAGE, f"cannot create one-shot session for {route!r}: {exc}")
+            session_id = session.get("id")
+            capability = session.get("capability", {})
             upstream = {
                 "host": cfg.proxy_host,
                 "port": int(cfg.oneshot_proxy_port),
-                "username": cap.get("username", ""),
-                "password": cap.get("password", ""),
+                "username": capability.get("username", ""),
+                "password": capability.get("password", ""),
             }
-
-        # The helper is native to the host, but a service does not inherit
-        # the invoking shell's working directory or environment. Carry these
-        # as bounded protocol fields. Identity still comes only from
-        # SO_PEERCRED, never from these caller-controlled values.
-        child_env = {k: v for k, v in os.environ.items()
-                     if k not in ("http_proxy", "https_proxy", "all_proxy",
-                                  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-                                  "no_proxy", "NO_PROXY")}
+        child_env = {key: value for key, value in os.environ.items()
+                     if key.lower() not in {"http_proxy", "https_proxy", "all_proxy",
+                                            "no_proxy", "vibelab_egress_tun_engine"}}
         try:
-            mask = int(next(line.split(":", 1)[1].strip() for line in
-                            open("/proc/self/status", encoding="utf-8")
-                            if line.startswith("Umask:")), 8)
-        except (OSError, StopIteration, ValueError):
-            mask = 0o022
-        req = {"op": "run", "protocol": 2, "route": route,
-               "command": command, "timeout": timeout,
-               "cwd": os.getcwd(), "env": child_env, "umask": mask}
-        if upstream is not None:
-            req["upstream"] = upstream
-        resp = _tun_helper_call(sock, req, timeout + 30.0)
+            return tun_runtime.run(
+                command, env=child_env, cwd=os.getcwd(),
+                dns_servers=cfg.tun_dns_servers, upstream=upstream,
+                timeout=timeout,
+            )
+        except (OSError, RuntimeError) as exc:
+            _die(EXIT_UNSUPPORTED,
+                 f"local TUN setup failed: {exc}; there is no silent fallback to proxy")
     finally:
         if session_id is not None:
             try:
                 api.oneshot_close(session_id)
             except ApiError:
-                pass  # best-effort; server-side expiry also cleans up
-
-    if not resp.get("ok"):
-        err = resp.get("error", "unknown")
-        detail = resp.get("detail", "")
-        if err == "unsupported_in_environment":
-            cap = resp.get("capability", {})
-            _die(EXIT_UNSUPPORTED,
-                 f"tun mode is not available in this environment "
-                 f"({cap.get('reason', 'unknown')}); use --mode proxy. "
-                 "There is no silent fallback to proxy.")
-        if err == "helper_not_running":
-            _die(EXIT_UNSUPPORTED,
-                 f"tun helper is not running ({detail}); start "
-                 "egress-tun-helper or use --mode proxy. "
-                 "There is no silent fallback to proxy.")
-        _die(EXIT_RUNTIME, f"tun run failed: {err} {detail}".strip())
-
-    return int(resp.get("exit_code", 0))
+                pass
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -310,15 +206,8 @@ def main(argv: list[str] | None = None) -> None:
     mode = opts["mode"] or "proxy"
     route = opts["route"]
 
-    # ---- tun mode (A6): local privileged helper, no silent proxy fallback.
-    #      Checked before the direct short-circuit: an explicit --mode tun
-    #      request is handled by the helper regardless of the route. ----
+    # ---- local per-run TUN mode; failures never fall back to proxy. ----
     if mode == "tun":
-        if cfg.tun_backend != "host-helper":
-            _die(EXIT_UNSUPPORTED,
-                 f"tun mode is not available in environment {cfg.environment!r} "
-                 f"(tun_backend={cfg.tun_backend}); use --mode proxy. "
-                 "There is no silent fallback to proxy.")
         # resolve an explicit route (or --default) to a concrete route id
         api = EgressApi(cfg)
         if route is None:

@@ -64,8 +64,7 @@
 │   ├── egress-devbridge                # dev/test bridge: фиксированные ops, bearer-token, 172.17.0.1:9099
 │   ├── live-acceptance.py              # live acceptance (spec §50, §49) → один JSON-репорт
 │   ├── LIVE_ACCEPTANCE.md
-│   ├── strict-helper/                  # host-native TUN helper (UNIX socket, per-run netns)
-│   ├── units/                          # systemd: devbridge, tun-helper, cidr-sync (service+timer)
+│   ├── units/                          # systemd: devbridge, cidr-sync (service+timer)
 │   └── geo/                            # качается по требованию (не в git; scripts/fetch-geo-data.sh)
 │
 ├── scripts/                            # bash-скрипты (host, root где указано)
@@ -135,8 +134,10 @@
    `a3-mihomo-secret`, TEST-NET-2 адреса, `fake-*-do-not-use` ключи). Реальные
    секреты живут на host: `/etc/vibelab-egress/secrets/` (0600, mounted files,
    никогда env-переменные). Никогда не коммитить реальные токены/ключи/подписки.
-2. **Client package — stdlib-only.** `client/` должен устанавливаться в bare host
-   и Docker-контейнер без package index. Не добавлять зависимости.
+2. **Python client package — stdlib-only.** `client/src/` устанавливается на
+   host и произвольный Docker-контейнер без package index. Отдельный pinned
+   static TUN engine собирается по `client/tun-engine/go.mod` и включается в
+   bundle; не добавлять Python dependencies.
 3. **Host-инструменты — fixed argv.** `host/egress-hostctl`, `egress-host-test`,
    `egress-devbridge`, `live-acceptance.py`: Python stdlib-only, фиксированный
    allowlist команд, без `shell=True`/`os.system`, без free-form command input.
@@ -149,8 +150,9 @@
    не публикуется, image pinned по tag + digest. Проверять через
    `scripts/verify-backend-host.sh` и `tests/security/`.
 6. **Тесты.** Оффлайн-свит: `python3 -m pytest tests/ client/tests/ -q`
-   (380 passed на 2026-10-19). Live-проверки требуют host с Docker +
-   CAP_NET_ADMIN и не проходят в этом контейнере.
+   (текущий результат зафиксирован в `STATUS.md`). TUN smoke проверен в
+   обычном Docker-контейнере с `/dev/net/tun` и seccomp profile; нужен доступ
+   к backend для проверки реальных provider routes.
 7. **STATUS.md** обновляется после каждого завершённого шага; решения и
    найденные баги — в журнал в конце файла.
 8. **Корень репозитория = корень проекта.** Репозиторий автономен (GitHub

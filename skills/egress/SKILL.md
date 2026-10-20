@@ -202,7 +202,7 @@ silent fallback: if tun is unsupported you get exit 6 and must decide.
 
 ```bash
 egressctl whoami            # check 'modes'
-egressctl config show       # check tun_backend (none | host-helper)
+egressctl config show       # check tun_backend (none | local-userns)
 egressctl mode set tun      # server-side check; 400 unsupported_in_environment
 ```
 

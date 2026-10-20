@@ -2,7 +2,7 @@
   "checks": {
     "config_validation": {
       "ok": true,
-      "detail": "version=1.19.32, groups=['host-main', 'openscience-main', 'os_0', 'os_1', 'os_2', 'os_3'], rules=13, provider_nodes=['blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'xeovo-US-New-York-1']"
+      "detail": "version=1.19.32, groups=['host-main', 'container-main', 'os_0', 'os_1', 'os_2', 'os_3'], rules=13, provider_nodes=['blanc-FI-Helsinki-1', 'blanc-FI-Helsinki-2', 'xeovo-US-New-York-1']"
     },
     "node_collisions": {
       "ok": true,

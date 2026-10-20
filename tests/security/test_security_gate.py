@@ -565,73 +565,35 @@ class TestClientPackage:
 
 
 # ===========================================================================
-# 8b. strict/TUN helper privilege review (spec 21.4 / 46 A8)
+# 8b. local per-run TUN boundary (no privileged host helper)
 # ===========================================================================
-class TestTunHelperPrivilege:
-    """The TUN helper is the single privilege escalation in the stack. It must
-    stay a narrow, local-only, fixed-protocol interface -- never a generic
-    root-exec API (spec 21.4, A8 'bootstrap/helper privilege review')."""
+class TestTunRuntimeBoundary:
+    def test_runtime_uses_fd_handoff_and_nested_namespaces(self):
+        runtime = (ROOT / "client/src/vibelab_egress_client/tun_runtime.py").read_text()
+        bootstrap = (ROOT / "client/src/vibelab_egress_client/tun_bootstrap.py").read_text()
+        assert "SCM_RIGHTS" in runtime
+        assert "--user" in runtime and "--net" in runtime
+        assert "CAP_NET_ADMIN" not in runtime and "CAP_SYS_ADMIN" not in runtime
+        assert "PR_SET_NO_NEW_PRIVS" in bootstrap
+        assert "_drop_capabilities()" in bootstrap
+        assert "_deny_namespace_syscalls()" in bootstrap
 
-    HELPER = ROOT / "host" / "strict-helper" / "egress-tun-helper.py"
+    def test_generic_docker_harness_is_not_privileged(self):
+        harness = (ROOT / "tests/docker/run-client-container.sh").read_text()
+        assert "--device /dev/net/tun" in harness
+        assert "--security-opt" in harness and "seccomp-tun.json" in harness
+        assert "--cap-drop NET_ADMIN" in harness and "--cap-drop SYS_ADMIN" in harness
+        assert "--privileged" not in harness
+        assert "CAP_NET_ADMIN" not in harness
+        dockerfile = (ROOT / "tests/docker/Dockerfile").read_text()
+        assert "iproute2" in dockerfile and "util-linux" in dockerfile
 
-    def test_helper_is_local_only(self):
-        """No TCP bind: the helper exposes only a UNIX socket."""
-        src = self.HELPER.read_text()
-        assert "AF_UNIX" in src
-        # it must never create a TCP (AF_INET) socket to serve clients
-        assert "AF_INET" not in src, "helper must not open a TCP listener"
-
-    def test_helper_uses_os_credentials(self):
-        """Caller identity comes from SO_PEERCRED, never from the body."""
-        src = self.HELPER.read_text()
-        assert "SO_PEERCRED" in src
-        assert "peer_credentials" in src
-
-    def test_helper_fixed_protocol(self):
-        """Only the fixed ops exist; there is no free-form command path."""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("th_priv", self.HELPER)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["th_priv"] = mod
-        spec.loader.exec_module(mod)
-        assert mod.ALLOWED_OPS == {"capability", "run", "cleanup"}
-        # 'run' is the only op that executes a command, and it validates the
-        # route format + upstream allowlist (no arbitrary proxy/route).
-        with pytest.raises(mod.ValidationError):
-            mod.validate_run({"op": "run", "route": "nope:no",
-                              "upstream": {"host": "8.8.8.8", "port": 1080},
-                              "command": ["id"]}, set(), set())
-        # an unknown op is rejected
-        with pytest.raises(mod.ValidationError):
-            mod.validate_run({"op": "exec", "command": ["id"]}, set(), set())
-
-    def test_helper_drops_privileges(self):
-        """The native backend drops caller UID/GID and all capabilities."""
-        src = (ROOT / "host/strict-helper/native_netns.py").read_text()
-        assert "setpriv" in src and "--reuid" in src and "--regid" in src
-        assert "--bounding-set=-all" in src
-
-    def test_helper_no_command_in_audit(self):
-        """Audit events must not log the command argv or environment."""
-        src = self.HELPER.read_text()
-        # the audit() call sites must not pass the raw command list
-        assert "audit(" in src
-        # the run op logs route/netns/uid/outcome but never command=
-        assert "command=" not in src.split("def op_run")[1]
-
-    def test_host_tun_unit_capability_boundary(self):
-        unit = (ROOT / "host/units/vibelab-egress-tun-helper.service").read_text()
-        assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL CAP_SETPCAP" in unit
-        assert "NoNewPrivileges=true" in unit
-        assert "docker.sock" not in unit
-        assert "--socket /run/vibelab-egress/tun-helper.sock" in unit
-
-    def test_container_client_cannot_reach_helper(self):
-        """The container client config has tun_backend=none and no helper
-        socket, so it cannot reach the privileged helper (spec 21.5)."""
-        cfg = (ROOT / "client" / "examples" / "client.container.yaml").read_text()
-        assert "tun_backend: none" in cfg
-        assert "tun_helper_socket" not in cfg
+    def test_no_legacy_helper_service_or_socket_in_active_client(self):
+        assert not (ROOT / "host/strict-helper/egress-tun-helper.py").exists()
+        assert not (ROOT / "host/units/vibelab-egress-tun-helper.service").exists()
+        for path in (ROOT / "client/src/vibelab_egress_client/config.py",
+                     ROOT / "client/src/vibelab_egress_client/egress_run.py"):
+            assert "tun-helper.sock" not in path.read_text()
 
 
 # ===========================================================================

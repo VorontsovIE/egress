@@ -14,6 +14,7 @@ import os
 import re
 import json
 import socket
+import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +40,8 @@ class ClientConfig:
     api_token_file: str
     default_proxy_auth_file: str
     environment: str
-    tun_backend: str = "none"
+    tun_backend: str = "local-userns"
+    tun_dns_servers: tuple[str, ...] = ("1.1.1.1", "1.0.0.1")
     extra: dict = field(default_factory=dict)
     _token_value: str | None = field(default=None, repr=False)
     _proxy_auth_value: str | None = field(default=None, repr=False)
@@ -60,10 +62,15 @@ class ClientConfig:
                 raise ConfigError(f"{name} out of range: {port}")
         if not self.control_url.startswith(("http://", "https://")):
             raise ConfigError(f"control_url must be http(s): {self.control_url!r}")
-        if self.tun_backend not in ("none", "host-helper"):
-            raise ConfigError(f"tun_backend must be none|host-helper: {self.tun_backend!r}")
-        if self.environment == "container" and self.tun_backend == "host-helper":
-            raise ConfigError("container cannot use host-helper; packet-only TUN is not implemented")
+        if self.tun_backend not in ("none", "local-userns"):
+            raise ConfigError(f"tun_backend must be none|local-userns: {self.tun_backend!r}")
+        if not self.tun_dns_servers:
+            raise ConfigError("tun_dns_servers must contain at least one IP address")
+        for server in self.tun_dns_servers:
+            try:
+                ipaddress.ip_address(server)
+            except ValueError as exc:
+                raise ConfigError(f"invalid TUN DNS server {server!r}: expected IP address") from exc
 
     # ---- secrets (read from files, never stored in the yaml) ----
     def api_token(self) -> str:
@@ -85,21 +92,6 @@ class ClientConfig:
             )
         user, _, password = raw.partition(":")
         return user, password
-
-    def tun_helper_socket(self) -> str:
-        """Path of the local strict/TUN helper UNIX socket (A6).
-
-        Resolution: ``tun_helper_socket`` in the config, else the
-        ``VIBELAB_EGRESS_TUN_HELPER_SOCKET`` env var, else the default. Only
-        meaningful when ``tun_backend == host-helper``.
-        """
-        val = self.extra.get("tun_helper_socket") or \
-            os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET")
-        # NB: no str() on the possibly-missing key — str(None) == "None" is
-        # truthy and would shadow both the env var and the default (the
-        # client then tried a socket literally named "None", 2026-10-15
-        # live run).
-        return str(val) if val else "/run/vibelab-egress/tun-helper.sock"
 
     @staticmethod
     def _read_secret(path: str, what: str) -> str:
@@ -187,8 +179,14 @@ def load_config(explicit_path: str | None = None) -> ClientConfig:
         api_token_file=str(data["api_token_file"]),
         default_proxy_auth_file=str(data["default_proxy_auth_file"]),
         environment=str(data["environment"]),
-        tun_backend=str(data.get("tun_backend", "none")),
-        extra={k: v for k, v in data.items() if k not in REQUIRED_KEYS and k != "tun_backend"},
+        tun_backend=str(data.get("tun_backend", "local-userns")),
+        tun_dns_servers=tuple(
+            item.strip() for item in str(
+                data.get("tun_dns_servers", "1.1.1.1,1.0.0.1")
+            ).split(",") if item.strip()
+        ),
+        extra={k: v for k, v in data.items()
+               if k not in REQUIRED_KEYS and k not in ("tun_backend", "tun_dns_servers")},
     )
     cfg.validate()
     return cfg

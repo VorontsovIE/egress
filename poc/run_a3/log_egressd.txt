@@ -1,7 +1,7 @@
 {"ts": "2026-10-11T00:51:37+0000", "level": "INFO", "logger": "egressd", "msg": "client registry loaded", "clients": 2}
 {"ts": "2026-10-11T00:51:38+0000", "level": "INFO", "logger": "egressd", "msg": "catalog rebuilt", "providers": {"blanc": 2, "xeovo": 1}, "routes": 4}
 {"ts": "2026-10-11T00:51:39+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "default_route_change", "client_id": "host-main", "from_route": "direct", "to_route": "blanc:FI-Helsinki-1", "reason": "set", "selector_applied": true}
-{"ts": "2026-10-11T00:51:39+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "default_route_change", "client_id": "openscience-main", "from_route": "direct", "to_route": "xeovo:US-New-York-1", "reason": "set", "selector_applied": true}
+{"ts": "2026-10-11T00:51:39+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "default_route_change", "client_id": "container-main", "from_route": "direct", "to_route": "xeovo:US-New-York-1", "reason": "set", "selector_applied": true}
 {"ts": "2026-10-11T00:51:40+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "oneshot_start", "client_id": "host-main", "session": "job-1791679900142-0", "route": "blanc:FI-Helsinki-1", "mode": "proxy", "slot": 0}
 {"ts": "2026-10-11T00:51:41+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "oneshot_start", "client_id": "host-main", "session": "job-1791679900180-1", "route": "xeovo:US-New-York-1", "mode": "proxy", "slot": 1}
 {"ts": "2026-10-11T00:51:41+0000", "level": "INFO", "logger": "egressd", "msg": "audit", "event": "oneshot_start", "client_id": "host-main", "session": "job-1791679901629-2", "route": "blanc:FI-Helsinki-2", "mode": "proxy", "slot": 2}

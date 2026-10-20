@@ -31,7 +31,7 @@ def _write_config(path: Path, **overrides) -> Path:
         "api_token_file": str(path.parent / "client.token"),
         "default_proxy_auth_file": str(path.parent / "default-proxy.auth"),
         "environment": "container",
-        "tun_backend": "none",
+        "tun_backend": "local-userns",
     }
     data.update(overrides)
     path.write_text("\n".join(f"{k}: {v}" for k, v in data.items()) + "\n")
@@ -140,7 +140,7 @@ class TestValidation:
         cfg = load_config(str(env / "client.yaml"))
         assert cfg.client_id == "container-main"
         assert cfg.environment == "container"
-        assert cfg.tun_backend == "none"
+        assert cfg.tun_backend == "local-userns"
         assert cfg.default_proxy_port == 1080
 
 
@@ -180,31 +180,19 @@ class TestSecrets:
         assert cfg.api_token() == "tok-x"
 
 # ---------------------------------------------------------------------------
-# tun helper socket resolution (A6; bug of 2026-10-15: str(None) shadowed
-# the env var and the default)
+# local TUN DNS configuration
 # ---------------------------------------------------------------------------
-class TestTunHelperSocket:
-    def test_absent_key_falls_back_to_default(self, env, monkeypatch):
-        monkeypatch.delenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", raising=False)
+class TestTunDns:
+    def test_default_dns_servers(self, env):
         cfg = load_config(str(env / "client.yaml"))
-        assert cfg.tun_helper_socket() == "/run/vibelab-egress/tun-helper.sock"
+        assert cfg.tun_dns_servers == ("1.1.1.1", "1.0.0.1")
 
-    def test_absent_key_env_wins_over_default(self, env, monkeypatch):
-        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
-        cfg = load_config(str(env / "client.yaml"))
-        assert cfg.tun_helper_socket() == "/tmp/sock"
-
-    def test_config_key_wins_over_env(self, env, monkeypatch):
-        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
-        p = _write_config(env / "client2.yaml", tun_helper_socket="/custom/tun.sock")
+    def test_configured_dns_servers(self, env):
+        p = _write_config(env / "custom.yaml", tun_dns_servers="9.9.9.9, 149.112.112.112")
         cfg = load_config(str(p))
-        assert cfg.tun_helper_socket() == "/custom/tun.sock"
+        assert cfg.tun_dns_servers == ("9.9.9.9", "149.112.112.112")
 
-    def test_regression_missing_key_must_not_shadow(self, env, monkeypatch):
-        """A config WITHOUT the key must resolve env/default, never the
-        literal string 'None' (the 2026-10-15 live-run bug)."""
-        monkeypatch.setenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", "/tmp/sock")
-        cfg = load_config(str(env / "client.yaml"))
-        assert cfg.tun_helper_socket() == "/tmp/sock"
-        monkeypatch.delenv("VIBELAB_EGRESS_TUN_HELPER_SOCKET", raising=False)
-        assert cfg.tun_helper_socket() == "/run/vibelab-egress/tun-helper.sock"
+    def test_invalid_dns_server_rejected(self, env):
+        p = _write_config(env / "bad.yaml", tun_dns_servers="resolver.example")
+        with pytest.raises(ConfigError, match="DNS server"):
+            load_config(str(p))

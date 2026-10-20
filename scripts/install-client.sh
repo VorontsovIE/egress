@@ -73,6 +73,18 @@ install_package() { # prefix
   # Optional container-owned subscription normalization. The adapter imports
   # PyYAML only when `egressctl source` is used in a container.
   cp -r "$REPO_ROOT/adapters" "$libdir/"
+  local engine=""
+  if [ "$(sed -n 's/^tun_backend:[[:space:]]*//p' "$BUNDLE/client.yaml" | head -1)" = local-userns ]; then
+    case "$(uname -m)" in
+      x86_64|amd64) engine="$BUNDLE/tun-engine/egress-tun-engine-linux-amd64" ;;
+      aarch64|arm64) engine="$BUNDLE/tun-engine/egress-tun-engine-linux-arm64" ;;
+      *) die_env "local-userns TUN has no engine build for $(uname -m)" ;;
+    esac
+    [ -f "$engine" ] || die_env "bundle has no matching TUN engine; rebuild bundle with scripts/build-tun-engine.sh"
+    (cd "$BUNDLE/tun-engine" && sha256sum -c SHA256SUMS >/dev/null) || die_env "TUN engine checksum verification failed"
+    mkdir -p "$prefix/libexec/vibelab-egress"
+    install -m 755 "$engine" "$prefix/libexec/vibelab-egress/egress-tun-engine"
+  fi
   # cp -r propagates the SOURCE directory's mode (the repo source tree is
   # 750 root:group), which would leave the installed package dir unreadable
   # by the user running egressctl -> "No module named ...egressctl". The
@@ -89,6 +101,7 @@ from vibelab_egress_client.egressctl import main; main()" "\$@"
 EOF
   cat > "$bindir/egress-run" <<EOF
 #!/usr/bin/env bash
+export VIBELAB_EGRESS_TUN_ENGINE="$prefix/libexec/vibelab-egress/egress-tun-engine"
 exec python3 -c "import sys; sys.path.insert(0, '$libdir'); \
 from vibelab_egress_client.egress_run import main; main()" "\$@"
 EOF
@@ -131,8 +144,6 @@ case "$TARGET" in
     echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/vibelab-egress"
     ;;
   container)
-    BUNDLE_TUN_BACKEND="$(sed -n 's/^tun_backend:[[:space:]]*//p' "$BUNDLE/client.yaml" | head -1)"
-    [ "$BUNDLE_TUN_BACKEND" != "host-helper" ] || die_env "container bundle cannot use host-helper; packet-only TUN is not implemented"
     # Inside the container: install into the container's own /etc and
     # /run/secrets. When staging from the host, set --install-root to the
     # bundle's target prefix; the image build (or a deterministic mount)

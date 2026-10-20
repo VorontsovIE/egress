@@ -3,9 +3,41 @@
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
 
+## TUN без host-helper — 2026-10-20
+
+Удалён privileged systemd TUN-helper и его UNIX-socket `run(argv)` интерфейс.
+Host и произвольный Docker client теперь используют одинаковый `local-userns`
+backend: каждый `egress-run --mode tun` создаёт собственный user/network
+namespace; workload и его дочерние процессы остаются в client environment.
+Packet engine получает только TUN fd и route-specific SOCKS credentials.
+Для Docker описан narrow seccomp profile и `/dev/net/tun`, без outer
+`CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, `--privileged`, host network и Docker socket.
+
+Provisioning включает pinned static engine build в bundle для host/container;
+installation проверяет SHA256 и архитектуру. DNS настраивается через
+`tun_dns_servers` (default `1.1.1.1,1.0.0.1`). Добавлен generic Docker
+end-to-end harness, который выполняет proxy и TUN workload внутри тестового
+контейнера. Старый helper удаляется отдельной миграцией, которая отказывается
+работать при наличии записей активных/застрявших TUN jobs и сохраняет backend
+и client данные.
+
+Проверки: `py_compile`, `bash -n`, `git diff --check`; offline suite **325
+passed**, install harness **1 passed**. Static TUN engine собран Go 1.26.3
+для Linux amd64/arm64. В ordinary Docker image без `CAP_NET_ADMIN` прошли
+namespace/TUN setup, уникальность netns между вызовами, capability drop,
+DNS и HTTPS в direct TUN; SOCKS5 auth/TCP и UDP DNS подтверждены локальным
+тестовым SOCKS endpoint. Настоящий backend provider route ещё требует live
+client bundle и backend на целевой машине.
+
+## Историческое состояние до перехода на local-userns
+
+Следующая запись и записи журнала ниже фиксируют результаты предыдущих шагов.
+Они не описывают текущую реализацию TUN; актуальное решение и проверки — в
+разделе «TUN без host-helper» выше.
+
 ## Обобщение клиента до произвольного Docker-контейнера — 2026-10-19
 
-Убраны OpenScience-зависимые имена из активного кода, примеров и документации;
+Убраны Docker-контейнер-зависимые имена из активного кода, примеров и документации;
 пример client config, client ID и переменная live acceptance теперь общие для
 Docker-клиента. Профиль `container` используется при provisioning и установке.
 Стандартный persistent root backend переведён в `/var/lib/vibelab-egress`;
@@ -17,6 +49,9 @@ Docker-клиента. Профиль `container` используется пр�
 выполнение дочерних процессов и HTTPS через один или несколько proxy routes.
 Контейнерный host-helper запрещён конфигурационной валидацией, потому что его
 старый протокол передавал argv/stdio и запускал workload вне клиента.
+
+Историческая запись ниже описывает предыдущий helper-based прототип; её выводы
+и оставшиеся пункты миграции заменены решением в этом разделе.
 
 TUN из произвольного клиентского контейнера пока не реализован. В
 `TECH_SPEC.md` зафиксирован требуемый packet-only контракт общего helper;
@@ -87,7 +122,7 @@ Cloudflare (ожидаемый 200) и Google `/generate_204` (ожидаемы�
 `verify-live-report.py` подтвердил hash, все PASS и secret scan: **VERIFIED**.
 Отчёт с правами 0600 хранится вне репозитория в
 `~/.local/share/vibelab-egress-test/live-user-after-fixes.json`.
-OpenScience отсутствует; root-only harness не удалось повторить, так как
+Docker-контейнер отсутствует; root-only harness не удалось повторить, так как
 `sudo -n` требует пароль. Эти причины указаны в handoff.
 
 Повторный probe всех **401** маршрутов по двум независимым HTTPS целям,
@@ -111,7 +146,7 @@ OpenScience отсутствует; root-only harness не удалось пов
   установки с новым cwd и остальные offline install cases: 75 passed.
 - Приёмочный harness: SOCKS-aware HTTP 204 для parallel one-shot, полный JSON
   больших ответов, допуск меняющегося публичного direct IP, явные SKIP при
-  отсутствии OpenScience и усиленный независимый verifier. Целевые тесты
+  отсутствии Docker-контейнер и усиленный независимый verifier. Целевые тесты
   verifier: 15 passed; сохранённый globe-отчёт: VERIFIED (19/0/9).
 
 ## Локальная проверка подписок — 2026-10-18
@@ -131,7 +166,7 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
 `benchmark --bytes`. Backend probe теперь сохраняет результаты других узлов
 при TLS timeout одного маршрута; benchmark корректно разбирает HTTP URL и
 считает только тело ответа. Локальный офлайн-набор: 373 passed, сценарии
-установки: 75 passed. OpenScience отсутствует на этой машине; его checks
+установки: 75 passed. Docker-контейнер отсутствует на этой машине; его checks
 отмечаются skip. Лимит `probe-domain --all` — 50 маршрутов за запрос.
 
 ## Фаза A0 — PoC (ЗАКРЫТА, 22/22)
@@ -191,7 +226,7 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
 
 ## Текущий шаг / Next
  2026-10-16: третий live-отчёт с globe (09:32 UTC) — 15 pass / 1 fail /
- 12 skip. OpenScience `whoami` и HARD DIRECT теперь проходят; Mihomo admin
+ 12 skip. Docker-контейнер `whoami` и HARD DIRECT теперь проходят; Mihomo admin
  доступен. Оставшийся FAIL `tun_local_workload` снова `no_response`: запуск
  `docker compose ... up -d` оставил старый образ helper (`Running`, без
  build/recreate). Нужен явный `--build --force-recreate`; после него текущая
@@ -202,7 +237,7 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
  loader'а используют общий валидирующий reader. Чек §49.39 с `docker
  restart` ошибочно выдавал PASS за recreate; теперь это skip с причиной.
  `egress-verify` запущен с runtime `runc`, поэтому проверка его client
- package не подтверждает поведение OpenScience/gVisor §50.9; PASS для этого
+ package не подтверждает поведение Docker container §50.9; PASS для этого
  пункта теперь требует runtime `runsc`/gVisor.
  2026-10-16: повторный live-отчёт с globe — **14 pass / 2 fail / 12 skip**.
  `tun_local_workload` получил `no_response`, после чего helper socket исчез;
@@ -234,7 +269,7 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
    Отчёт самодостаточен и tamper-evident: подделанный/багованный отчёт не
    пройдёт. Тесты: `tests/test_verify_live_report.py` (8/8).
  - `scripts/run-live-acceptance.sh` — одна команда на хосте (авто-детект
-   контейнера OpenScience); `host/LIVE_ACCEPTANCE.md` — инструкция.
+   контейнера Docker-контейнер); `host/LIVE_ACCEPTANCE.md` — инструкция.
  - **Install logging (2026-10-14, ветка `install-logging`, 7 коммитов:
    handoff + 6 фиксов)**: структурный лог установки
    (`<root>/install-backend-host.log`, `step N/10` + run header + ERR trap),
@@ -249,7 +284,7 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
          egressd up; harness-фиксы из этого же дня, см. журнал решений).
 
    - [x] **Live-проверка на globe (2026-10-15/16)**: бэкенд + host-клиент
-         + контейнерный клиент (`openscience-main` в `egress-verify`),
+         + контейнерный клиент (`container-main` в `egress-verify`),
          offline 314 passed в контейнере (python 3.11, root). Live
          acceptance 23:35 → 9 pass / 7 fail / 12 skip; ВСЕ 7 fail —
          найденные root causes, серия фиксов 2026-10-16 (журнал ниже).
@@ -258,8 +293,8 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
          `sudo bash scripts/install-tun-host.sh --user vibelab`, обновить
          Compose backend, открыть новую login-сессию для группы socket,
          затем запустить §50 acceptance. Контейнерный helper удалить как orphan.
-   - [ ] **Клиент в OpenScience-контейнере** (бандл из `INSTALL.md`, шаг B) —
-         иначе `openscience_tun_unsupported` / `a8_client_same_release` skip.
+   - [ ] **Клиент в Docker-контейнер-контейнере** (бандл из `INSTALL.md`, шаг B) —
+         иначе `container_tun_unsupported` / `a8_client_same_release` skip.
    - [ ] **Запустить на хосте**: `bash scripts/run-live-acceptance.sh`
         (добавить `--recreate` для деструктивного recreate-чека) → отдать ОДИН
         файл `reports/host_acceptance_report.json`.
@@ -267,9 +302,9 @@ proxy/IP ассерты, клиентский тайм-аут долгих оп�
        reports/host_acceptance_report.json` → VERIFIED / REJECTED.
  - A6 live (acceptance §50): host-native `egress-run --mode tun` e2e,
        concurrent host TUN jobs, `direct+tun` e2e, UDP/QUIC, stale netns
-       cleanup, OpenScience `unsupported_in_environment`, no silent fallback.
+       cleanup, Docker-контейнер `unsupported_in_environment`, no silent fallback.
  - A8 live (acceptance §49): публичные NIC закрыты, recreate-персистентность
-       OpenScience client, LiteLLM, parallel one-shot, local exec,
+       Docker-контейнер client, LiteLLM, parallel one-shot, local exec,
        internal/HARD DIRECT, secrets-скан, host acceptance report.
 - A6 закрыта (realizable-in-sandbox): helper + security invariant'ы +
   capability reporting + compose.tun.yaml + клиентский путь; 43+5+7 тестов.
@@ -318,7 +353,7 @@ defect: Docker в этой среде отсутствует.
       - `egressctl.py` — полный CLI 30.1; exit codes 0/1/2/3/4/5.
       - `egress_run.py` — 30.2: local exec, argv без shell, exit status,
         SIGINT/SIGTERM forward, one-shot cleanup, `--mode tun` → exit 6.
-      - `examples/client.{host,openscience}.yaml`.
+      - `examples/client.{host,container}.yaml`.
 - [x] `scripts/` (все +x): `provision-client.sh` (host/gvisor-container
       bundles + backend secrets, shlex-quoted), `install-client.sh`,
       `verify-client.sh` (offline/live), `install-backend-host.sh` (10 шагов:
@@ -334,17 +369,17 @@ defect: Docker в этой среде отсутствует.
       vibelab-egress-devbridge.service}`.
 - [x] `mihomo/config.template.yaml` — reference-скелет с аннотациями.
 - [x] `INSTALL.md` — два независимых шага (A. Backend deployment,
-      B. Client installation) + reproducible OpenScience install + exit codes.
+      B. Client installation) + reproducible Docker-контейнер install + exit codes.
 - [x] Тесты: `/tmp/a1_test.sh` → **47/47, 0 failed** (2 прогона); тестовый
       фикс `/etc/vibelab-egress` удалён.
 
 ### Тестовое покрытие (разделы suite)
 1. compile/syntax: py_compile всех 10 .py + bash -n всех 7 .sh.
-2. provisioning: host-main + openscience-main; token perms 600; токены
-   раздельны; bundles без mihomo-секрета; openscience bundle =
+2. provisioning: host-main + container-main; token perms 600; токены
+   раздельны; bundles без mihomo-секрета; container bundle =
    `host.docker.internal`/`tun_backend: none`, host = `127.0.0.1`/`host-helper`.
 3. bootstrap config: PyYAML-parse (12 rules; listeners 18080/18081 on
-   0.0.0.0; users host-main+openscience-main; os_0..os_3; groups =
+   0.0.0.0; users host-main+container-main; os_0..os_3; groups =
    clients+slots; `GEOIP,LAN,DIRECT,no-resolve` первый, `MATCH,DIRECT`
    последний; IN-USER после hard-direct; `store-selected: true`;
    secret подставлен).
@@ -358,7 +393,7 @@ defect: Docker в этой среде отсутствует.
    field `cmd`; sync-docker-cidrs → чистый JSON; отказ bind на 8.8.8.8 без
    `--allow-public` (exit 2).
 7. egressd smoke: 401 без токена; `/v1/self` → `client_id=host-main`
-   (environment=host); чужой токен → `openscience-main` (identity bound to
+   (environment=host); чужой токен → `container-main` (identity bound to
    token); mihomo down → `reachable: false`; ни один response не содержит
    значение секрета.
 8. client package: `config validate`/`show` (токен маскируется); `whoami`
@@ -664,7 +699,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
       (`supported`/`unsupported_in_environment` + backend), консистентно с
       `mode set tun` (400) и one-shot `mode=tun` (400).
 - [x] Capability matrix (spec 21.5): host-main → `tun: supported`
-      (host-helper); openscience-main → `tun: unsupported_in_environment`
+      (host-helper); container-main → `tun: unsupported_in_environment`
       (gVisor: no /dev/net/tun, no CAP_NET_ADMIN). `whoami`/`capabilities`
       accurately reports mode availability (acceptance §50.12).
 
@@ -684,7 +719,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
 - [x] `tests/security/test_security_gate.py` +7 (helper privilege review):
       local-only (no AF_INET), SO_PEERCRED identity, fixed protocol (no
       free-form command), privilege drop (setpriv), no command in audit,
-      compose.tun minimal capability, openscience client cannot reach helper.
+      compose.tun minimal capability, container client cannot reach helper.
 
 ### Deferred до целевого хоста (acceptance §50, live)
 - [ ] Host-native `egress-run --mode tun ROUTE -- command` e2e (proxy-unaware
@@ -693,7 +728,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
 - [ ] `direct + tun` isolated direct path e2e.
 - [ ] UDP/QUIC test (если route/protocol/backend поддерживает).
 - [ ] Stale netns cleanup e2e (live).
-- [ ] OpenScience local strict backend (gVisor-preserving) — исследовать;
+- [ ] Docker-контейнер local strict backend (gVisor-preserving) — исследовать;
       пока `unsupported_in_environment` (зафиксировано).
 
 ## Фаза A7 — Skill/docs (ЗАКРЫТА, 2026-10-11)
@@ -747,7 +782,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
         (no AF_INET), identity из SO_PEERCRED, fixed protocol (no free-form
         command), privilege drop (setpriv --reuid/--regid), audit без
         command payload, compose.tun minimal capability (cap_drop ALL +
-        cap_add NET_ADMIN only), OpenScience client не может достичь helper.
+        cap_add NET_ADMIN only), Docker-контейнер client не может достичь helper.
 - [x] **Найдены и закрыты 2 реальных дефекта**:
       1. FastAPI автосгенерировал `/docs`, `/redoc`, `/openapi.json`
          (unauthenticated schema exposure) → отключено
@@ -755,7 +790,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
       2. oversized domain в /v1/probe-domain → 500 (UnicodeError из idna) →
          добавлена bounded domain validation (400).
 - [ ] Live-часть (deferred до целевого хоста с Docker): публичные NIC
-      закрыты, recreate-персистентность OpenScience client, host acceptance
+      закрыты, recreate-персистентность Docker-контейнер client, host acceptance
       harness report — через `host/egress-host-test` + administrator loop.
 
 ## Журнал решений
@@ -862,7 +897,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   пакета). Проверено: симуляция install → `import vibelab_egress_client.egressctl`
   OK.
   Остальные skips в отчёте — ожидаемые при отсутствии: TUN-сокета
-  (compose.tun.yaml не поднят) и клиента в OpenScience-контейнере (не установлен).
+  (compose.tun.yaml не поднят) и клиента в Docker-контейнер-контейнере (не установлен).
 - 2026-10-12: `egress-hostctl sync-docker-cidrs` — фикс под Docker 28. Корень
   проблемы: Docker 28 убрал `.Subnet`/`.Gateway` из template-контекста
   `docker network ls --format` (у сети может быть несколько IPAM-конфигов,
@@ -903,7 +938,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   port, no-new-privileges; /dev/net/tun rw. (3) Caller identity из
   SO_PEERCRED, не из body; target запускается через setpriv --reuid/--regid
   (privilege drop после network setup). (4) Capability matrix per-client:
-  host-main tun=supported (host-helper), openscience-main
+  host-main tun=supported (host-helper), container-main
   tun=unsupported_in_environment (gVisor: no /dev/net/tun, no CAP_NET_ADMIN);
   /v1/capabilities отчитывает консистентно с mode-set/one-shot checks.
   (5) No silent proxy fallback: helper reports unsupported_in_environment →
@@ -1001,7 +1036,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   ~370 МБ GEO-данных исключены из истории (host/geo, poc/geo, poc/geo.tar.gz,
   poc/meta-rules-dat-release, копии в poc/run* и poc/diag_*/mihomo) —
   скачиваются по требованию `scripts/fetch-geo-data.sh` (--full/--release/
-  --check, codeload-fallback для OpenScience). SHAs переписаны
+  --check, codeload-fallback для Docker-контейнер). SHAs переписаны
   (git filter-repo); ветка `main`; force-push на GitHub.
 
 - 2026-10-16: Live (globe) — live-acceptance 9/7/12: ВСЕ 7 fail получили
@@ -1073,7 +1108,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   проверки воспроизводимого контейнера. Старый helper image на globe
   остался после `up -d`; нужен явный rebuild/recreate для диагностики A6.
   `egress-verify` работает под `runc`, так что §50.9 нельзя засчитывать
-  как проверку OpenScience/gVisor.
+  как проверку Docker container.
   Локально: 12 целевых pytest passed, py_compile/bash -n/YAML и
   `git diff --check` чисты. Live-повтор с новым образом ожидается.
 
@@ -1184,7 +1219,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   §50.2 доказал caller UID/GID 1082:1083, host cwd и запись в host файл;
   §50.5 direct без tun0, §50.6 CapEff=0, §50.7 cleanup netns/veth,
   §50.8 HARD DIRECT и §50.11 no fallback — PASS. Это direct-only результат,
-  proxy/UDP требуют provider routes. Настоящий OpenScience container работает
+  proxy/UDP требуют provider routes. Настоящий Docker-контейнер container работает
   под `runsc`; ручной запуск того же client module из смонтированного repo
   внутри него дал exit 6 и явный no-fallback. Формальный §50.9 остаётся SKIP,
   потому что бинарник `egress-run` в контейнере не установлен. Root-only
@@ -1197,7 +1232,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   VERIFIED: 16 PASS / 1 FAIL / 11 SKIP, hash
   `62cbc2c890395d99f03bbd4fd8db16672db6317d9ed9508b6ca295bf8541d43e`,
   verifier secret scan выполнен. Единственный FAIL — §50.12:
-  `egressctl` отсутствует в настоящем OpenScience `runsc` container
+  `egressctl` отсутствует в настоящем Docker-контейнер `runsc` container
   (exit 127); §50.9 по той же причине SKIP. Ручной source-module вызов
   ранее подтвердил exit 6/no fallback, но формальную установку не заменяет.
   `docker cp` в работающий runsc сообщил успех, однако `/tmp` в sandbox
@@ -1205,7 +1240,7 @@ CAP_NET_ADMIN (acceptance §50, пункты 1-8).
   `docker exec -i` (несекретный probe появился). Ожидается root-доступ
   к client bundle для передачи его через stdin и установки в контейнере.
 
-- 2026-10-16: OpenScience client `openscience-main` установлен в настоящем
+- 2026-10-16: Docker-контейнер client `container-main` установлен в настоящем
   `runsc` контейнере через `tar | docker exec -i`; затем текущий package и
   installer из host checkout переданы тем же способом, потому что
   `/srv/workspace/vibelab-egress` внутри контейнера отставал от host.

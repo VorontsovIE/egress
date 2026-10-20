@@ -694,15 +694,20 @@ def check_per_client_isolation(live):
         "integration suite (tests/integration) per spec section 34")
 
 
-def check_strict_helper_privileges():
-    helper = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                          "strict-helper")
-    if not os.path.isdir(helper) or not os.listdir(helper):
-        add("strict_helper_privileges", "skipped",
-            "strict/TUN helper not installed (phase A6)")
+def check_local_tun_runtime():
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    runtime = os.path.join(root, "client/src/vibelab_egress_client/tun_runtime.py")
+    bootstrap = os.path.join(root, "client/src/vibelab_egress_client/tun_bootstrap.py")
+    try:
+        source = open(runtime, encoding="utf-8").read() + open(bootstrap, encoding="utf-8").read()
+    except OSError as exc:
+        add("local_tun_runtime", "fail", f"client TUN runtime unavailable: {exc}")
         return
-    add("strict_helper_privileges", "skipped",
-        "strict helper present; privilege audit is part of phase A6")
+    required = ("SCM_RIGHTS", "--user", "--net", "PR_SET_NO_NEW_PRIVS")
+    missing = [item for item in required if item not in source]
+    add("local_tun_runtime", "fail" if missing else "pass",
+        f"missing client-local TUN controls: {missing}" if missing else
+        "per-run namespace and TUN fd handoff are present")
 
 
 # ---------------------------------------------------------------------------
@@ -988,7 +993,7 @@ def main(argv=None):
     check_host_whoami_identity(live)
     check_host_default_route_mode(live)
     check_per_client_isolation(live)
-    check_strict_helper_privileges()
+    check_local_tun_runtime()
     check_egressd_container_healthy(live)
     check_client_package_importable(live)
     check_egressctl_on_path(live)

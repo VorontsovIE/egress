@@ -49,7 +49,7 @@ WG_PORT = 51820
 SECRET = "poc-mihomo-secret"
 CLIENTS = {
     "host-main": ("host-user", "host-pass"),
-    "openscience-main": ("os-user", "os-pass"),
+    "container-main": ("os-user", "os-pass"),
 }
 OS_SLOTS = 8
 OS_SECRETS = [f"os-pass-{i}" for i in range(OS_SLOTS)]
@@ -507,8 +507,8 @@ def run_checks(cfg, node_log, vless_ok, wg_server_pub):
            f"set={st} now={g.get('now')}")
 
     os_node = "xeovo-US-NY-1"
-    st, _ = mihomo_api("PUT", "/proxies/openscience-main", {"name": os_node})
-    st2, g = mihomo_api("GET", "/proxies/openscience-main")
+    st, _ = mihomo_api("PUT", "/proxies/container-main", {"name": os_node})
+    st2, g = mihomo_api("GET", "/proxies/container-main")
     st3, gh = mihomo_api("GET", "/proxies/host-main")
     record("P06_client_isolation",
            g.get("now") == os_node and gh.get("now") == host_node,
@@ -527,10 +527,10 @@ def run_checks(cfg, node_log, vless_ok, wg_server_pub):
            st == "200" and f"NODE:{host_node}" in body,
            f"status={st} body={body[:120]!r}")
 
-    mihomo_api("PUT", "/proxies/openscience-main", {"name": os_node})
+    mihomo_api("PUT", "/proxies/container-main", {"name": os_node})
     st, body = socks_fetch("127.0.0.1", DEF_PORT, "os-user", "os-pass",
                            E2E_HOST, E2E_PORT)
-    record("P08_default_proxy_openscience",
+    record("P08_default_proxy_container",
            st == "200" and f"NODE:{os_node}" in body,
            f"status={st} body={body[:120]!r}")
 
@@ -542,7 +542,7 @@ def run_checks(cfg, node_log, vless_ok, wg_server_pub):
            f"status={st} body={body[:120]!r}")
 
     st, gh = mihomo_api("GET", "/proxies/host-main")
-    st, go = mihomo_api("GET", "/proxies/openscience-main")
+    st, go = mihomo_api("GET", "/proxies/container-main")
     record("P10_oneshot_no_default_change",
            gh.get("now") == host_node and go.get("now") == os_node,
            f"host={gh.get('now')} os={go.get('now')}")

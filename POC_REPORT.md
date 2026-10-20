@@ -47,7 +47,7 @@
 Один SOCKS-listener на клиента + один на one-shot. Роутинг через `IN-USER`:
 
 ```
-client user  -> IN-USER,<user>  -> per-client select (host-main / openscience-main)
+client user  -> IN-USER,<user>  -> per-client select (host-main / container-main)
 slot user    -> IN-USER,os_N    -> per-slot select (os_0..os_7)
 ```
 
@@ -82,12 +82,12 @@ slot user    -> IN-USER,os_N    -> per-slot select (os_0..os_7)
 |---|---|---|---|
 | P01 | controller version | PASS | `{'meta': True, 'version': '1.19.32'}` |
 | P02 | controller requires auth | PASS | no-auth → 401 |
-| P03 | per-client selectors | PASS | `host-main`, `openscience-main` type=Selector, DIRECT в `all` |
+| P03 | per-client selectors | PASS | `host-main`, `container-main` type=Selector, DIRECT в `all` |
 | P04 | one-shot slot groups | PASS | 8 slot-групп (`os_0..os_7`) |
 | P05 | set default host | PASS | PUT → 204, `now=blanc-FI-Helsinki-1` |
 | P06 | client isolation | PASS | os=xeovo-US-NY-1, host=blanc-FI-Helsinki-1 (независимо) |
 | P07 | default proxy host | PASS | 200, body `NODE:blanc-FI-Helsinki-1` (non-LAN цель) |
-| P08 | default proxy openscience | PASS | 200, body `NODE:xeovo-US-NY-1` |
+| P08 | default proxy container | PASS | 200, body `NODE:xeovo-US-NY-1` |
 | P09 | one-shot route | PASS | 200, body `NODE:blanc-FI-Helsinki-1` через slot |
 | P10 | one-shot no default change | PASS | host/os defaults не изменились после one-shot |
 | P11 | concurrent one-shot | PASS | 3 параллельных: 200/200/direct, ноды `blanc-FI-Helsinki-1`,`xeovo-DE-FRA-1` |
@@ -164,12 +164,12 @@ PoC-харнес (22 проверки) покрывает **архитектур
 | 19 | domain probe через direct + ≥2 locations | **deferred A5** | probe-domain движок |
 | 20 | Mihomo admin API остаётся private | **PASS** | P02, P19 |
 | 21 | provider route disappearance → only affected client fallback | **deferred A2/A3** | fallback-логика |
-| 22 | один client package на host и OpenScience | **deferred A4** | config discovery |
+| 22 | один client package на host и Docker-контейнер | **deferred A4** | config discovery |
 | 23 | `/v1/self` token → client identity | **deferred A3** | egressd API |
 | 24 | подмена `client_id` не даёт чужой profile | **deferred A3/A8** | auth |
 | 25 | `egressctl` ops = direct API calls | **deferred A4** | client package |
-| 26 | `egress-run` child внутри OpenScience/gVisor | **deferred A4** | local-execution semantics |
-| 27 | proxy mode e2e из OpenScience | **deferred A4** | |
+| 26 | `egress-run` child внутри Docker container | **deferred A4** | local-execution semantics |
+| 27 | proxy mode e2e из Docker-контейнер | **deferred A4** | |
 | 28 | proxy mode e2e с host client | **deferred A4** | |
 | 29 | provider update через `--via ROUTE` без race | **deferred A4** | |
 | 30 | TUN/strict feasibility + capability matrix | **deferred A6** | capability matrix (TUN недоступен здесь) |

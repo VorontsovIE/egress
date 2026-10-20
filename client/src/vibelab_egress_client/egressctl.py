@@ -369,6 +369,7 @@ def cmd_config_show(args) -> None:
         "default_proxy_auth_file": cfg.default_proxy_auth_file,
         "environment": cfg.environment,
         "tun_backend": cfg.tun_backend,
+        "tun_dns_servers": list(cfg.tun_dns_servers),
     }
     if getattr(args, "secrets", False):
         try:
@@ -434,43 +435,23 @@ def cmd_doctor(args) -> None:
 
 
 def _tun_capability(cfg: ClientConfig) -> dict:
-    """Local tun capability probe (spec 50.12 / phase A6).
-
-    Purely local: config + helper UNIX socket only, no backend call. A socket
-    path alone does not prove that the helper can create a network namespace.
-    """
+    """Probe local namespace, TUN device, tools, and packet engine."""
     from . import __version__
+    from .tun_runtime import probe
 
-    if cfg.tun_backend != "host-helper":
-        status = "none"
-        reason = f"tun_backend={cfg.tun_backend!r}"
+    if cfg.tun_backend == "none":
+        capability = {"status": "none", "reason": "TUN disabled in client.yaml"}
     else:
-        sock = cfg.tun_helper_socket()
-        if not os.path.exists(sock):
-            status = "helper_not_running"
-            reason = f"host-helper socket missing: {sock}"
-        else:
-            from .egress_run import _tun_helper_call
-            response = _tun_helper_call(sock, {"op": "capability"}, 2.0)
-            capability = response.get("capability") if response.get("ok") else None
-            if isinstance(capability, dict) and capability.get("status") in (
-                    "supported", "unsupported_in_environment"):
-                status = capability["status"]
-                reason = str(capability.get("reason") or status)
-            else:
-                status = "helper_not_running"
-                reason = ("host-helper capability probe failed: "
-                          f"{response.get('error', 'invalid_response')}")
+        capability = probe()
     return {
         "client_id": cfg.client_id,
         "client_version": __version__,
         "environment": cfg.environment,
         "tun": {
             "backend": cfg.tun_backend,
-            "socket": cfg.tun_helper_socket()
-                      if cfg.tun_backend == "host-helper" else None,
-            "status": status,
-            "reason": reason,
+            "dns_servers": list(cfg.tun_dns_servers),
+            "status": capability["status"],
+            "reason": capability["reason"],
         },
     }
 

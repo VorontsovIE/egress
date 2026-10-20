@@ -38,7 +38,7 @@ def atomic_write(path: Path, value: str) -> None:
             os.unlink(name)
 
 
-def credentials(uid: int, clients: Path, tun_socket: Path) -> dict:
+def credentials(uid: int, clients: Path) -> dict:
     client_id = f"host-uid-{uid}"
     token_path = clients / f"{client_id}.token"
     proxy_path = clients / f"{client_id}.proxy-creds"
@@ -53,7 +53,7 @@ def credentials(uid: int, clients: Path, tun_socket: Path) -> dict:
         if not auth:
             auth = f"{client_id}:{secrets.token_urlsafe(24)}"
             atomic_write(proxy_path, auth + "\n")
-        modes = ["proxy", "tun"] if tun_socket.is_socket() else ["proxy"]
+        modes = ["proxy", "tun"]
         profile = {"client_id": client_id, "environment": "host", "modes": modes}
         try:
             current = json.loads(profile_path.read_text())
@@ -64,7 +64,7 @@ def credentials(uid: int, clients: Path, tun_socket: Path) -> dict:
         if not token_path.exists() or not token_path.read_text().strip():
             atomic_write(token_path, token + "\n")
     return {"client_id": client_id, "token": token, "proxy_auth": auth,
-            "tun_backend": "host-helper" if "tun" in modes else "none"}
+            "tun_backend": "local-userns"}
 
 
 def ready(data: dict, timeout: float = 25.0) -> bool:
@@ -92,7 +92,7 @@ def ready(data: dict, timeout: float = 25.0) -> bool:
     return False
 
 
-def serve(socket_path: Path, clients: Path, tun_socket: Path) -> None:
+def serve(socket_path: Path, clients: Path) -> None:
     socket_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     if socket_path.exists():
         socket_path.unlink()
@@ -112,7 +112,7 @@ def serve(socket_path: Path, clients: Path, tun_socket: Path) -> None:
                     body = conn.recv(MAX_FRAME + 1)
                     if len(body) > MAX_FRAME or json.loads(body) != {"op": "get"}:
                         raise ValueError("invalid request")
-                    result = credentials(uid, clients, tun_socket)
+                    result = credentials(uid, clients)
                     if not ready(result):
                         raise RuntimeError("backend not ready for this profile")
                     response = {"ok": True, **result}
@@ -141,9 +141,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", default="/run/vibelab-egress-enroll/enroll.sock")
     parser.add_argument("--clients-dir", default="/etc/vibelab-egress/secrets/clients")
-    parser.add_argument("--tun-socket", default="/run/vibelab-egress/tun-helper.sock")
     args = parser.parse_args()
-    serve(Path(args.socket), Path(args.clients_dir), Path(args.tun_socket))
+    serve(Path(args.socket), Path(args.clients_dir))
 
 
 if __name__ == "__main__":

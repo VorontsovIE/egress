@@ -12,7 +12,7 @@
 #     /etc/vibelab-egress/client.yaml + token + auth.
 #   * The Docker container running (its name is auto-detected; override with
 #     VIBELAB_EGRESS_CONTAINER if detection fails).
-#   * The TUN helper socket present for the TUN checks (host systemd unit).
+#   * TUN prerequisites available in the local host environment.
 #
 # Usage:
 #   bash scripts/run-live-acceptance.sh                 # default (non-destructive)
@@ -28,7 +28,6 @@
 #   VIBELAB_EGRESS_CONTAINER   Docker container name (default: auto-detect)
 #   VIBELAB_EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health/liveliness)
 #   VIBELAB_EGRESS_CONTAINER_CONFIG      container bundle client.yaml (for static checks)
-#   VIBELAB_EGRESS_TUN_HELPER_SOCKET  TUN helper socket (default /run/vibelab-egress/tun-helper.sock)
 #   VIBELAB_EGRESS_REPO           repo root (default: this script's repo)
 set -uo pipefail
 

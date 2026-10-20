@@ -234,91 +234,22 @@ class TestUsage:
         assert code == egressctl.EXIT_USAGE
 
 class TestCapabilities:
-    def _write_host_cfg(self, tmp_path, **ov):
-        token = tmp_path / "c.token"
-        token.write_text("tok-abc\n")
-        auth = tmp_path / "c.auth"
-        auth.write_text("os-user:os-pass\n")
-        data = {
-            "client_id": "host-main",
-            "control_url": "http://127.0.0.1:9091",
-            "proxy_host": "127.0.0.1",
-            "default_proxy_port": "1080",
-            "oneshot_proxy_port": "1081",
-            "api_token_file": str(token),
-            "default_proxy_auth_file": str(auth),
-            "environment": "host",
-            "tun_backend": "host-helper",
-            "tun_helper_socket": str(tmp_path / "tun.sock"),
-        }
-        data.update(ov)
-        p = tmp_path / "host-client.yaml"
-        p.write_text("\n".join(f"{k}: {v}" for k, v in data.items()) + "\n")
-        return str(p)
-
-    def test_host_helper_reports_supported(self, monkeypatch, tmp_path):
-        from vibelab_egress_client import egress_run
-
-        cfg = self._write_host_cfg(tmp_path)
-        (tmp_path / "tun.sock").write_text("")
-        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
-            "ok": True, "capability": {"status": "supported", "reason": "ok"}})
-        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
-        assert code == 0
-        data = json.loads(out)
-        assert data["tun"]["status"] == "supported"
-        assert data["tun"]["socket"].endswith("tun.sock")
-        assert data["client_version"]
-        assert data["environment"] == "host"
-
-    def test_host_socket_present_but_helper_unsupported(self, monkeypatch, tmp_path):
-        from vibelab_egress_client import egress_run
-
-        cfg = self._write_host_cfg(tmp_path)
-        (tmp_path / "tun.sock").write_text("")
-        monkeypatch.setattr(egress_run, "_tun_helper_call", lambda *a, **k: {
-            "ok": True, "capability": {
-                "status": "unsupported_in_environment",
-                "reason": "ip netns add requires CAP_SYS_ADMIN"}})
-        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
-        assert code == 0
-        data = json.loads(out)
-        assert data["tun"]["status"] == "unsupported_in_environment"
-        assert "CAP_SYS_ADMIN" in data["tun"]["reason"]
-
-    def test_stale_socket_does_not_report_supported(self, monkeypatch, tmp_path):
-        cfg = self._write_host_cfg(tmp_path)
-        (tmp_path / "tun.sock").write_text("")
-        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
-        assert code == 0
-        assert json.loads(out)["tun"]["status"] == "helper_not_running"
-
-    def test_host_helper_socket_missing_not_running(self, monkeypatch, tmp_path):
-        cfg = self._write_host_cfg(tmp_path)
-        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
-        assert code == 0
-        data = json.loads(out)
-        assert data["tun"]["status"] == "helper_not_running"
-
-    def test_container_without_tun_backend_reports_none(self, monkeypatch, cfg_file):
-        code, out, _ = run_cli(monkeypatch, cfg_file, "--json", "capabilities")
-        assert code == 0
-        data = json.loads(out)
-        assert data["tun"]["status"] == "none"
-
-    def test_container_cannot_select_host_helper(self, cfg_file):
-        from vibelab_egress_client.config import load_config, ConfigError
-        from pathlib import Path
+    def test_local_userns_capability_uses_runtime_probe(self, monkeypatch, cfg_file):
+        from vibelab_egress_client import tun_runtime
+        monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "userns and tun available"})
         path = Path(cfg_file)
-        path.write_text(path.read_text().replace("tun_backend: none", "tun_backend: host-helper"))
-        with pytest.raises(ConfigError, match="container cannot use host-helper"):
-            load_config(cfg_file)
-
-    def test_none_backend_without_container_runtime(self, monkeypatch, tmp_path):
-        cfg = self._write_host_cfg(tmp_path, tun_backend="none")
-        code, out, _ = run_cli(monkeypatch, cfg, "--json", "capabilities")
-        assert code == 0
+        path.write_text(path.read_text().replace("tun_backend: none", "tun_backend: local-userns"))
+        code, out, _ = run_cli(monkeypatch, cfg_file, "--json", "capabilities")
         data = json.loads(out)
+        assert code == 0
+        assert data["tun"]["backend"] == "local-userns"
+        assert data["tun"]["status"] == "supported"
+        assert data["tun"]["dns_servers"] == ["1.1.1.1", "1.0.0.1"]
+
+    def test_disabled_capability_is_explicit(self, monkeypatch, cfg_file):
+        code, out, _ = run_cli(monkeypatch, cfg_file, "--json", "capabilities")
+        data = json.loads(out)
+        assert code == 0
         assert data["tun"]["status"] == "none"
 
 

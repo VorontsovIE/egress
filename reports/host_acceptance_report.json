@@ -5,10 +5,10 @@
   "user": "vibelab",
   "python": "3.12.3",
   "config": "/etc/vibelab-egress/client.yaml",
-  "osconfig": "/home/vibelab/openscience/egress/client-bundles/openscience-main/client.yaml",
+  "osconfig": "/home/vibelab/container/egress/client-bundles/container-main/client.yaml",
   "tun_helper_socket": "/run/vibelab-egress/tun-helper.sock",
   "litellm_url": "http://127.0.0.1:4000/health/liveliness",
-  "os_container": "openscience-container-openscience-1",
+  "os_container": "container-container-container-1",
   "redactions": 0,
   "checks": [
     {
@@ -71,15 +71,15 @@
           "1082",
           "1083",
           "globe",
-          "/home/vibelab/openscience/workspace"
+          "/home/vibelab/egress/workspace"
         ],
-        "stdout": "1082\n1083\nglobe\n/home/vibelab/openscience/workspace\n",
+        "stdout": "1082\n1083\nglobe\n/home/vibelab/egress/workspace\n",
         "stderr": "",
         "host_marker_written": true,
         "expected_uid": 1082,
         "expected_gid": 1083,
         "expected_hostname": "globe",
-        "expected_cwd": "/home/vibelab/openscience/workspace",
+        "expected_cwd": "/home/vibelab/egress/workspace",
         "uid": "1082",
         "gid": "1083",
         "hostname": "globe"
@@ -173,13 +173,13 @@
       }
     },
     {
-      "id": "openscience_tun_unsupported",
+      "id": "container_tun_unsupported",
       "spec": "spec50.9",
       "status": "pass",
-      "command": "egress-run --mode tun (openscience config) -> explicit unsupported",
-      "detail": "openscience tun -> explicit unsupported (exit 6), no fallback",
+      "command": "egress-run --mode tun (container config) -> explicit unsupported",
+      "detail": "container tun -> explicit unsupported (exit 6), no fallback",
       "evidence": {
-        "container": "openscience-container-openscience-1",
+        "container": "container-container-container-1",
         "exit": 6,
         "stdout": "",
         "stderr": "egress-run: tun mode is not available in environment 'gvisor-container' (tun_backend=none); use --mode proxy. There is no silent fallback to proxy.\n",
@@ -202,8 +202,8 @@
       "id": "tun_capabilities_accuracy",
       "spec": "spec50.12",
       "status": "pass",
-      "command": "egressctl capabilities (host + openscience) report tun accurately",
-      "detail": "host tun='supported'; openscience tun='unsupported_in_environment'",
+      "command": "egressctl capabilities (host + container) report tun accurately",
+      "detail": "host tun='supported'; container tun='unsupported_in_environment'",
       "evidence": {
         "host": {
           "exit": 0,
@@ -214,10 +214,10 @@
           "status": "supported",
           "reason": "ok"
         },
-        "openscience": {
+        "container": {
           "exit": 0,
           "tun": "unsupported_in_environment",
-          "raw": "{\n  \"client_id\": \"openscience-main\",\n  \"client_version\": \"0.1.0\",\n  \"environment\": \"gvisor-container\",\n  \"tun\": {\n    \"backend\": \"none\",\n    \"reason\": \"gVisor environment (environment='gvisor-container'): no /dev/net/tun / CAP_NET_ADMIN\",\n    \"socket\": null,\n    \"status\": \"unsupported_in_environment\"\n  }\n}\n"
+          "raw": "{\n  \"client_id\": \"container-main\",\n  \"client_version\": \"0.1.0\",\n  \"environment\": \"gvisor-container\",\n  \"tun\": {\n    \"backend\": \"none\",\n    \"reason\": \"gVisor environment (environment='gvisor-container'): no /dev/net/tun / CAP_NET_ADMIN\",\n    \"socket\": null,\n    \"status\": \"unsupported_in_environment\"\n  }\n}\n"
         }
       }
     },
@@ -225,10 +225,10 @@
       "id": "tun_no_gvisor_weakening",
       "spec": "spec50.10",
       "status": "pass",
-      "command": "static audit of host helper unit + OpenScience config",
-      "detail": "host unit capabilities bounded; OpenScience has no helper access",
+      "command": "static audit of host helper unit + Docker-контейнер config",
+      "detail": "host unit capabilities bounded; Docker-контейнер has no helper access",
       "evidence": {
-        "host_unit": "/home/vibelab/openscience/workspace/host/units/vibelab-egress-tun-helper.service",
+        "host_unit": "/home/vibelab/egress/workspace/host/units/vibelab-egress-tun-helper.service",
         "issues": [],
         "os_config_present": false,
         "os_tun_backend": null,
@@ -386,13 +386,13 @@
       }
     },
     {
-      "id": "a8_openscience_recreate_persists",
+      "id": "a8_container_recreate_persists",
       "spec": "spec49.39",
       "status": "skip",
       "command": "docker exec whoami -> docker restart -> whoami (identity persists)",
       "detail": "recreate check disabled by default",
       "evidence": {
-        "reason": "destructive: restarts the OpenScience container; run with --recreate to enable"
+        "reason": "destructive: restarts the Docker-контейнер container; run with --recreate to enable"
       }
     },
     {
@@ -473,7 +473,7 @@
         "exit": 1,
         "summary": {},
         "failed_checks": [],
-        "stderr": "Traceback (most recent call last):\n  File \"/home/vibelab/openscience/workspace/host/egress-host-test\", line 1006, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/vibelab/openscience/workspace/host/egress-host-test\", line 957, in main\n    check_persistent_dirs_permissions()\n  File ",
+        "stderr": "Traceback (most recent call last):\n  File \"/home/vibelab/egress/workspace/host/egress-host-test\", line 1006, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/vibelab/egress/workspace/host/egress-host-test\", line 957, in main\n    check_persistent_dirs_permissions()\n  File ",
         "reason": "host harness requires root to inspect persistent dirs"
       }
     },
@@ -507,7 +507,7 @@
       "evidence": {
         "host_version": "0.1.0",
         "os_version": "0.1.0",
-        "os_container": "openscience-container-openscience-1"
+        "os_container": "container-container-container-1"
       }
     },
     {

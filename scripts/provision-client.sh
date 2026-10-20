@@ -20,12 +20,7 @@
 #   provision-client.sh --client <id> --environment <host|container> \
 #       [--out <bundle-root>] [--secrets-dir <dir>] [--control-url <url>] \
 #       [--proxy-host <host>] [--default-port <p>] [--oneshot-port <p>] \
-#       [--tun-backend <none|host-helper>] [--tun-socket <path>]
-#
-#   --tun-socket: LOCAL path of the TUN helper UNIX socket written to
-#   client.yaml (tun_helper_socket:) when tun_backend=host-helper. Default:
-#   /run/vibelab-egress/tun-helper.sock (host systemd unit; never mounted
-#   into Docker container).
+#       [--tun-backend <none|local-userns>] [--tun-dns <ip,ip,...>]
 #
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
@@ -39,7 +34,7 @@ PROXY_HOST=""
 DEFAULT_PORT=1080
 ONESHOT_PORT=1081
 TUN_BACKEND=""
-TUN_SOCKET="/run/vibelab-egress/tun-helper.sock"
+TUN_DNS="1.1.1.1,1.0.0.1"
 
 die_usage() { echo "provision-client: $*" >&2; exit 2; }
 die_env()   { echo "provision-client: $*" >&2; exit 3; }
@@ -55,7 +50,7 @@ while [ $# -gt 0 ]; do
     --default-port)  DEFAULT_PORT="${2:?}"; shift 2 ;;
     --oneshot-port)  ONESHOT_PORT="${2:?}"; shift 2 ;;
     --tun-backend)   TUN_BACKEND="${2:?}"; shift 2 ;;
-    --tun-socket)    TUN_SOCKET="${2:?}"; shift 2 ;;
+    --tun-dns)       TUN_DNS="${2:?}"; shift 2 ;;
     -h|--help)       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die_usage "unknown argument: $1" ;;
   esac
@@ -67,37 +62,50 @@ case "$ENVIRONMENT" in
   host)
     [ -n "$CONTROL_URL" ] || CONTROL_URL="http://127.0.0.1:9091"
     [ -n "$PROXY_HOST" ] || PROXY_HOST="127.0.0.1"
-    [ -n "$TUN_BACKEND" ] || TUN_BACKEND="host-helper"
+    [ -n "$TUN_BACKEND" ] || TUN_BACKEND="local-userns"
     TOKEN_FILE="/etc/vibelab-egress/client.token"
     AUTH_FILE="/etc/vibelab-egress/default-proxy.auth"
     ;;
   container)
     [ -n "$CONTROL_URL" ] || CONTROL_URL="http://host.docker.internal:9091"
     [ -n "$PROXY_HOST" ] || PROXY_HOST="host.docker.internal"
-    [ -n "$TUN_BACKEND" ] || TUN_BACKEND="none"
-    [ "$TUN_BACKEND" != "host-helper" ] || die_usage "host-helper is host-only; packet-only container TUN is not implemented"
+    [ -n "$TUN_BACKEND" ] || TUN_BACKEND="local-userns"
     TOKEN_FILE="/run/secrets/vibelab_egress_client_token"
     AUTH_FILE="/run/secrets/vibelab_egress_default_proxy_auth"
     ;;
   *) die_usage "--environment must be host or container" ;;
 esac
+# Offline installer scenarios do not ship compiled binaries; they explicitly
+# provision proxy-only clients. Production provisioning remains fail-closed.
+if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" = 1 ] && [ -z "${VIBELAB_EGRESS_TEST_TUN:-}" ]; then
+  TUN_BACKEND="none"
+fi
+[ "$TUN_BACKEND" = local-userns ] || [ "$TUN_BACKEND" = none ] || die_usage "--tun-backend must be local-userns or none"
 
 command -v python3 >/dev/null || die_env "python3 not found"
+TUN_ENGINE_DIST=""
+if [ "$TUN_BACKEND" = local-userns ]; then
+  REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  TUN_ENGINE_DIST="$REPO_ROOT/client/tun-engine/dist"
+  [ -f "$TUN_ENGINE_DIST/egress-tun-engine-linux-amd64" ] && \
+    [ -f "$TUN_ENGINE_DIST/egress-tun-engine-linux-arm64" ] || \
+    die_env "build TUN engines first: scripts/build-tun-engine.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # generate secrets with python3 (secrets module; openssl not required).
 # Values are shlex-quoted so the eval is safe for any token content.
 # ---------------------------------------------------------------------------
-eval "$(python3 - "$CLIENT" "$ENVIRONMENT" <<'PY'
+eval "$(python3 - "$CLIENT" "$ENVIRONMENT" "$TUN_BACKEND" <<'PY'
 import secrets, sys, json, shlex
-client, environment = sys.argv[1], sys.argv[2]
+client, environment, tun_backend = sys.argv[1], sys.argv[2], sys.argv[3]
 api_token = secrets.token_urlsafe(32)
 proxy_user = client
 proxy_pass = secrets.token_urlsafe(24)
 profile = json.dumps({
     "client_id": client,
     "environment": environment,
-    "modes": ["proxy"],
+    "modes": ["proxy"] + (["tun"] if tun_backend == "local-userns" else []),
 }, sort_keys=True)
 print(f"API_TOKEN={shlex.quote(api_token)}")
 print(f"PROXY_USER={shlex.quote(proxy_user)}")
@@ -134,11 +142,14 @@ api_token_file: $TOKEN_FILE
 default_proxy_auth_file: $AUTH_FILE
 environment: $ENVIRONMENT
 tun_backend: $TUN_BACKEND
+tun_dns_servers: $TUN_DNS
 EOF
-# The host-native helper socket is local to the host. The container bundle
-# has tun_backend=none and never receives this path or socket mount.
-if [ "$TUN_BACKEND" = "host-helper" ]; then
-  printf 'tun_helper_socket: %s\n' "$TUN_SOCKET" >> "$BUNDLE_DIR/client.yaml"
+# Include all supported static engine builds when available. Installation
+# fails closed if a local-userns bundle has no matching engine.
+if [ "$TUN_BACKEND" = local-userns ]; then
+  mkdir -p "$BUNDLE_DIR/tun-engine"
+  install -m 755 "$TUN_ENGINE_DIST/egress-tun-engine-linux-amd64" "$TUN_ENGINE_DIST/egress-tun-engine-linux-arm64" "$BUNDLE_DIR/tun-engine/"
+  (cd "$BUNDLE_DIR/tun-engine" && sha256sum egress-tun-engine-linux-* > SHA256SUMS)
 fi
 chmod 644 "$BUNDLE_DIR/client.yaml"
 chmod 700 "$BUNDLE_DIR"

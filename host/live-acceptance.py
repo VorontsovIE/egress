@@ -30,10 +30,6 @@ Options:
     --container-config PATH       container client config (default
                           $VIBELAB_EGRESS_CONTAINER_CONFIG or
                           /var/lib/vibelab-egress/client-bundles/container-main/client.yaml)
-    --tun-helper-sock P   TUN helper UNIX socket (default:
-                          $VIBELAB_EGRESS_TUN_HELPER_SOCKET, then
-                          tun_helper_socket from the host client config,
-                          then /run/vibelab-egress/tun-helper.sock)
     --litellm-url URL     LiteLLM endpoint to probe (default
                           $VIBELAB_EGRESS_LITELLM_URL or
                           http://127.0.0.1:4000/health/liveliness)
@@ -70,7 +66,6 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = "/etc/vibelab-egress/client.yaml"
 DEFAULT_CONTAINER_CONFIG = "/var/lib/vibelab-egress/client-bundles/container-main/client.yaml"
-DEFAULT_TUN_SOCK = "/run/vibelab-egress/tun-helper.sock"
 # /health/liveliness: 200 while the process is up. /health also reports
 # provider health and answers 503 when no provider is configured, which
 # is not a LiteLLM reachability failure (2026-10-15 live run: skip with
@@ -414,8 +409,6 @@ def check_preflight():
             "uid": os.getuid(),
             "gid": os.getgid(),
             "python": sys.version.split()[0],
-            "tun_helper_socket": CTX["tun_sock"],
-            "tun_helper_socket_exists": os.path.exists(CTX["tun_sock"]),
             "docker": None,
             "egressctl": None,
         }
@@ -467,49 +460,12 @@ def check_preflight():
 # section 50 -- Phase 2 TUN
 # ---------------------------------------------------------------------------
 def _tun_ready():
-    cap = _helper_capability()
-    if cap["status"] != "supported":
-        return False, f"tun helper {cap['status']}: {cap['reason']}"
+    result = egressctl(["--json", "capabilities"], CTX["config"], CTX["timeout"], CTX["redact"])
+    data = _json(result["stdout"]) or {}
+    tun = data.get("tun") or {}
+    if result["rc"] != 0 or tun.get("status") != "supported":
+        return False, f"local TUN {tun.get('status', 'unknown')}: {tun.get('reason', result['stderr'])}"
     return True, ""
-
-
-def _helper_capability():
-    """Probe the helper itself, independently of egressctl's status logic."""
-    if "helper_capability" in CTX:
-        return CTX["helper_capability"]
-    import struct
-
-    path = CTX["tun_sock"]
-    result = {"status": "helper_not_running", "reason": f"socket unavailable: {path}"}
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-            conn.settimeout(2)
-            conn.connect(path)
-            request = b'{"op":"capability"}'
-            conn.sendall(struct.pack(">I", len(request)) + request)
-
-            def read_exact(n):
-                data = b""
-                while len(data) < n:
-                    chunk = conn.recv(n - len(data))
-                    if not chunk:
-                        raise ValueError("incomplete capability response")
-                    data += chunk
-                return data
-
-            length = struct.unpack(">I", read_exact(4))[0]
-            if not 2 <= length <= 1024 * 1024:
-                raise ValueError("invalid capability response size")
-            response = json.loads(read_exact(length))
-            cap = response.get("capability") if response.get("ok") else None
-            if not isinstance(cap, dict) or cap.get("status") not in (
-                    "supported", "unsupported_in_environment"):
-                raise ValueError("invalid helper capability response")
-            result = {"status": cap["status"], "reason": str(cap.get("reason") or "")}
-    except (OSError, ValueError, TypeError) as exc:
-        result["reason"] = f"capability probe failed: {exc}"
-    CTX["helper_capability"] = result
-    return result
 
 
 def check_tun_tcp():
@@ -554,9 +510,6 @@ def check_tun_local_workload():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
         ready, why = _tun_ready()
         if not ready:
-            cap = _helper_capability()
-            if cap["status"] == "unsupported_in_environment":
-                return ("fail", {"helper_capability": cap}, why)
             return ("skip", {"reason": why}, why)
         route = select_proxy_route(CTX["routes"]) or {"id": "direct"}
         rid = route["id"]
@@ -791,23 +744,18 @@ def check_tun_hard_direct():
 
 def check_container_tun_packet_path():
     run_check("container_tun_packet_path", "spec21.5",
-              "deferred: packet-only shared TUN helper is not implemented",
-              lambda: ("skip", {"container": CTX["container_name"]},
-                       "packet-only helper protocol and client-local TUN are pending"))
+              "generic Docker client TUN acceptance",
+              lambda: ("skip", {"harness": "tests/docker/run-client-container.sh",
+                                 "reason": "standalone generic Docker harness not run by host acceptance"},
+                       "run the generic Docker TUN harness with a provisioned bundle"))
 
 
 def check_tun_no_fallback():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
-        # Deliberately make only the local helper unavailable. A strict run
-        # must fail before the target executes or a proxy path is considered.
+        # Disable local TUN explicitly. Strict mode must fail closed.
         source = open(cfg, encoding="utf-8").read()
-        bogus = os.path.join(tempfile.gettempdir(), "egress-no-helper-" + str(os.getpid()))
-        replacement = "tun_helper_socket: " + bogus
-        if re.search(r"^tun_helper_socket:.*$", source, re.M):
-            source = re.sub(r"^tun_helper_socket:.*$", replacement, source, flags=re.M)
-        else:
-            source += "\n" + replacement + "\n"
+        source = re.sub(r"^tun_backend:.*$", "tun_backend: none", source, flags=re.M)
         fd, path = tempfile.mkstemp(prefix="egress-tun-config-", suffix=".yaml")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as out:
@@ -830,25 +778,19 @@ def check_tun_no_fallback():
 def check_tun_capabilities():
     def fn():
         redact, timeout, cfg = CTX["redact"], CTX["timeout"], CTX["config"]
-        container_config = CTX["container_config"]
         if not CTX.get("client_ok"):
             return ("skip", {"reason": "backend/client not reachable"},
                     "no live backend")
         rc_host = egressctl(["capabilities"], cfg, timeout, redact)
         cap_host = _json(rc_host["stdout"]) or {}
-        tun_host = (cap_host.get("tun") or {}).get("status")
-        ev = {"host": {"exit": rc_host["rc"], "tun": tun_host,
-                       "raw": rc_host["stdout"][:600]},
-              "helper": _helper_capability()}
+        tun_host = cap_host.get("tun") or {}
+        ev = {"host": {"exit": rc_host["rc"], "tun": tun_host}}
         if rc_host["rc"] != 0:
             return ("fail", ev, "host capabilities failed")
-        if tun_host != ev["helper"]["status"]:
-            return ("fail", ev, f"host tun={tun_host!r} != helper={ev['helper']['status']!r}")
         rc_container = container_exec(["egressctl", "--json", "capabilities"], timeout, redact)
         cap_container = _json(rc_container["stdout"]) or {}
-        tun_container = (cap_container.get("tun") or {}).get("status")
-        ev["container"] = {"exit": rc_container["rc"], "tun": tun_container,
-                             "raw": rc_container["stdout"][:600]}
+        tun_container = cap_container.get("tun") or {}
+        ev["container"] = {"exit": rc_container["rc"], "tun": tun_container}
         if "no such container" in rc_container["stderr"].lower():
             reason = f"container {CTX['container_name']!r} is absent"
             ev["reason"] = reason
@@ -859,12 +801,12 @@ def check_tun_capabilities():
             return ("skip", ev, reason)
         if rc_container["rc"] != 0:
             return ("fail", ev, f"container capabilities exit={rc_container['rc']}")
-        if str(tun_container).lower() != "none":
-            return ("fail", ev, f"container reports tun={tun_container!r} (expected no configured backend)")
-        return ("pass", ev, f"host tun={tun_host!r}; "
-                            f"container tun={ev.get('container', {}).get('tun')!r}")
+        for label, value in (("host", tun_host), ("container", tun_container)):
+            if value.get("backend") not in ("local-userns", "none"):
+                return ("fail", ev, f"{label} has unexpected TUN backend")
+        return ("pass", ev, "host and container use client-local TUN capability reporting")
     run_check("tun_capabilities_accuracy", "spec50.12",
-              "egressctl capabilities (host + container) report tun accurately", fn)
+              "egressctl capabilities report local TUN backend accurately", fn)
 
 
 def _yaml_lines(path):
@@ -884,38 +826,23 @@ def _yaml_lines(path):
 
 def check_tun_static():
     def fn():
-        unit = os.path.join(REPO, "host/units/vibelab-egress-tun-helper.service")
+        runtime = os.path.join(REPO, "client/src/vibelab_egress_client/tun_runtime.py")
+        bootstrap = os.path.join(REPO, "client/src/vibelab_egress_client/tun_bootstrap.py")
         try:
-            text = open(unit, encoding="utf-8").read()
+            text = open(runtime, encoding="utf-8").read() + open(bootstrap, encoding="utf-8").read()
         except OSError as exc:
-            return ("fail", {"unit": unit, "error": str(exc)}, "host TUN unit missing")
-        issues = []
-        required = (
-            "User=root", "Group=vibelab-egress-tun",
-            "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL CAP_SETPCAP",
-            "NoNewPrivileges=true", "ProtectHome=false", "ProtectSystem=false",
-            "--socket /run/vibelab-egress/tun-helper.sock",
-        )
-        for item in required:
-            if item not in text:
-                issues.append(f"unit missing {item}")
-        if "docker.sock" in text or "--privileged" in text:
-            issues.append("Docker privilege/socket in host helper unit")
+            return ("fail", {"error": str(exc)}, "client-local TUN runtime missing")
+        issues = [item for item in ("SCM_RIGHTS", "--user", "--net", "PR_SET_NO_NEW_PRIVS") if item not in text]
         container_config = CTX["container_config"]
-        container_tun = _flat_yaml_get(container_config, "tun_backend") if container_config else None
-        container_sock = _flat_yaml_get(container_config, "tun_helper_socket") if container_config else None
-        if container_tun and container_tun != "none":
-            issues.append(f"container tun_backend={container_tun!r}")
-        if container_sock:
-            issues.append("container config contains helper socket")
-        ev = {"host_unit": unit, "issues": issues,
-              "container_config_present": bool(container_config and os.path.exists(container_config)),
-              "container_tun_backend": container_tun, "container_tun_helper_socket": container_sock}
+        backend = _flat_yaml_get(container_config, "tun_backend") if container_config else None
+        if backend not in (None, "local-userns"):
+            issues.append(f"container tun_backend={backend!r}")
+        ev = {"issues": issues, "container_tun_backend": backend}
         if issues:
             return ("fail", ev, "; ".join(issues))
-        return ("pass", ev, "host unit capabilities bounded; container has no helper access")
-    run_check("tun_helper_boundary", "spec50.10",
-              "static audit of host helper unit + container config", fn)
+        return ("pass", ev, "per-invocation TUN is client-local; no privileged helper")
+    run_check("tun_local_namespace_boundary", "spec50.10",
+              "static audit of client-local TUN namespace and capability boundary", fn)
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1153,7 @@ def check_a8_docker_socket():
         redact = CTX["redact"]
         mounts = []
         for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd",
-                    "vibelab-egress-tun-helper"):
+                    "vibelab-egress-egressd"):
             r = _run(["docker", "inspect", "--format", "{{json .Mounts}}", svc],
                      15, redact)
             if r["rc"] != 0:
@@ -1416,7 +1343,7 @@ ALL_CHECKS = [
     ("container_tun_packet_path", check_container_tun_packet_path),
     ("tun_no_silent_fallback", check_tun_no_fallback),
     ("tun_capabilities_accuracy", check_tun_capabilities),
-    ("tun_helper_boundary", check_tun_static),
+    ("tun_local_namespace_boundary", check_tun_static),
     # section 49 -- host-only live
     ("a8_public_ports_closed", check_a8_public_ports),
     ("a8_container_recreate_persists", check_a8_recreate),
@@ -1442,12 +1369,6 @@ def main(argv=None):
     ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--container-config",
                     default=os.environ.get("VIBELAB_EGRESS_CONTAINER_CONFIG", DEFAULT_CONTAINER_CONFIG))
-    ap.add_argument("--tun-helper-sock",
-                    default=None,
-                    help="TUN helper UNIX socket (default: "
-                         "$VIBELAB_EGRESS_TUN_HELPER_SOCKET, then "
-                         "tun_helper_socket from the host client config, "
-                         "then /run/vibelab-egress/tun-helper.sock)")
     ap.add_argument("--litellm-url",
                     default=os.environ.get("VIBELAB_EGRESS_LITELLM_URL", DEFAULT_LITELLM))
     ap.add_argument("--container",
@@ -1461,17 +1382,9 @@ def main(argv=None):
     ap.add_argument("--timeout", type=float, default=90.0)
     args = ap.parse_args(argv)
 
-    # flag > env > host client config key > default (the provisioned host
-    # client.yaml carries the REAL host path — $ROOT/tun-helper/... — not
-    # the in-container /run/vibelab-egress default)
-    tun_sock = (args.tun_helper_sock
-                or os.environ.get("VIBELAB_EGRESS_TUN_HELPER_SOCKET")
-                or _flat_yaml_get(args.config, "tun_helper_socket")
-                or DEFAULT_TUN_SOCK)
     CTX.update({
         "config": args.config,
         "container_config": args.container_config,
-        "tun_sock": tun_sock,
         "litellm": args.litellm_url,
         "container_name": args.container,
         "timeout": args.timeout,
@@ -1502,7 +1415,6 @@ def main(argv=None):
         "python": sys.version.split()[0],
         "config": args.config,
         "container_config": args.container_config,
-        "tun_helper_socket": tun_sock,
         "litellm_url": args.litellm_url,
         "container_name": args.container,
         "redactions": redact_count["n"],

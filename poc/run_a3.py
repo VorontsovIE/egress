@@ -62,7 +62,7 @@ SECRET = "a3-mihomo-secret"
 
 CLIENTS = {
     "host-main": ("host-user", "host-pass"),
-    "openscience-main": ("os-user", "os-pass"),
+    "container-main": ("os-user", "os-pass"),
 }
 OS_SLOTS = 4
 OS_SECRETS = [f"os-pass-{i}" for i in range(OS_SLOTS)]
@@ -442,7 +442,7 @@ def main():
     log("egressd is up")
 
     H = "tok-host-main"
-    O = "tok-openscience-main"
+    O = "tok-container-main"
 
     # =========================================================================
     # 1. config + catalog
@@ -466,7 +466,7 @@ def main():
     _, go = egress("GET", "/v1/default", token=O)
     # debug: what does mihomo think the selectors are right now?
     _, dbg_h = mihomo_api("GET", "/proxies/host-main")
-    _, dbg_o = mihomo_api("GET", "/proxies/openscience-main")
+    _, dbg_o = mihomo_api("GET", "/proxies/container-main")
     log(f"DEBUG mihomo now: host-main={dbg_h.get('now') if isinstance(dbg_h, dict) else dbg_h} "
         f"os={dbg_o.get('now') if isinstance(dbg_o, dict) else dbg_o}")
     # data plane: each client's default proxy hits its own node
