@@ -23,7 +23,7 @@
   скрипт-установки seed-ит mihomo из `host/geo/`, иначе mihomo скачает сам
   через `geox-url`).
 - Для TUN в клиентских bundle заранее собрать static engine на доверенной
-  build-машине: `scripts/build-tun-engine.sh` (Go 1.26.3; результат в
+  build-машине: `scripts/build-tun-engine.sh` (стабильный Go 1.26.3 или новее; результат в
   `client/tun-engine/dist/`).
 
 ### Persistent paths
@@ -160,8 +160,8 @@ selected one-shot SOCKS route. The helper service, helper socket, and
 
 For an already installed backend, this one command prepares and installs a host
 client profile (and reuses its existing bundle without rotating credentials).
-It builds the packet engine when missing; Go 1.26.3 is needed only for that
-build. For a fresh backend install, build the engine first as shown below, then
+It builds the packet engine when missing; stable Go 1.26.3 or newer is needed
+only for that build. For a fresh backend install, build the engine first as shown below, then
 `install-backend-host.sh` provisions and installs `host-main` automatically.
 
 ```bash
@@ -332,7 +332,7 @@ docker exec <container> rm -rf /tmp/vibelab-egress-client
    environment agent-capable (container).
 
 Для TUN host и container требуют статический packet engine, собранный
-командой `scripts/build-tun-engine.sh` (Go 1.26.3). Provisioning включает его
+командой `scripts/build-tun-engine.sh` (стабильный Go 1.26.3 или новее). Provisioning включает его
 в bundle; установка проверяет checksum и выбирает сборку по архитектуре.
 
 5–7. **Проверки**:

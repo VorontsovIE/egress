@@ -19,7 +19,7 @@ Usage:
 
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
-test. Building the engine requires Go 1.26.3.
+test. Building the engine requires stable Go 1.26.3 or newer.
 Options: --out <bundle-root>, --secrets-dir <path>.
 EOF
 }
