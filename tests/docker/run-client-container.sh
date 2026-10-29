@@ -33,15 +33,78 @@ docker exec -u root "$NAME" bash /workspace/scripts/install-client.sh \
 docker exec "$NAME" egressctl whoami
 docker exec "$NAME" egressctl doctor
 OUTER_NETNS="$(docker exec "$NAME" readlink /proc/self/ns/net)"
+ROUTE_INDEX=0
 for route in "${ROUTES[@]}"; do
+  ROUTE_INDEX=$((ROUTE_INDEX + 1))
   docker exec "$NAME" egress-run --mode proxy "$route" -- sh -c 'test -e /.dockerenv'
-  TUN_NETNS_A="$(docker exec "$NAME" egress-run --mode tun "$route" -- readlink /proc/self/ns/net)"
-  TUN_NETNS_B="$(docker exec "$NAME" egress-run --mode tun "$route" -- readlink /proc/self/ns/net)"
+  # Keep both workloads alive while comparing netns inode IDs. Linux may
+  # recycle an ID after a namespace exits, so sequential readlink calls can
+  # report the same value even though each invocation got a new namespace.
+  NS_CHECK_DIR="/tmp/vibelab-egress-netns-${NAME}-${ROUTE_INDEX}"
+  NS_A="$NS_CHECK_DIR/a"
+  NS_B="$NS_CHECK_DIR/b"
+  NS_RELEASE="$NS_CHECK_DIR/release"
+  NS_LOG_A="$NS_CHECK_DIR/a.log"
+  NS_LOG_B="$NS_CHECK_DIR/b.log"
+  NS_STATUS_A="$NS_CHECK_DIR/a.status"
+  NS_STATUS_B="$NS_CHECK_DIR/b.status"
+  docker exec "$NAME" mkdir -m 700 "$NS_CHECK_DIR"
+  docker exec -d "$NAME" sh -c '
+    egress-run --mode tun "$1" -- python3 /workspace/tests/docker/netns-worker.py \
+      "$2" "$3" "$4" >"$5" 2>&1
+    rc=$?
+    printf "%s\n" "$rc" >"$6"
+    exit "$rc"
+  ' sh "$route" "$NS_A" "$NS_B" "$NS_RELEASE" "$NS_LOG_A" "$NS_STATUS_A"
+  docker exec -d "$NAME" sh -c '
+    egress-run --mode tun "$1" -- python3 /workspace/tests/docker/netns-worker.py \
+      "$2" "$3" "$4" >"$5" 2>&1
+    rc=$?
+    printf "%s\n" "$rc" >"$6"
+    exit "$rc"
+  ' sh "$route" "$NS_B" "$NS_A" "$NS_RELEASE" "$NS_LOG_B" "$NS_STATUS_B"
+  NS_READY=0
+  for _ in {1..600}; do
+    if docker exec "$NAME" test -s "$NS_A" && docker exec "$NAME" test -s "$NS_B"; then
+      NS_READY=1
+      break
+    fi
+    if docker exec "$NAME" test -f "$NS_STATUS_A" || docker exec "$NAME" test -f "$NS_STATUS_B"; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$NS_READY" != 1 ]; then
+    docker exec "$NAME" sh -c 'cat "$1" "$2" 2>/dev/null || true' \
+      sh "$NS_LOG_A" "$NS_LOG_B" >&2
+    echo "route $route: concurrent TUN invocations failed to enter their namespaces" >&2
+    exit 1
+  fi
+  TUN_NETNS_A="$(docker exec "$NAME" cat "$NS_A")"
+  TUN_NETNS_B="$(docker exec "$NAME" cat "$NS_B")"
   [ "$TUN_NETNS_A" != "$OUTER_NETNS" ] && [ "$TUN_NETNS_B" != "$OUTER_NETNS" ] \
     && [ "$TUN_NETNS_A" != "$TUN_NETNS_B" ] || {
-      echo "route $route: TUN invocations did not get separate network namespaces" >&2
+      docker exec "$NAME" touch "$NS_RELEASE"
+      echo "route $route: concurrent TUN invocations shared a network namespace" >&2
       exit 1
     }
+  docker exec "$NAME" touch "$NS_RELEASE"
+  NS_DONE=0
+  for _ in {1..600}; do
+    if docker exec "$NAME" test -f "$NS_STATUS_A" && docker exec "$NAME" test -f "$NS_STATUS_B"; then
+      NS_DONE=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$NS_DONE" != 1 ] || \
+     [ "$(docker exec "$NAME" cat "$NS_STATUS_A" 2>/dev/null || true)" != 0 ] || \
+     [ "$(docker exec "$NAME" cat "$NS_STATUS_B" 2>/dev/null || true)" != 0 ]; then
+    docker exec "$NAME" sh -c 'cat "$1" "$2" 2>/dev/null || true' \
+      sh "$NS_LOG_A" "$NS_LOG_B" >&2
+    echo "route $route: concurrent TUN namespace checks did not complete cleanly" >&2
+    exit 1
+  fi
   docker exec "$NAME" egress-run --mode tun "$route" -- sh -c 'test -e /.dockerenv'
   docker exec "$NAME" egress-run --mode tun "$route" -- python3 -c \
     's=open("/proc/self/status").read(); assert "NoNewPrivs:\t1" in s; assert "CapEff:\t0000000000000000" in s'

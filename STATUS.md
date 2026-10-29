@@ -2,6 +2,18 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Устойчивое сравнение TUN namespace в Docker harness — 2026-10-29
+
+Проверка сравнивала inode network namespace двух последовательных запусков.
+Ядро может переиспользовать inode после завершения первого workload, поэтому
+это давало ложный отказ при корректных отдельных namespace. Теперь harness
+одновременно запускает два TUN workload, удерживает их живыми до сравнения
+inode с outer namespace и затем проверяет успешное завершение обоих.
+Проверка concurrent local-userns TUN прошла в обычном Docker-контейнере без
+`CAP_NET_ADMIN`/`CAP_SYS_ADMIN`; offline suite — **329 passed**, install
+harness — **77 passed**. End-to-end harness с реальным provider route нужно
+повторить на backend пользователя.
+
 ## Personal route для generic Docker test — 2026-10-29
 
 Для host-owned personal route добавлена явная опция
