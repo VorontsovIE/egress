@@ -194,6 +194,19 @@ sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test --route blanc:FI-Helsinki-1
 ```
 
+Для персонального маршрута host-профиля (ID начинается с `p-`) добавьте
+`--copy-personal-source`. Host скопирует нормализованный snapshot в новый
+персональный источник тестового клиента и заменит ID маршрута перед запуском
+контейнера. URL исходной подписки и YAML с узлами не попадут в bundle или
+контейнер. Snapshot независимый: повторный запуск обновит его с host-источника.
+Например:
+
+```bash
+sudo scripts/setup-egress-client.sh --client egress-test-client \
+  --environment container --docker-test \
+  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
+```
+
 The same test harness can be run directly with an existing bundle:
 
 ```bash

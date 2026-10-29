@@ -17,11 +17,14 @@ not use host networking, `--privileged`, or `CAP_NET_ADMIN`.
 2. Build the static TUN engine with `scripts/build-tun-engine.sh` before
    provisioning the client bundle.
 3. Host client is installed and `egressctl status` succeeds.
-4. The generic container test needs a route ID and Docker access:
+4. Для generic container test нужен Docker и маршрут, видимый тестовому
+   профилю. Персональный маршрут host-профиля сначала копируется в snapshot
+   тестового клиента:
 
 ```bash
-scripts/provision-client.sh --client container-main --environment container
- tests/docker/run-client-container.sh /var/lib/vibelab-egress/client-bundles/container-main <route>
+sudo scripts/setup-egress-client.sh --client egress-test-client \
+  --environment container --docker-test \
+  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
 ```
 
 The harness builds and runs an ordinary Docker image, installs the bundled

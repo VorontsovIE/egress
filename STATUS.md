@@ -2,6 +2,20 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Personal route для generic Docker test — 2026-10-29
+
+Для host-owned personal route добавлена явная опция
+`--copy-personal-source` в `setup-egress-client.sh`. `egress-hostctl` проверяет
+owner route, читает normalized provider snapshot на backend host и передаёт его
+в существующий snapshot API от имени отдельного container test profile. Route
+получает новый client-owned ID; доступ к исходному маршруту не расширяется,
+source URL/YAML и node credentials не попадают в bundle, Docker container или
+логи; API-запросы принудительно идут напрямую на loopback, без proxy и HTTP
+redirects. Повторный запуск обновляет test snapshot. Добавлены unit-тесты
+hostctl. Проверки: offline suite **329 passed**,
+install harness **77 passed**, статические проверки прошли. Live-проверка
+требует работающий backend с исходным provider.
+
 ## Минимальная версия Go для TUN engine — 2026-10-29
 
 Сборка `client/tun-engine` теперь принимает стабильный Go 1.26.3 или новее;

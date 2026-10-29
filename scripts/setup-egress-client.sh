@@ -5,9 +5,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT=""
 ENVIRONMENT=""
-OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-/var/lib/vibelab-egress/client-bundles}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-}"
+SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-}"
+if [ -r /etc/vibelab-egress/compose.env ]; then
+  # Read only these data values; do not source/evaluate the Compose env file.
+  while IFS='=' read -r key value; do
+    case "$key" in
+      VIBELAB_EGRESS_ROOT) [ -n "$EGRESS_ROOT" ] || EGRESS_ROOT="$value" ;;
+      VIBELAB_EGRESS_SECRETS) [ -n "$SECRETS_DIR" ] || SECRETS_DIR="$value" ;;
+    esac
+  done < /etc/vibelab-egress/compose.env
+fi
+EGRESS_ROOT="${EGRESS_ROOT:-/var/lib/vibelab-egress}"
+SECRETS_DIR="${SECRETS_DIR:-/etc/vibelab-egress/secrets}"
+OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-$EGRESS_ROOT/client-bundles}"
+OUT_EXPLICIT=0
 DOCKER_TEST=0
+COPY_PERSONAL_SOURCE=0
 ROUTES=()
 
 usage() {
@@ -15,12 +29,14 @@ usage() {
 Usage:
   sudo scripts/setup-egress-client.sh --client <id> --environment host
   sudo scripts/setup-egress-client.sh --client <id> --environment container \
-      --docker-test --route <provider:route> [--route <provider:route> ...]
+      --docker-test --route <provider:route> [--copy-personal-source]
 
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
 test. Building the engine requires stable Go 1.26.3 or newer.
-Options: --out <bundle-root>, --secrets-dir <path>.
+Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
+--copy-personal-source snapshots a personal route under the test client's own
+identity before running the Docker test; it does not grant access to its owner.
 EOF
 }
 fail() { echo "setup-egress-client: $*" >&2; exit 2; }
@@ -29,9 +45,16 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --client) [ "$#" -ge 2 ] || fail "--client needs a value"; CLIENT="$2"; shift 2 ;;
     --environment) [ "$#" -ge 2 ] || fail "--environment needs a value"; ENVIRONMENT="$2"; shift 2 ;;
-    --out) [ "$#" -ge 2 ] || fail "--out needs a value"; OUT="$2"; shift 2 ;;
+    --out) [ "$#" -ge 2 ] || fail "--out needs a value"; OUT="$2"; OUT_EXPLICIT=1; shift 2 ;;
     --secrets-dir) [ "$#" -ge 2 ] || fail "--secrets-dir needs a value"; SECRETS_DIR="$2"; shift 2 ;;
+    --root)
+      [ "$#" -ge 2 ] || fail "--root needs a value"
+      EGRESS_ROOT="$2"
+      [ "$OUT_EXPLICIT" = 1 ] || OUT="$EGRESS_ROOT/client-bundles"
+      shift 2
+      ;;
     --docker-test) DOCKER_TEST=1; shift ;;
+    --copy-personal-source) COPY_PERSONAL_SOURCE=1; shift ;;
     --route) [ "$#" -ge 2 ] || fail "--route needs a value"; ROUTES+=("$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown argument: $1" ;;
@@ -45,12 +68,19 @@ case "$ENVIRONMENT" in
   container)
     if [ "$DOCKER_TEST" = 1 ]; then
       [ "${#ROUTES[@]}" -gt 0 ] || fail "--docker-test requires at least one --route"
+      if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
+        [ "${#ROUTES[@]}" = 1 ] || fail "--copy-personal-source requires exactly one --route"
+      fi
     elif [ "${#ROUTES[@]}" -gt 0 ]; then
       fail "--route requires --docker-test"
+    elif [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
+      fail "--copy-personal-source requires --docker-test"
     fi
     ;;
   *) fail "--environment must be host or container" ;;
 esac
+[ "$ENVIRONMENT" = container ] || [ "$COPY_PERSONAL_SOURCE" = 0 ] || \
+  fail "--copy-personal-source applies only to a Docker container test"
 
 DIST="$ROOT/client/tun-engine/dist"
 if [ ! -x "$DIST/egress-tun-engine-linux-amd64" ] || \
@@ -78,6 +108,15 @@ if [ "$ENVIRONMENT" = host ]; then
     --client "$CLIENT" --target host --bundle "$BUNDLE"
   echo "Host client is ready. Check TUN support with: egressctl capabilities"
 elif [ "$DOCKER_TEST" = 1 ]; then
+  if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
+    result="$(VIBELAB_EGRESS_ROOT="$EGRESS_ROOT" \
+      VIBELAB_EGRESS_SECRETS="$SECRETS_DIR" \
+      python3 "$ROOT/host/egress-hostctl" copy-personal-source \
+        --source-route "${ROUTES[0]}" --target-client "$CLIENT")"
+    copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"
+    echo "using test-owned snapshot route: $copied_route"
+    ROUTES=("$copied_route")
+  fi
   bash "$ROOT/tests/docker/run-client-container.sh" "$BUNDLE" "${ROUTES[@]}"
 else
   cat <<EOF

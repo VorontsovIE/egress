@@ -59,7 +59,7 @@
 │                                       # detection/normalization/redaction/atomic-write+LKG
 │
 ├── host/                               # host-side инструменты (Python stdlib-only, fixed argv)
-│   ├── egress-hostctl                  # узкий CLI: deploy/status/logs/sync-docker-cidrs/run-acceptance
+│   ├── egress-hostctl                  # узкий CLI: deploy/status/logs/CIDRs/acceptance/client provisioning
 │   ├── egress-host-test                # host acceptance harness (--static без Docker daemon)
 │   ├── egress-devbridge                # dev/test bridge: фиксированные ops, bearer-token, 172.17.0.1:9099
 │   ├── live-acceptance.py              # live acceptance (spec §50, §49) → один JSON-репорт
@@ -138,7 +138,9 @@
    host и произвольный Docker-контейнер без package index. Отдельный pinned
    static TUN engine собирается по `client/tun-engine/go.mod` и включается в
    bundle; не добавлять Python dependencies.
-3. **Host-инструменты — fixed argv.** `host/egress-hostctl`, `egress-host-test`,
+3. **Host-инструменты — fixed argv.** `host/egress-hostctl`, включая
+   `copy-personal-source` для копирования нормализованного snapshot в явно
+   указанный container test profile, `egress-host-test`,
    `egress-devbridge`, `live-acceptance.py`: Python stdlib-only, фиксированный
    allowlist команд, без `shell=True`/`os.system`, без free-form command input.
    Это security-инварианты (spec §33–38); A8 security gate их проверяет.

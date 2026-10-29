@@ -63,8 +63,12 @@ egressctl config validate && egressctl whoami && egressctl doctor
 
 ```sh
 sudo scripts/setup-egress-client.sh --client egress-test-client \
-  --environment container --docker-test --route blanc:FI-Helsinki-1
+  --environment container --docker-test \
+  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
 ```
+
+`--copy-personal-source` нужен только для host-owned personal route (`p-…`).
+Он создаёт отдельный snapshot тестового клиента, не открывая ему host-маршрут.
 
 Дальше — обычный workflow: `egress-run <route> -- command`,
 `egressctl route set/list`, `egressctl best`, skill для агентов —

@@ -17,6 +17,7 @@ Subcommands:
   deploy / redeploy   docker compose up -d [--force-recreate] on the fixed path
   run-acceptance      invoke sibling egress-host-test, pass through its report
   install-client <t>  copy a pre-built client bundle to a fixed target
+  copy-personal-source copy a normalized personal snapshot to a test container client
 """
 
 import argparse
@@ -29,6 +30,10 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 # The installer records the dedicated service UID and non-default paths here.
 # These are non-secret Compose substitutions, never executable shell input.
@@ -349,6 +354,160 @@ def cmd_install_client(args):
 
 
 # --------------------------------------------------------------------------
+# copy a private provider snapshot to a container test profile
+# --------------------------------------------------------------------------
+
+_PERSONAL_PROVIDER_RE = re.compile(r"^p-([0-9a-f]{24})-([A-Za-z0-9._-]{1,32})$")
+_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_ROUTE_ID_RE = re.compile(r"^([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$")
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_PERSONAL_API_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
+
+
+def _read_secret(path):
+    try:
+        if path.is_symlink() or not path.is_file():
+            err("required client credential is missing or unsafe", 3)
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        err("cannot read required client credential", 3)
+    if not value:
+        err("required client credential is empty", 3)
+    return value
+
+
+def _personal_api(method, path, token, payload=None):
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        "http://127.0.0.1:9091" + path,
+        data=body,
+        method=method,
+        headers={"Authorization": "Bearer " + token,
+                 "Content-Type": "application/json"},
+    )
+    try:
+        with _PERSONAL_API_OPENER.open(request, timeout=15) as response:
+            raw = response.read(65536)
+    except HTTPError as exc:
+        err("personal snapshot API returned HTTP %d" % exc.code, 3)
+    except (URLError, OSError, TimeoutError):
+        err("personal snapshot API is unavailable on 127.0.0.1:9091", 3)
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        err("personal snapshot API returned invalid JSON", 3)
+    if not isinstance(result, dict):
+        err("personal snapshot API returned an invalid response", 3)
+    return result
+
+
+def cmd_copy_personal_source(args):
+    if os.geteuid() != 0:
+        err("copy-personal-source must run as root", 3)
+    if not _CLIENT_ID_RE.fullmatch(args.target_client):
+        err("invalid target client ID", 2)
+    route = _ROUTE_ID_RE.fullmatch(args.source_route)
+    if not route:
+        err("source route must be a personal route ID", 2)
+    source_provider, node = route.groups()
+    provider_match = _PERSONAL_PROVIDER_RE.fullmatch(source_provider)
+    if not provider_match:
+        err("source route is not a personal provider route", 2)
+
+    root = Path(root_dir()).resolve()
+    secrets = Path(os.environ.get("VIBELAB_EGRESS_SECRETS",
+                                  "/etc/vibelab-egress/secrets")).resolve()
+    providers_dir = (root / "providers").resolve()
+    personal_dir = (root / "egressd" / "personal").resolve()
+    source_yaml = providers_dir / (source_provider + ".yaml")
+    source_meta = personal_dir / (source_provider + ".json")
+    target_profile = secrets / "clients" / (args.target_client + ".profile.json")
+    target_token_path = secrets / "clients" / (args.target_client + ".token")
+
+    if source_yaml.is_symlink() or source_meta.is_symlink() or target_profile.is_symlink():
+        err("personal provider or target profile path is unsafe", 3)
+    try:
+        meta = json.loads(source_meta.read_text(encoding="utf-8"))
+        source = source_yaml.read_bytes()
+    except (OSError, ValueError, UnicodeError):
+        err("personal provider snapshot or metadata is missing", 3)
+    if meta.get("provider_id") != source_provider or \
+       not _CLIENT_ID_RE.fullmatch(str(meta.get("client_id", ""))) or \
+       not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", str(meta.get("alias", ""))):
+        err("personal provider metadata is invalid", 3)
+    if len(source) > 4 * 1024 * 1024:
+        err("personal provider snapshot exceeds the supported size", 3)
+    if source_provider != "p-%s-%s" % (
+            provider_match.group(1), meta["alias"]):
+        err("personal provider ID does not match its metadata", 3)
+    try:
+        profile = json.loads(target_profile.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        err("target client profile is missing or invalid", 3)
+    if profile.get("client_id") != args.target_client or \
+       profile.get("environment") != "container":
+        err("target profile must be the requested container client", 3)
+
+    source_alias = meta["alias"]
+    suffix = hashlib.sha256(source_provider.encode("ascii")).hexdigest()[:8]
+    target_alias = "test-%s-%s" % (source_alias[:18], suffix)
+    target_alias = target_alias[:32]
+    target_provider = "p-%s-%s" % (
+        hashlib.sha256(args.target_client.encode("utf-8")).hexdigest()[:24],
+        target_alias,
+    )
+    target_meta_path = personal_dir / (target_provider + ".json")
+    target_yaml_path = providers_dir / (target_provider + ".yaml")
+    if target_yaml_path.is_symlink():
+        err("target test snapshot path is unsafe", 3)
+    if target_meta_path.exists():
+        if target_meta_path.is_symlink():
+            err("target test snapshot metadata path is unsafe", 3)
+        try:
+            old_target = json.loads(target_meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            err("target test snapshot metadata is invalid", 3)
+        if old_target.get("client_id") != args.target_client or \
+           old_target.get("kind") != "snapshot":
+            err("generated test alias collides with a non-test personal source", 3)
+
+    source_token_path = secrets / "clients" / (meta["client_id"] + ".token")
+    source_token = _read_secret(source_token_path)
+    target_token = _read_secret(target_token_path)
+    source_route_quoted = quote(args.source_route, safe="")
+    # Confirm that the source profile can see this exact route before copying
+    # any provider data to the explicitly selected test client.
+    _personal_api("GET", "/v1/routes/" + source_route_quoted, source_token)
+
+    try:
+        yaml_text = source.decode("utf-8")
+    except UnicodeError:
+        err("personal provider snapshot is not UTF-8", 3)
+    body = _personal_api(
+        "PUT", "/v1/personal/providers/%s/snapshot" % quote(target_alias, safe=""),
+        target_token, {"yaml": yaml_text},
+    )
+    if body.get("provider_id") != target_provider:
+        err("personal snapshot API returned an unexpected provider ID", 3)
+    copied_route = target_provider + ":" + node
+    _personal_api("GET", "/v1/routes/" + quote(copied_route, safe=""), target_token)
+    print(json.dumps({
+        "ok": True,
+        "source_provider": source_provider,
+        "target_provider": body.get("provider_id", target_provider),
+        "target_route": copied_route,
+        "node_count": body.get("node_count"),
+    }, sort_keys=True))
+    return 0
+
+
+# --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
 
@@ -391,6 +550,12 @@ def build_parser():
     s.add_argument("--bundle", required=True)
     s.set_defaults(fn=cmd_install_client)
 
+    s = sub.add_parser("copy-personal-source",
+                       help="copy a normalized personal provider snapshot to a container client")
+    s.add_argument("--source-route", required=True)
+    s.add_argument("--target-client", required=True)
+    s.set_defaults(fn=cmd_copy_personal_source)
+
     return p
 
 
@@ -400,7 +565,7 @@ def main(argv=None):
     if not getattr(a, "fn", None):
         p.print_usage(sys.stderr)
         err("missing or unknown subcommand (allowed: sync-docker-cidrs, status, logs, "
-            "deploy, redeploy, run-acceptance, install-client)", 2)
+            "deploy, redeploy, run-acceptance, install-client, copy-personal-source)", 2)
     return a.fn(a)
 
 
