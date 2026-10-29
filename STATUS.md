@@ -2,6 +2,19 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Route aliases в пользовательских CLI — 2026-10-29
+
+Docker setup принимает `@alias:node` для персональных маршрутов. При
+`--copy-personal-source` shorthand разрешается по host-профилю владельца
+(профиль пользователя, вызвавшего `sudo`, выбирается по умолчанию); для другого
+host-профиля предусмотрен `--source-client`. `egress-hostctl` проверяет, что
+этот профиль относится к host-среде, и отклоняет alias без заданного владельца.
+Canonical `p-…:node` по-прежнему поддержан. Скопированные маршруты передаются
+Docker harness как canonical IDs. API и JSON-контракты не менялись.
+
+Целевые CLI и hostctl тесты: **75 passed**. Также прошли `bash -n`,
+`py_compile` и `git diff --check`. Live Docker acceptance не запускался.
+
 ## Username IDs и короткие personal routes — 2026-10-29
 
 Default ID host/container теперь строится как `host-<username>` /

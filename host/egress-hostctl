@@ -412,9 +412,29 @@ def cmd_copy_personal_source(args):
         err("copy-personal-source must run as root", 3)
     if not _CLIENT_ID_RE.fullmatch(args.target_client):
         err("invalid target client ID", 2)
-    route = _ROUTE_ID_RE.fullmatch(args.source_route)
+    source_client = getattr(args, "source_client", None)
+    source_route = args.source_route
+    alias_match = re.fullmatch(r"@([A-Za-z0-9][A-Za-z0-9._-]{0,31}):([A-Za-z0-9._-]+)", source_route)
+    if source_route.startswith("@") and not alias_match:
+        err("source route shorthand must look like @alias:node", 2)
+    if alias_match:
+        if not source_client:
+            err("--source-client is required for a personal route alias", 2)
+        personal_dir = Path(root_dir()).resolve() / "egressd" / "personal"
+        matches = []
+        for meta_path in personal_dir.glob("p-*.json"):
+            try:
+                candidate = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if candidate.get("client_id") == source_client and candidate.get("alias") == alias_match.group(1):
+                matches.append(meta_path.stem)
+        if len(matches) != 1:
+            err("personal route alias is unknown or ambiguous for source client", 2)
+        source_route = matches[0] + ":" + alias_match.group(2)
+    route = _ROUTE_ID_RE.fullmatch(source_route)
     if not route:
-        err("source route must be a personal route ID", 2)
+        err("source route must be a personal route ID or @alias:node", 2)
     source_provider, node = route.groups()
     if not _PERSONAL_PROVIDER_RE.fullmatch(source_provider):
         err("source route is not a personal provider route", 2)
@@ -422,6 +442,16 @@ def cmd_copy_personal_source(args):
     root = Path(root_dir()).resolve()
     secrets = Path(os.environ.get("VIBELAB_EGRESS_SECRETS",
                                   "/etc/vibelab-egress/secrets")).resolve()
+    if source_client:
+        if not _CLIENT_ID_RE.fullmatch(source_client):
+            err("invalid source client ID", 2)
+        source_profile_path = secrets / "clients" / (source_client + ".profile.json")
+        try:
+            source_profile = json.loads(source_profile_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            err("source client profile is missing or invalid", 3)
+        if source_profile.get("client_id") != source_client or source_profile.get("environment") != "host":
+            err("source client profile must belong to a host environment", 2)
     providers_dir = (root / "providers").resolve()
     personal_dir = (root / "egressd" / "personal").resolve()
     source_yaml = providers_dir / (source_provider + ".yaml")
@@ -440,6 +470,8 @@ def cmd_copy_personal_source(args):
        not _CLIENT_ID_RE.fullmatch(str(meta.get("client_id", ""))) or \
        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", str(meta.get("alias", ""))):
         err("personal provider metadata is invalid", 3)
+    if source_client and meta.get("client_id") != source_client:
+        err("source provider does not belong to --source-client", 2)
     if len(source) > 4 * 1024 * 1024:
         err("personal provider snapshot exceeds the supported size", 3)
     legacy_provider = "p-%s-%s" % (
@@ -482,7 +514,7 @@ def cmd_copy_personal_source(args):
     source_token_path = secrets / "clients" / (meta["client_id"] + ".token")
     source_token = _read_secret(source_token_path)
     target_token = _read_secret(target_token_path)
-    source_route_quoted = quote(args.source_route, safe="")
+    source_route_quoted = quote(source_route, safe="")
     # Confirm that the source profile can see this exact route before copying
     # any provider data to the explicitly selected test client.
     _personal_api("GET", "/v1/routes/" + source_route_quoted, source_token)
@@ -555,6 +587,7 @@ def build_parser():
     s = sub.add_parser("copy-personal-source",
                        help="copy a normalized personal provider snapshot to a container client")
     s.add_argument("--source-route", required=True)
+    s.add_argument("--source-client")
     s.add_argument("--target-client", required=True)
     s.set_defaults(fn=cmd_copy_personal_source)
 

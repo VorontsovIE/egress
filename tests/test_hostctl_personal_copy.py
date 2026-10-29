@@ -133,6 +133,37 @@ def test_copy_personal_snapshot_rejects_non_personal_route(tmp_path, monkeypatch
         HOSTCTL.cmd_copy_personal_source(args)
 
 
+def test_copy_personal_snapshot_resolves_alias_for_explicit_host_profile(
+        tmp_path, monkeypatch, capsys):
+    (_root, clients, owner, target, source_provider, _source_route,
+     _yaml) = _fixture(tmp_path, monkeypatch)
+    (clients / f"{owner}.profile.json").write_text(json.dumps({
+        "client_id": owner, "environment": "host", "modes": ["proxy", "tun"]
+    }))
+    calls = []
+    target_alias = "test-blanc-" + hashlib.sha256(source_provider.encode()).hexdigest()[:8]
+    target_provider = f"p-{target}-{target_alias}"
+
+    def fake_urlopen(request, timeout):
+        calls.append(request)
+        path = unquote(urlsplit(request.full_url).path)
+        if request.method == "GET" and path.endswith("/" + source_provider + ":vless-49"):
+            return _Response({"id": source_provider + ":vless-49"})
+        if request.method == "PUT" and path.endswith("/snapshot"):
+            return _Response({"provider_id": target_provider, "node_count": 1})
+        if request.method == "GET" and path.endswith("/" + target_provider + ":vless-49"):
+            return _Response({"id": target_provider + ":vless-49"})
+        raise AssertionError(f"unexpected API request: {request.method} {path}")
+
+    monkeypatch.setattr(HOSTCTL, "_PERSONAL_API_OPENER", _FakeOpener(fake_urlopen))
+    args = argparse.Namespace(source_route="@blanc:vless-49", source_client=owner,
+                              target_client=target)
+    assert HOSTCTL.cmd_copy_personal_source(args) == 0
+    assert len(calls) == 3
+    assert calls[0].get_header("Authorization") == "Bearer fake-owner-token"
+    assert json.loads(capsys.readouterr().out)["source_provider"] == source_provider
+
+
 def test_copy_personal_snapshot_refuses_overwriting_non_snapshot_source(
         tmp_path, monkeypatch):
     root, clients, _owner, target, source_provider, source_route, _yaml = \

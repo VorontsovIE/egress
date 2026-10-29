@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT=""
+SOURCE_CLIENT=""
 CLIENT_EXPLICIT=0
 ENVIRONMENT=""
 EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-}"
@@ -31,7 +32,7 @@ Usage:
   sudo scripts/setup-egress-client.sh --environment host [--client <id>]
   sudo scripts/setup-egress-client.sh --environment container [--client <id>] \
       --docker-test --route <provider:route> [--route <provider:route> ...] \
-      [--copy-personal-source]
+      [--copy-personal-source] [--source-client <host-profile>]
 
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
@@ -55,6 +56,7 @@ fail() { echo "setup-egress-client: $*" >&2; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --client) [ "$#" -ge 2 ] || fail "--client needs a value"; CLIENT="$2"; CLIENT_EXPLICIT=1; shift 2 ;;
+    --source-client) [ "$#" -ge 2 ] || fail "--source-client needs a value"; SOURCE_CLIENT="$2"; shift 2 ;;
     --environment) [ "$#" -ge 2 ] || fail "--environment needs a value"; ENVIRONMENT="$2"; shift 2 ;;
     --out) [ "$#" -ge 2 ] || fail "--out needs a value"; OUT="$2"; OUT_EXPLICIT=1; shift 2 ;;
     --secrets-dir) [ "$#" -ge 2 ] || fail "--secrets-dir needs a value"; SECRETS_DIR="$2"; shift 2 ;;
@@ -80,12 +82,8 @@ case "$ENVIRONMENT" in
       [ "${#ROUTES[@]}" -gt 0 ] || fail "--docker-test requires at least one --route"
       if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
         for route in "${ROUTES[@]}"; do
-          route_provider="${route%%:*}"
-          route_node="${route#*:}"
-          [[ "$route_provider" =~ ^p-[A-Za-z0-9._-]{1,64}-[A-Za-z0-9._-]{1,32}$ && \
-             "$route_node" != "$route" && "$route_node" != *:* && \
-             "$route_node" =~ ^[A-Za-z0-9._-]+$ ]] || \
-            fail "--copy-personal-source requires personal provider:node route IDs"
+          [[ "$route" =~ ^(@[A-Za-z0-9][A-Za-z0-9._-]{0,31}|p-[A-Za-z0-9._-]{1,96}):[A-Za-z0-9._-]+$ ]] || \
+            fail "--copy-personal-source requires @alias:node or personal provider:node routes"
         done
       fi
     elif [ "${#ROUTES[@]}" -gt 0 ]; then
@@ -101,6 +99,11 @@ if [ -z "$CLIENT" ]; then
   [[ "$DEFAULT_UID" =~ ^[0-9]+$ ]] || fail "cannot determine invoking UID; pass --client explicitly"
   CLIENT="$(python3 "$ROOT/host/client_identity.py" "$DEFAULT_UID" "$ENVIRONMENT")"
   echo "using default client: $CLIENT (pass --client to override)"
+fi
+[ -z "$SOURCE_CLIENT" ] || [ "$COPY_PERSONAL_SOURCE" = 1 ] || fail "--source-client requires --copy-personal-source"
+if [ "$COPY_PERSONAL_SOURCE" = 1 ] && [ -z "$SOURCE_CLIENT" ]; then
+  SOURCE_UID="${SUDO_UID:-$(id -u)}"
+  SOURCE_CLIENT="$(python3 "$ROOT/host/client_identity.py" "$SOURCE_UID" host)"
 fi
 [ "$ENVIRONMENT" = container ] || [ "$COPY_PERSONAL_SOURCE" = 0 ] || \
   fail "--copy-personal-source applies only to a Docker container test"
@@ -156,7 +159,7 @@ elif [ "$DOCKER_TEST" = 1 ]; then
         result="$(VIBELAB_EGRESS_ROOT="$EGRESS_ROOT" \
           VIBELAB_EGRESS_SECRETS="$SECRETS_DIR" \
           python3 "$ROOT/host/egress-hostctl" copy-personal-source \
-            --source-route "$route" --target-client "$CLIENT")"
+            --source-route "$route" --source-client "$SOURCE_CLIENT" --target-client "$CLIENT")"
         copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"
         target_provider="${copied_route%%:*}"
         copied_node="${copied_route#*:}"
