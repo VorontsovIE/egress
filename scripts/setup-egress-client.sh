@@ -27,14 +27,17 @@ ROUTES=()
 usage() {
   cat <<'EOF'
 Usage:
-  sudo scripts/setup-egress-client.sh --client <id> --environment host
-  sudo scripts/setup-egress-client.sh --client <id> --environment container \
+  sudo scripts/setup-egress-client.sh --environment host [--client <id>]
+  sudo scripts/setup-egress-client.sh --environment container [--client <id>] \
       --docker-test --route <provider:route> [--route <provider:route> ...] \
       [--copy-personal-source]
 
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
 test. Building the engine requires stable Go 1.26.3 or newer.
+Without --client, the invoking UID gets one stable default profile:
+host-uid-<uid> for host setup and container-uid-<uid> for container setup.
+Pass --client to use a different profile.
 Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
 --copy-personal-source snapshots a personal provider under the test client's
 own identity before running the Docker test; every supplied route must be a
@@ -65,7 +68,6 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" = 0 ] || { echo 'setup-egress-client: run with sudo' >&2; exit 3; }
-[ -n "$CLIENT" ] || fail "--client is required"
 case "$ENVIRONMENT" in
   host) [ "$DOCKER_TEST" = 0 ] || fail "--docker-test applies only to container" ;;
   container)
@@ -89,6 +91,15 @@ case "$ENVIRONMENT" in
     ;;
   *) fail "--environment must be host or container" ;;
 esac
+if [ -z "$CLIENT" ]; then
+  DEFAULT_UID="${SUDO_UID:-$(id -u)}"
+  [[ "$DEFAULT_UID" =~ ^[0-9]+$ ]] || fail "cannot determine invoking UID; pass --client explicitly"
+  case "$ENVIRONMENT" in
+    host) CLIENT="host-uid-$DEFAULT_UID" ;;
+    container) CLIENT="container-uid-$DEFAULT_UID" ;;
+  esac
+  echo "using default client: $CLIENT (pass --client to override)"
+fi
 [ "$ENVIRONMENT" = container ] || [ "$COPY_PERSONAL_SOURCE" = 0 ] || \
   fail "--copy-personal-source applies only to a Docker container test"
 

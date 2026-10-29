@@ -171,9 +171,14 @@ only for that build. For a fresh backend install, build the engine first as show
 `install-backend-host.sh` provisions and installs `host-main` automatically.
 
 ```bash
-sudo scripts/setup-egress-client.sh --client host-main --environment host
+sudo scripts/setup-egress-client.sh --environment host
 egressctl capabilities
 ```
+
+Without `--client`, the script uses `host-uid-<UID>` for the user who invoked
+`sudo` and reuses that profile on later runs. Set `--client <id>` only when you
+want a separate profile. Container setup similarly defaults to
+`container-uid-<UID>`.
 
 Build the pinned packet engine before provisioning client bundles:
 

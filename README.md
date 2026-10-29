@@ -55,15 +55,14 @@ bash scripts/verify-backend-host.sh       # pass/fail по каждому сер
 **Client** (в каждую execution environment) — `INSTALL.md`, шаг B:
 
 ```sh
-sudo scripts/setup-egress-client.sh --client host-main --environment host
+sudo scripts/setup-egress-client.sh --environment host
 egressctl config validate && egressctl whoami && egressctl doctor
 ```
 
 Одноразовый тест из обычного Docker-контейнера (после установки backend):
 
 ```sh
-sudo scripts/setup-egress-client.sh --client egress-test-client \
-  --environment container --docker-test \
+sudo scripts/setup-egress-client.sh --environment container --docker-test \
   --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
 ```
 
