@@ -152,11 +152,17 @@ Backend secrets в подкаталоге `secrets/` сохраняют
 ### TUN prerequisites and per-run setup
 
 TUN mode runs locally in the execution environment. Each `egress-run --mode
-tun` creates a fresh user and network namespace; the workload remains
-inside that environment. A small static packet engine outside the nested
-namespace receives only the TUN file descriptor and forwards packets to the
-selected one-shot SOCKS route. The helper service, helper socket, and
-`CAP_NET_ADMIN` on the outer client container are not used.
+tun` creates a fresh user and network namespace with `unshare --map-root-user`;
+the invoking UID/GID map to UID/GID 0 inside that namespace. This grants the
+bootstrap `CAP_NET_ADMIN` only in its new network namespace so it can create
+and configure the TUN interface. It does not grant capabilities in the host or
+outer Docker container. After setup, the client drops capabilities and sets
+`no_new_privs` before starting the workload. The workload stays inside the host
+or client container and sees UID 0 in the per-run namespace, mapped to the
+invoking host/container UID. Applications that reject execution as UID 0 may
+need proxy mode. A small static packet engine outside the nested namespace
+receives only the TUN file descriptor and forwards packets to the selected
+one-shot SOCKS route. No privileged helper is used.
 
 For an already installed backend, this one command prepares and installs a host
 client profile (and reuses its existing bundle without rotating credentials).

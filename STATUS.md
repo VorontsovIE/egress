@@ -2,6 +2,19 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Исправление host TUN user namespace — 2026-10-29
+
+Диагностика на globe показала: пользовательский `unshare --map-current-user`
+создавал namespace без effective capabilities (`CapEff=0`); открытие
+`/dev/net/tun` проходило, а `TUNSETIFF` завершался `EPERM`. Клиентский probe и
+TUN bootstrap переключены на `--map-root-user`. Теперь вызывающий UID/GID
+отображается в UID/GID 0 только внутри нового user namespace, что даёт
+bootstrap требуемый `CAP_NET_ADMIN` в его network namespace. Перед запуском
+workload capabilities сбрасываются; workload видит UID 0 внутри namespace,
+сопоставленный UID вызывающего процесса снаружи. Обновлены INSTALL и TECH_SPEC.
+Исправление внесено в код; host TUN на globe после переустановки клиента ещё
+нужно проверить.
+
 ## Проверка параллельных TUN routes в Docker — 2026-10-29
 
 Docker harness теперь при двух `--route` запускает одновременно два TUN

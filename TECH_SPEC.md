@@ -1039,12 +1039,17 @@ resolver по UDP, затем по TCP. Для пользовательских 
 ошибкой вместо DNS timeout.
 
 На host требуются Linux, доступ к /dev/net/tun, util-linux unshare, iproute2 и
-разрешённые unprivileged user namespaces. Для Docker-контейнера дополнительно
-передаётся только /dev/net/tun и точечный seccomp profile, допускающий нужный
-набор флагов unshare. Не выдавать outer container CAP_NET_ADMIN,
-CAP_SYS_ADMIN, host networking, privileged mode или Docker socket. После
-сетевой настройки workload теряет capabilities, получает no_new_privs и
-запрет на создание/переход в другие namespaces.
+разрешённые unprivileged user namespaces. Каждый запуск использует
+`unshare --user --map-root-user --net`: UID/GID вызывающего процесса отображаются
+в UID/GID 0 нового user namespace. Это даёт bootstrap `CAP_NET_ADMIN` только
+внутри нового namespace, необходимую для `TUNSETIFF` и настройки сети, без
+capability во внешнем host/container namespace. Workload видит UID 0 внутри
+этого namespace (отображённый на UID вызывающего процесса снаружи). Для
+Docker-контейнера дополнительно передаётся только /dev/net/tun и точечный
+seccomp profile, допускающий нужный набор флагов unshare. Не выдавать outer
+container CAP_NET_ADMIN, CAP_SYS_ADMIN, host networking, privileged mode или
+Docker socket. После сетевой настройки workload теряет capabilities, получает
+no_new_privs и запрет на создание/переход в другие namespaces.
 
 Docker acceptance использует обычный временный контейнер и проверяет proxy,
 TUN, локальность workload и реальный HTTPS-запрос. Общий helper и передача

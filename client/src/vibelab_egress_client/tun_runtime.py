@@ -57,7 +57,7 @@ def probe() -> dict[str, Any]:
         return {"status": "unsupported_in_environment", "reason": f"{missing} is required"}
     try:
         proc = subprocess.run(
-            [unshare, "--user", "--map-current-user", "--net", "--fork",
+            [unshare, "--user", "--map-root-user", "--net", "--fork",
              sys.executable, "-c", _probe_program()],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, text=True, timeout=5, check=False,
@@ -160,7 +160,7 @@ def run(command: list[str], *, env: dict[str, str], cwd: str,
     tun_fd = None
     try:
         proc = subprocess.Popen(
-            [unshare, "--user", "--map-current-user", "--net", "--fork", *bootstrap],
+            [unshare, "--user", "--map-root-user", "--net", "--fork", *bootstrap],
             cwd=cwd, env=child_env, close_fds=True, pass_fds=(child_sock.fileno(),),
             start_new_session=True,
         )
