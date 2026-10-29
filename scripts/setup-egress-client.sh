@@ -37,8 +37,9 @@ provisions the client, and installs it on the host or runs the generic Docker
 test. Building the engine requires stable Go 1.26.3 or newer.
 Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
 --copy-personal-source snapshots a personal provider under the test client's
-own identity before running the Docker test; all supplied routes must belong
-to that provider. It does not grant access to its owner.
+own identity before running the Docker test; every supplied route must be a
+personal provider node. Each distinct source provider is copied once. This does
+not grant access to its owner.
 EOF
 }
 fail() { echo "setup-egress-client: $*" >&2; exit 2; }
@@ -71,14 +72,13 @@ case "$ENVIRONMENT" in
     if [ "$DOCKER_TEST" = 1 ]; then
       [ "${#ROUTES[@]}" -gt 0 ] || fail "--docker-test requires at least one --route"
       if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
-        source_provider="${ROUTES[0]%%:*}"
         for route in "${ROUTES[@]}"; do
           route_provider="${route%%:*}"
           route_node="${route#*:}"
-          [[ "$route_provider" == "$source_provider" && \
+          [[ "$route_provider" =~ ^p-[0-9a-f]{24}-[A-Za-z0-9._-]{1,32}$ && \
              "$route_node" != "$route" && "$route_node" != *:* && \
              "$route_node" =~ ^[A-Za-z0-9._-]+$ ]] || \
-            fail "--copy-personal-source routes must be nodes from one provider"
+            fail "--copy-personal-source requires personal provider:node route IDs"
         done
       fi
     elif [ "${#ROUTES[@]}" -gt 0 ]; then
@@ -119,15 +119,33 @@ if [ "$ENVIRONMENT" = host ]; then
   echo "Host client is ready. Check TUN support with: egressctl capabilities"
 elif [ "$DOCKER_TEST" = 1 ]; then
   if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
-    result="$(VIBELAB_EGRESS_ROOT="$EGRESS_ROOT" \
-      VIBELAB_EGRESS_SECRETS="$SECRETS_DIR" \
-      python3 "$ROOT/host/egress-hostctl" copy-personal-source \
-        --source-route "${ROUTES[0]}" --target-client "$CLIENT")"
-    copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"
-    target_provider="${copied_route%%:*}"
+    source_providers=()
+    target_providers=()
     copied_routes=()
     for route in "${ROUTES[@]}"; do
+      source_provider="${route%%:*}"
       node="${route#*:}"
+      target_provider=""
+      for index in "${!source_providers[@]}"; do
+        if [ "${source_providers[$index]}" = "$source_provider" ]; then
+          target_provider="${target_providers[$index]}"
+          break
+        fi
+      done
+      if [ -z "$target_provider" ]; then
+        result="$(VIBELAB_EGRESS_ROOT="$EGRESS_ROOT" \
+          VIBELAB_EGRESS_SECRETS="$SECRETS_DIR" \
+          python3 "$ROOT/host/egress-hostctl" copy-personal-source \
+            --source-route "$route" --target-client "$CLIENT")"
+        copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"
+        target_provider="${copied_route%%:*}"
+        copied_node="${copied_route#*:}"
+        [ "$copied_node" = "$node" ] || fail "snapshot API returned an unexpected route"
+        source_providers+=("$source_provider")
+        target_providers+=("$target_provider")
+        printf 'copied personal snapshot: %s -> %s\n' \
+          "$source_provider" "$target_provider"
+      fi
       copied_routes+=("$target_provider:$node")
     done
     ROUTES=("${copied_routes[@]}")

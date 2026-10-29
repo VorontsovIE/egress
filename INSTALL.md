@@ -206,8 +206,8 @@ sudo scripts/setup-egress-client.sh --client egress-test-client \
 ```
 
 Choose routes known to use different exit IPs. With `--copy-personal-source`,
-pass two node IDs from the same personal provider; the source snapshot is copied
-once and both IDs are mapped to the test-owned snapshot.
+pass personal provider node IDs; each distinct provider snapshot is copied once
+and its route IDs are mapped to the test-owned snapshot.
 
 Для персонального маршрута host-профиля (ID начинается с `p-`) добавьте
 `--copy-personal-source`. Host скопирует нормализованный snapshot в новый

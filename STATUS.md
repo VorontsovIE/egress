@@ -9,11 +9,11 @@ workload из обычного тестового контейнера. Оба �
 network namespace и ждут общего барьера; harness сверяет namespace с outer и
 между собой, после чего одновременно разрешает HTTPS-запрос к ipify. Проверка
 завершается успешно только если обе команды отработали и получили разные
-публичные exit IP. `--copy-personal-source` принимает несколько node IDs из
-одного personal provider и переносит их на test-owned snapshot. Добавлены
-worker и инструкции. Syntax/compile checks прошли; live concurrency прогон
-требует двух provider routes с разными exit IP и ещё не выполнен. Offline suite:
-**337 passed**.
+публичные exit IP. `--copy-personal-source` принимает node IDs из нескольких
+personal provider и копирует каждый источник в test-owned snapshot один раз.
+Добавлены worker и инструкции. Syntax/compile checks прошли; live concurrency
+прогон требует двух provider routes с разными exit IP и ещё не выполнен.
+Offline suite: **337 passed**.
 
 ## DNS в TUN для nameserver произвольного Docker-контейнера — 2026-10-29
 
