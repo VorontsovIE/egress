@@ -105,6 +105,7 @@ class RouteCatalog:
         self._mihomo_to_id: dict[str, str] = {}
         self._id_to_mihomo: dict[str, str] = {}
         self._prefixes: dict[str, str] = {}
+        self._route_aliases: dict[str, str] = {}
         # Opaque hashes of the route definitions. These never leave the
         # backend; they let catalog rebuilds distinguish an unchanged stable
         # ID from a provider replacing its endpoint or credentials in place.
@@ -118,12 +119,14 @@ class RouteCatalog:
         protocols: dict[str, dict[str, str]] | None = None,
         owners: dict[str, str] | None = None,
         identities: dict[str, dict[str, str]] | None = None,
+        legacy_provider_ids: dict[str, str] | None = None,
     ) -> "RouteCatalog":
         """Rebuild the catalog. ``protocols`` maps provider -> {clean: type}."""
         prefixes = prefixes or {}
         protocols = protocols or {}
         owners = owners or {}
         identities = identities or {}
+        legacy_provider_ids = legacy_provider_ids or {}
         by_id: dict[str, RouteInfo] = {}
         mihomo_to_id: dict[str, str] = {}
         id_to_mihomo: dict[str, str] = {}
@@ -164,6 +167,14 @@ class RouteCatalog:
         self._by_id = by_id
         self._mihomo_to_id = mihomo_to_id
         self._id_to_mihomo = id_to_mihomo
+        aliases: dict[str, str] = {}
+        for old_provider, current_provider in legacy_provider_ids.items():
+            for clean in providers.get(current_provider, []):
+                old_route = f"{old_provider}:{clean}"
+                new_route = f"{current_provider}:{clean}"
+                if old_route != new_route and old_route not in by_id and new_route in by_id:
+                    aliases[old_route] = new_route
+        self._route_aliases = aliases
         return self
 
     def same_identity(self, route_id: str, other: "RouteCatalog") -> bool:
@@ -189,6 +200,10 @@ class RouteCatalog:
     def route_id(self, provider: str, clean: str) -> str:
         return f"{provider}:{clean}"
 
+    def resolve(self, route_id: str) -> str:
+        """Return the current canonical ID for a temporary legacy alias."""
+        return self._route_aliases.get(route_id, route_id)
+
     def mihomo_name(self, route_id: str) -> str:
         """route ID -> mihomo node name (for PUT /proxies/<group>).
 
@@ -197,20 +212,20 @@ class RouteCatalog:
         ``blanc-FI-Helsinki-1``. The route ID itself (with the ``:``) is NOT a
         valid mihomo node name, so this must be an explicit map, not a fallback.
         """
-        return self._id_to_mihomo.get(route_id, route_id)
+        return self._id_to_mihomo.get(self.resolve(route_id), route_id)
 
     def from_mihomo(self, name: str) -> str | None:
         """mihomo node name -> route ID (None if unknown)."""
         return self._mihomo_to_id.get(name)
 
     def get(self, route_id: str) -> RouteInfo | None:
-        return self._by_id.get(route_id)
+        return self._by_id.get(self.resolve(route_id))
 
     def exists(self, route_id: str) -> bool:
-        return route_id in self._by_id
+        return self.resolve(route_id) in self._by_id
 
     def visible(self, route_id: str, client_id: str) -> bool:
-        route = self._by_id.get(route_id)
+        route = self._by_id.get(self.resolve(route_id))
         return route is not None and route.owner in (None, client_id)
 
     def all_route_ids(self) -> list[str]:

@@ -205,6 +205,15 @@ def main(argv: list[str] | None = None) -> None:
 
     mode = opts["mode"] or "proxy"
     route = opts["route"]
+    if route is not None and route.startswith("@"):
+        try:
+            route = EgressApi(cfg).resolve_route(route)
+        except ApiError as e:
+            if e.status in (401, 403):
+                _die(EXIT_AUTH, f"authentication error: {e.detail}")
+            _die(EXIT_RUNTIME, f"cannot resolve personal route: {e}")
+        except ValueError as e:
+            _die(EXIT_USAGE, str(e))
 
     # ---- local per-run TUN mode; failures never fall back to proxy. ----
     if mode == "tun":

@@ -357,7 +357,7 @@ def cmd_install_client(args):
 # copy a private provider snapshot to a container test profile
 # --------------------------------------------------------------------------
 
-_PERSONAL_PROVIDER_RE = re.compile(r"^p-([0-9a-f]{24})-([A-Za-z0-9._-]{1,32})$")
+_PERSONAL_PROVIDER_RE = re.compile(r"^p-([A-Za-z0-9._-]{1,64})-([A-Za-z0-9._-]{1,32})$")
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _ROUTE_ID_RE = re.compile(r"^([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$")
 
@@ -416,8 +416,7 @@ def cmd_copy_personal_source(args):
     if not route:
         err("source route must be a personal route ID", 2)
     source_provider, node = route.groups()
-    provider_match = _PERSONAL_PROVIDER_RE.fullmatch(source_provider)
-    if not provider_match:
+    if not _PERSONAL_PROVIDER_RE.fullmatch(source_provider):
         err("source route is not a personal provider route", 2)
 
     root = Path(root_dir()).resolve()
@@ -443,8 +442,12 @@ def cmd_copy_personal_source(args):
         err("personal provider metadata is invalid", 3)
     if len(source) > 4 * 1024 * 1024:
         err("personal provider snapshot exceeds the supported size", 3)
-    if source_provider != "p-%s-%s" % (
-            provider_match.group(1), meta["alias"]):
+    legacy_provider = "p-%s-%s" % (
+        hashlib.sha256(meta["client_id"].encode("utf-8")).hexdigest()[:24],
+        meta["alias"],
+    )
+    current_provider = "p-%s-%s" % (meta["client_id"], meta["alias"])
+    if source_provider not in (legacy_provider, current_provider):
         err("personal provider ID does not match its metadata", 3)
     try:
         profile = json.loads(target_profile.read_text(encoding="utf-8"))
@@ -458,14 +461,13 @@ def cmd_copy_personal_source(args):
     suffix = hashlib.sha256(source_provider.encode("ascii")).hexdigest()[:8]
     target_alias = "test-%s-%s" % (source_alias[:18], suffix)
     target_alias = target_alias[:32]
-    target_provider = "p-%s-%s" % (
-        hashlib.sha256(args.target_client.encode("utf-8")).hexdigest()[:24],
-        target_alias,
-    )
+    target_provider = "p-%s-%s" % (args.target_client, target_alias)
     target_meta_path = personal_dir / (target_provider + ".json")
     target_yaml_path = providers_dir / (target_provider + ".yaml")
     if target_yaml_path.is_symlink():
         err("target test snapshot path is unsafe", 3)
+    if target_yaml_path.exists() and not target_meta_path.exists():
+        err("target test snapshot ID conflicts with an existing provider", 3)
     if target_meta_path.exists():
         if target_meta_path.is_symlink():
             err("target test snapshot metadata path is unsafe", 3)

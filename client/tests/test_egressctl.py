@@ -131,6 +131,20 @@ class TestRouteMode:
         assert seen["route"] == "blanc:FI-Helsinki-1"
         assert "default route set" in out
 
+    def test_route_set_resolves_personal_alias(self, monkeypatch, cfg_file):
+        seen = {}
+        class Stub:
+            def resolve_route(self, route):
+                assert route == "@blanc:vless-49"
+                return "p-host-vibelab-blanc:vless-49"
+            def set_default(self, route):
+                seen["route"] = route
+                return {"route": route}
+        code, _, _ = run_cli(monkeypatch, cfg_file, "route", "set",
+                             "@blanc:vless-49", api_stub=Stub())
+        assert code == 0
+        assert seen["route"] == "p-host-vibelab-blanc:vless-49"
+
     def test_mode_set_choices(self, monkeypatch, cfg_file):
         # 'tun' is a valid choice for the CLI (the server decides support)
         stub = type("S", (), {"set_default_mode": lambda self, m: {"mode": m}})()
@@ -166,6 +180,19 @@ class TestList:
                                api_stub=stub)
         assert code == 0
         assert json.loads(out) == payload
+
+    def test_list_shows_personal_alias(self, monkeypatch, cfg_file):
+        class Stub:
+            def list_routes(self, **_filters):
+                return {"routes": [{"id": "p-host-vibelab-blanc:vless-49",
+                                    "provider": "p-host-vibelab-blanc",
+                                    "country": "FI", "healthy": True}]}
+            def list_personal(self):
+                return {"providers": [{"provider_id": "p-host-vibelab-blanc",
+                                       "alias": "blanc"}]}
+        code, out, _ = run_cli(monkeypatch, cfg_file, "list", api_stub=Stub())
+        assert code == 0
+        assert "@blanc:vless-49" in out
 
 
 class TestUpdate:

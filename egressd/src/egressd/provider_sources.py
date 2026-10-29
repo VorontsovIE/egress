@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
-ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,98}$")
 MIHOMO_PROVIDER_DIR = "/root/.config/mihomo/providers"
 REFRESH_INTERVAL = 600
 

@@ -24,7 +24,7 @@ not use host networking, `--privileged`, or `CAP_NET_ADMIN`.
 ```bash
 sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test \
-  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
+  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
 ```
 
 The harness builds and runs an ordinary Docker image, installs the bundled

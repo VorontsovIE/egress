@@ -43,6 +43,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from client_identity import default_client_id
 
 ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress")
 # Default repo root = parent of the host/ dir containing this script, so the
@@ -653,7 +654,7 @@ def check_host_whoami_identity(live):
             return
         data = json.loads(p.stdout)
         actual = data.get("client_id")
-        expected = f"host-uid-{os.getuid()}"
+        expected = default_client_id(os.getuid(), "host")
         if actual == "host-main" or (actual == expected and data.get("environment") == "host"):
             add("host_whoami_identity", "pass", f"host whoami = {actual}")
         else:

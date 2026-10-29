@@ -197,6 +197,24 @@ class TestProxy:
         assert calls["created"] == ["blanc:FI-Helsinki-1"]
         assert calls["closed"] == ["job-1"]  # closed in finally
 
+    def test_personal_alias_uses_canonical_route(self, monkeypatch, cfg_file):
+        calls = []
+        class Stub:
+            def resolve_route(self, route):
+                assert route == "@blanc:vless-49"
+                return "p-host-vibelab-blanc:vless-49"
+            def oneshot_session(self, route):
+                calls.append(route)
+                return {"id": "job-alias", "capability": {
+                    "username": "os_0", "password": "pw"}}
+            def oneshot_close(self, _sid):
+                return {}
+        monkeypatch.setattr(egress_run, "_run_local", lambda _env, _cmd: 0)
+        code = run_egress_run(monkeypatch, cfg_file,
+                              ["@blanc:vless-49", "--", "true"], api_stub=Stub())
+        assert code == 0
+        assert calls == ["p-host-vibelab-blanc:vless-49"]
+
     def test_oneshot_uses_client_vantage(self, monkeypatch, cfg_file):
         """The one-shot SOCKS endpoint comes from the CLIENT's own vantage
         (published port), not from the backend-reported host/port (which

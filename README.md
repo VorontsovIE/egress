@@ -6,7 +6,7 @@ execution environments (host, Docker container, другие контейнер�
 клиентский пакет (`egressctl` + `egress-run`, stdlib-only) ставится локально
 в каждую среду.
 
-На host каждый локальный UID получает личный профиль автоматически при первом
+На host каждый локальный пользователь получает личный профиль автоматически при первом
 вызове клиента, без sudo и без домашнего каталога. Пользователь может добавить
 личную подписку или proxy через `egressctl source add`; в контейнере исходник
 остаётся внутри контейнера, а backend получает только нормализованные узлы
@@ -63,12 +63,13 @@ egressctl config validate && egressctl whoami && egressctl doctor
 
 ```sh
 sudo scripts/setup-egress-client.sh --environment container --docker-test \
-  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
+  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
 ```
 
 `--copy-personal-source` нужен только для host-owned personal route (`p-…`).
 Он создаёт отдельный snapshot тестового клиента, не открывая ему host-маршрут.
 
+Для личного provider `blanc` короткая форма маршрута — `@blanc:vless-49`.
 Дальше — обычный workflow: `egress-run <route> -- command`,
 `egressctl route set/list`, `egressctl best`, skill для агентов —
 `skills/egress/SKILL.md`.
@@ -78,9 +79,9 @@ sudo scripts/setup-egress-client.sh --environment container --docker-test \
 Оффлайн (без Docker, без root, stdlib-only):
 
 ```sh
-python3 -m pytest tests/ client/tests/ -q    # полный свит (проверен: 380 passed)
+python3 -m pytest tests/ client/tests/ -q    # полный свит (последний прогон: 348 passed)
 python3 -m pytest tests/security/ -q         # A8 security gate (54)
-python3 -m pytest tests/install/ -q          # оффлайн-свит install-скриптов, stubbed docker (56 checks)
+python3 -m pytest tests/install/ -q          # оффлайн-свит install-скриптов, stubbed docker (77 checks)
 ```
 
 `tests/install/README.md` — как добавлять сценарии. Правила коммитов, стиля

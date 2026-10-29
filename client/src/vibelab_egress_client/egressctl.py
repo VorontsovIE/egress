@@ -113,7 +113,9 @@ def cmd_route_current(args) -> None:
 
 def cmd_route_set(args) -> None:
     api = _api(args)
-    data = _call(args, lambda: api.set_default(args.route), None)
+    route = _call(args, lambda: api.resolve_route(args.route), None) \
+        if args.route.startswith("@") else args.route
+    data = _call(args, lambda: api.set_default(route), None)
     _emit(args, data, f"default route set: {args.route}")
 
 
@@ -226,8 +228,10 @@ def cmd_source_remove(args) -> None:
 
 def cmd_update(args) -> None:
     api = _api(args)
+    via = _call(args, lambda: api.resolve_route(args.via), None) \
+        if args.via and args.via.startswith("@") else args.via
     data = _call(args,
-                 lambda: api.update_provider(args.provider, via=args.via,
+                 lambda: api.update_provider(args.provider, via=via,
                                              if_older_than=args.if_older_than),
                  None)
     _emit(args, data, f"update done: {data.get('updated', data)}")
@@ -247,23 +251,37 @@ def cmd_list(args) -> None:
     if getattr(args, "json", False):
         _print_json(data)
     else:
+        aliases = {}
+        personal = (_call(args, api.list_personal, None).get("providers", [])
+                    if hasattr(api, "list_personal") else [])
+        aliases = {p.get("provider_id"): p.get("alias") for p in personal
+                   if p.get("provider_id") and p.get("alias")}
         for r in routes:
             latency = r.get("latency_ms")
-            print(f"{r.get('id', '?')}\t{r.get('provider', '?')}/{r.get('country', '?')}\t"
+            route_id = r.get("id", "?")
+            provider, sep, node = route_id.partition(":")
+            shown = f"@{aliases[provider]}:{node}" if sep and provider in aliases else route_id
+            print(f"{shown}\t{r.get('provider', '?')}/{r.get('country', '?')}\t"
                   f"delay={latency if latency is not None else '?'}ms "
                   f"healthy={r.get('healthy', '?')}")
 
 
 def cmd_test(args) -> None:
     api = _api(args)
-    data = _call(args, lambda: api.test(args.route), None)
+    route = _call(args, lambda: api.resolve_route(args.route), None) \
+        if args.route and args.route.startswith("@") else args.route
+    data = _call(args, lambda: api.test(route), None)
     _emit(args, data, f"test: {data.get('result', data)}")
 
 
 def cmd_probe_domain(args) -> None:
     api = EgressApi(_load(args), timeout=NETWORK_TEST_TIMEOUT)
+    route_ids = args.routes.split(",") if args.routes else None
+    if route_ids:
+        route_ids = [_call(args, lambda route=route: api.resolve_route(route), None)
+                     if route.startswith("@") else route for route in route_ids]
     options = dict(country=args.country, provider=args.provider,
-                   routes=args.routes.split(",") if args.routes else None,
+                   routes=route_ids,
                    parallel=args.parallel, timeout=args.timeout,
                    scheme=args.scheme, port=args.port, path=args.path,
                    method=args.method, expected_status=args.expected_status,
@@ -280,7 +298,9 @@ def cmd_probe_domain(args) -> None:
 def cmd_benchmark(args) -> None:
     api = EgressApi(_load(args), timeout=NETWORK_TEST_TIMEOUT)
     if args.route:
-        data = _call(args, lambda: api.benchmark(args.route, bytes=args.bytes), None)
+        route = _call(args, lambda: api.resolve_route(args.route), None) \
+            if args.route.startswith("@") else args.route
+        data = _call(args, lambda: api.benchmark(route, bytes=args.bytes), None)
     else:
         # shortlist pipeline (spec 25): health/latency -> shortlist -> bench
         q = {"top_latency": args.top_latency}

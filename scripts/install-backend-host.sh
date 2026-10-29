@@ -359,9 +359,14 @@ STEP=8; STEP_NAME="bootstrap config"
 log "generating initial mihomo config (bootstrap)"
 # A running egressd writes the same shared config. Stop it before bootstrap
 # so it cannot replace the startup config while Mihomo is being recreated.
-run_logged "docker compose stop vibelab-egress-egressd" \
-  docker compose stop vibelab-egress-egressd \
+run_logged "docker compose stop vibelab-egress-egressd vibelab-egress-mihomo" \
+  docker compose stop vibelab-egress-egressd vibelab-egress-mihomo \
   || die_env "docker compose stop failed (full log: $LOG_FILE)"
+run_logged "migrate user and personal-provider identities" \
+  python3 "$REPO_ROOT/scripts/migrate-egress-identities.py" \
+    --root "$ROOT" --secrets-dir "$SECRETS_DIR" \
+    || { docker compose up -d >/dev/null 2>&1 || true; \
+         die_env "identity migration failed (full log: $LOG_FILE)"; }
 touch "$ROOT/providers/.gitkeep"
 run_logged "python3 -m egressd.bootstrap_config" \
   env PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \
@@ -410,6 +415,8 @@ if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ] && command -v systemctl >/dev/null;
   install -d -o root -g root -m 0755 /usr/local/libexec/vibelab-egress
   install -o root -g root -m 0755 "$REPO_ROOT/host/egress-enroll" \
     /usr/local/libexec/vibelab-egress/egress-enroll
+  install -o root -g root -m 0644 "$REPO_ROOT/host/client_identity.py" \
+    /usr/local/libexec/vibelab-egress/client_identity.py
   install -o root -g root -m 0644 \
     "$REPO_ROOT/host/units/vibelab-egress-enroll.service" \
     /etc/systemd/system/vibelab-egress-enroll.service

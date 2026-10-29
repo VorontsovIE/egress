@@ -2,7 +2,23 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
-## Профиль клиента по умолчанию в setup script — 2026-10-29
+## Username IDs и короткие personal routes — 2026-10-29
+
+Default ID host/container теперь строится как `host-<username>` /
+`container-<username>` с UID fallback для небезопасного или недоступного имени.
+Backend installer мигрирует старые UID-профили и hashed personal provider IDs:
+перед записью проверяет конфликты и активные one-shot sessions, создаёт
+backup в `<root>/identity-migrations/`, при ошибке восстанавливает данные.
+Migration переносит defaults, credentials, bundles и относящиеся к client/route
+истории SQLite. Старые route IDs личных providers принимаются как input aliases
+версии совместимости 1. Canonical provider ID — `p-<client-id>-<alias>`;
+CLI принимает и показывает личный route как `@alias:node`.
+
+Оффлайн-свит `tests/ client/tests/`: **351 passed** (Python 3.13 через uv;
+system Python в текущем checkout не содержит pytest). Install harness:
+**77 passed, 0 failed**. Также прошли `py_compile`, `bash -n` и `git diff --check`.
+
+## Предыдущий UID default в setup script — 2026-10-29
 
 `setup-egress-client.sh` теперь принимает `--client` как необязательный
 параметр. Без него выбирается стабильный профиль по UID пользователя,

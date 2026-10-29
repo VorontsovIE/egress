@@ -49,7 +49,7 @@ VERSION = "0.1.0"
 log = logging.getLogger("egressd")
 
 # route IDs and mihomo names are constrained; reject anything else early.
-_ROUTE_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+:[A-Za-z0-9._\-]+$|^direct$")
+_ROUTE_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,99}:[A-Za-z0-9._\-]+$|^direct$")
 
 
 # --------------------------------------------------------------------------
@@ -380,6 +380,7 @@ def rebuild_catalog(app: FastAPI) -> Any:
     protocols: dict[str, dict[str, str]] = {}
     identities: dict[str, dict[str, str]] = {}
     owners: dict[str, str] = {}
+    legacy_provider_ids: dict[str, str] = {}
     for prov, meta in manifest.items():
         try:
             names, types, _, node_identities = _read_provider_file(Path(meta["path"]))
@@ -392,9 +393,14 @@ def rebuild_catalog(app: FastAPI) -> Any:
         identities[prov] = node_identities
         if meta.get("owner"):
             owners[prov] = meta["owner"]
+        personal = meta.get("personal") or {}
+        if personal.get("legacy_provider_ids_version") == 1:
+            for old_provider in personal.get("legacy_provider_ids", []):
+                if isinstance(old_provider, str):
+                    legacy_provider_ids[old_provider] = prov
 
     catalog = RouteCatalog().build(providers, prefixes, protocols, owners,
-                                   identities)
+                                   identities, legacy_provider_ids)
     app.state.metrics.sync_route_identities(catalog._identities)
     if previous_catalog is not None:
         catalog.preserve_runtime_from(previous_catalog)
@@ -597,11 +603,12 @@ def create_app() -> FastAPI:
     def visible(profile: dict[str, Any], route: str) -> bool:
         return app.state.catalog.visible(route, client_id(profile))
 
-    def require_visible(profile: dict[str, Any], route: str) -> None:
+    def require_visible(profile: dict[str, Any], route: str) -> str:
         if not app.state.catalog.exists(route):
             raise HTTPException(status_code=400, detail="unknown route")
         if not visible(profile, route):
             raise HTTPException(status_code=404, detail="unknown route")
+        return app.state.catalog.resolve(route)
 
     def audit(event: str, client_id: str | None = None, **fields: Any) -> None:
         """Structured audit event (spec 40). Never logs secret values."""
@@ -716,7 +723,7 @@ def create_app() -> FastAPI:
         r = app.state.catalog.get(route_id)
         if r is None:
             raise HTTPException(status_code=404, detail="unknown route")
-        require_visible(profile, route_id)
+        route_id = require_visible(profile, route_id)
         out = r.to_dict()
         out["client_id"] = profile["client_id"]
         return out
@@ -727,7 +734,7 @@ def create_app() -> FastAPI:
         cid = client_id(profile)
         if not _ROUTE_ID_RE.fullmatch(route_id):
             raise HTTPException(status_code=400, detail=f"invalid route id {route_id!r}")
-        require_visible(profile, route_id)
+        route_id = require_visible(profile, route_id)
         prev, changed = app.state.state.set_route(cid, route_id, reason)
         selector_applied = True
         if changed:
@@ -825,8 +832,13 @@ def create_app() -> FastAPI:
         from .personal import atomic_bytes, load_metadata, metadata_path, save_metadata
         provider = meta["provider_id"]
         path = Path(os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")) / f"{provider}.yaml"
-        old = path.read_bytes() if path.exists() else None
         old_meta = load_metadata(provider)
+        if path.exists() and old_meta is None:
+            raise HTTPException(status_code=409,
+                                detail="personal provider ID conflicts with an existing provider")
+        if path.is_symlink() or metadata_path(meta["client_id"], meta["alias"]).is_symlink():
+            raise HTTPException(status_code=409, detail="personal provider path is unsafe")
+        old = path.read_bytes() if path.exists() else None
         try:
             atomic_bytes(path, yaml_text.encode())
             save_metadata(meta)
@@ -948,10 +960,13 @@ def create_app() -> FastAPI:
             yaml_text, count, skipped = validate_yaml(body["yaml"])
         except (ValueError, yaml.YAMLError):
             raise HTTPException(status_code=400, detail="personal snapshot rejected") from None
+        legacy_meta = ({key: old[key] for key in
+                        ("legacy_provider_ids", "legacy_provider_ids_version")
+                        if key in old} if old else {})
         meta = {"provider_id": provider, "client_id": client_id(profile),
                 "alias": alias, "kind": "snapshot", "node_count": count,
                 "skipped_nodes": skipped,
-                "updated_at": int(time.time())}
+                "updated_at": int(time.time()), **legacy_meta}
         with app.state.provider_update_lock:
             return _commit_personal(meta, yaml_text)
 
@@ -1070,7 +1085,7 @@ def create_app() -> FastAPI:
                     "node_count": result["node_count"],
                     "skipped_nodes": result["skipped_nodes"]}
         if via and via != "direct":
-            require_visible(profile, via)
+            via = require_visible(profile, via)
         # if_older_than (seconds): skip if the artifact is fresh enough
         if if_older_than is not None and meta.get("mtime"):
             age = time.time() - meta["mtime"]
@@ -1234,7 +1249,7 @@ def create_app() -> FastAPI:
             existing = app.state.catalog.get(body["route"])
             if existing is not None and not visible(profile, body["route"]):
                 raise HTTPException(status_code=404, detail="unknown route")
-            route_ids = [body["route"]]
+            route_ids = [app.state.catalog.resolve(body["route"])]
         else:
             routes = app.state.catalog.filter(country=body.get("country"),
                                               provider=body.get("provider"), client_id=cid)
@@ -1350,8 +1365,7 @@ def create_app() -> FastAPI:
             route_ids = [app.state.state.get(client_id(profile))["route"]]
 
         cid = client_id(profile)
-        for rid in route_ids:
-            require_visible(profile, rid)
+        route_ids = [require_visible(profile, rid) for rid in route_ids]
         kw = dict(scheme=scheme, port=port, path=path, method=method,
                   check=check, expected=expected, timeout=timeout)
         outcomes = await asyncio.to_thread(
@@ -1380,7 +1394,7 @@ def create_app() -> FastAPI:
             existing = app.state.catalog.get(body["route"])
             if existing is not None and not visible(profile, body["route"]):
                 raise HTTPException(status_code=404, detail="unknown route")
-            route_ids = [body["route"]]
+            route_ids = [app.state.catalog.resolve(body["route"])]
         else:
             # shortlist by latency (spec 25 pipeline: health -> shortlist -> bench)
             routes = app.state.catalog.filter(country=body.get("country"),
@@ -1519,7 +1533,7 @@ def create_app() -> FastAPI:
         mode = body.get("mode", "proxy")
         if not route:
             raise HTTPException(status_code=400, detail="'route' is required")
-        require_visible(profile, route)
+        route = require_visible(profile, route)
         if mode == "tun":
             raise HTTPException(status_code=400,
                                 detail="unsupported_in_environment: tun one-shot not available")

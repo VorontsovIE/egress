@@ -10,6 +10,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+import re
 from typing import Any
 
 from .config import ClientConfig
@@ -93,6 +94,24 @@ class EgressApi:
 
     def list_personal(self) -> dict:
         return self._request("GET", "/v1/personal/providers")
+
+    def resolve_route(self, route: str) -> str:
+        """Resolve @personal-alias:node for this token to its canonical ID."""
+        if not route.startswith("@"):
+            return route
+        match = re.fullmatch(r"@([A-Za-z0-9][A-Za-z0-9._-]{0,31}):([A-Za-z0-9._-]+)",
+                             route)
+        if not match:
+            raise ValueError("personal route shorthand must look like @alias:node")
+        alias, node = match.groups()
+        entries = self.list_personal().get("providers", [])
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("alias") != alias:
+                continue
+            provider = entry.get("provider_id")
+            if isinstance(provider, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,99}", provider):
+                return f"{provider}:{node}"
+        raise ValueError(f"unknown personal route alias @{alias}")
 
     def add_personal(self, name: str, kind: str, source: str) -> dict:
         return self._request("POST", "/v1/personal/providers",

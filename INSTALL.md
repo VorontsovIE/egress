@@ -175,10 +175,36 @@ sudo scripts/setup-egress-client.sh --environment host
 egressctl capabilities
 ```
 
-Without `--client`, the script uses `host-uid-<UID>` for the user who invoked
-`sudo` and reuses that profile on later runs. Set `--client <id>` only when you
-want a separate profile. Container setup similarly defaults to
-`container-uid-<UID>`.
+Without `--client`, the script uses `host-<username>` for the user who invoked
+`sudo` and reuses that profile on later runs. Container setup similarly uses
+`container-<username>`. If the username is unavailable or contains unsafe
+characters, the ID falls back to `host-uid-<UID>` or `container-uid-<UID>`.
+Set `--client <id>` only when you want a separate profile.
+On host, explicitly select that secondary profile per command with
+`egressctl --config /etc/vibelab-egress/client.yaml ...` or
+`egress-run --config /etc/vibelab-egress/client.yaml ...`; default enrollment
+continues to select the invoking user's username profile.
+
+On backend update, the installer migrates existing UID-based profiles and
+hashed personal provider IDs while egressd and Mihomo are stopped. It checks
+for ID collisions and active one-shot sessions first, then saves a restricted
+backup under `<root>/identity-migrations/`. To roll back, stop both Compose
+services and restore the backup:
+
+```bash
+sudo python3 scripts/migrate-egress-identities.py \
+  --root /var/lib/vibelab-egress \
+  --secrets-dir /etc/vibelab-egress/secrets \
+  --restore /var/lib/vibelab-egress/identity-migrations/backup-<timestamp>
+```
+
+После восстановления пересоздайте generated Mihomo config и запустите stack
+версией кода, на которую выполняется rollback.
+
+Personal provider IDs use `p-<client-id>-<alias>` (for example,
+`p-host-vibelab-blanc`). In `egress-run` and route-selection commands, use
+`@blanc:vless-49`; the client resolves this shorthand against personal
+providers owned by its token. API responses continue to use canonical IDs.
 
 Build the pinned packet engine before provisioning client bundles:
 
@@ -230,7 +256,7 @@ and its route IDs are mapped to the test-owned snapshot.
 ```bash
 sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test \
-  --route 'p-8970d7b87bee79eda2c25b78-blanc:vless-49' --copy-personal-source
+  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
 ```
 
 The same test harness can be run directly with an existing bundle:
@@ -410,7 +436,8 @@ Production container: bake client package + Skill в image либо
 После установки backend на host локальному пользователю не требуется
 `provision-client.sh` или sudo: первый вызов `egressctl whoami` обращается к
 `/run/vibelab-egress-enroll/enroll.sock`. Служба определяет UID по Unix socket,
-создаёт профиль `host-uid-<uid>` и возвращает учётные данные в память клиента.
+создаёт профиль `host-<username>` (или UID fallback) и возвращает учётные данные
+в память клиента.
 Работает и для системных UID без home. Проверка от имени такого пользователя:
 
 ```bash

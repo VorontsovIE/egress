@@ -3,7 +3,8 @@
 Discovery order:
   1. explicit ``--config PATH``
   2. ``VIBELAB_EGRESS_CONFIG``
-  3. ``/etc/vibelab-egress/client.yaml``
+  3. host enrollment socket (per-invoking-UID default profile)
+  4. ``/etc/vibelab-egress/client.yaml``
 
 The client config carries NO secrets: tokens and proxy credentials live in
 separate files referenced by path (spec section 37).
@@ -202,6 +203,10 @@ def _load_host_socket() -> ClientConfig:
             raw = sock.recv(4096)
         data = json.loads(raw)
         if not data.get("ok"):
+            if data.get("error") == "migration_required":
+                raise ConfigError(
+                    "default host profile migration is required; run "
+                    "sudo scripts/install-backend-host.sh, then retry")
             raise ConfigError("host enrollment unavailable")
         cfg = ClientConfig(
             client_id=data["client_id"], control_url="http://127.0.0.1:9091",

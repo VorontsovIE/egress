@@ -189,7 +189,7 @@ class EgressConfig:
             if not re.fullmatch(r"[A-Za-z0-9._\-]{1,64}", s.user):
                 raise ValueError(f"invalid oneshot user {s.user!r}")
         for p in self.providers:
-            if not re.fullmatch(r"[A-Za-z0-9._\-]{1,64}", p.name):
+            if not re.fullmatch(r"[A-Za-z0-9._\-]{1,99}", p.name):
                 raise ValueError(f"invalid provider name {p.name!r}")
         names = {p.name for p in self.providers}
         if len(names) != len(self.providers):

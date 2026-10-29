@@ -62,6 +62,7 @@
 │   ├── egress-hostctl                  # узкий CLI: deploy/status/logs/CIDRs/acceptance/client provisioning
 │   ├── egress-host-test                # host acceptance harness (--static без Docker daemon)
 │   ├── egress-devbridge                # dev/test bridge: фиксированные ops, bearer-token, 172.17.0.1:9099
+│   ├── client_identity.py               # host/container default ID from Linux username
 │   ├── live-acceptance.py              # live acceptance (spec §50, §49) → один JSON-репорт
 │   ├── LIVE_ACCEPTANCE.md
 │   ├── units/                          # systemd: devbridge, cidr-sync (service+timer)
@@ -73,6 +74,7 @@
 │   ├── verify-backend-host.sh          # compose, binds, socket, secrets, harness
 │   ├── provision-client.sh             # client bundle: client.yaml + token + proxy.auth
 │   ├── install-client.sh               # установка client package (host | container)
+│   ├── migrate-egress-identities.py    # rollback-safe UID/provider ID migration
 │   ├── verify-client.sh                # config validate/whoami/doctor + права на секреты
 │   ├── bootstrap-dev-access.sh         # один раз: devbridge token + unit + start
 │   ├── fetch-geo-data.sh               # GEO-скачивание по требованию (не в git; spec 14/41)

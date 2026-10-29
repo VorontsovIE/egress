@@ -621,6 +621,21 @@ def test_catalog_refresh_preserves_runtime_state_only_for_unchanged_route():
     assert reset.benchmark_mbps is None and reset.benchmark_at is None
 
 
+def test_catalog_resolves_temporary_personal_route_alias_with_ownership():
+    catalog = RouteCatalog().build(
+        {"p-host-vibelab-blanc": ["FI-node"]},
+        owners={"p-host-vibelab-blanc": "host-vibelab"},
+        legacy_provider_ids={"p-0123456789abcdef01234567-blanc":
+                             "p-host-vibelab-blanc"},
+    )
+    legacy = "p-0123456789abcdef01234567-blanc:FI-node"
+    canonical = "p-host-vibelab-blanc:FI-node"
+    assert catalog.resolve(legacy) == canonical
+    assert catalog.get(legacy).id == canonical
+    assert catalog.visible(legacy, "host-vibelab")
+    assert not catalog.visible(legacy, "host-other")
+
+
 def test_provider_fingerprint_tracks_config_not_yaml_key_order(tmp_path):
     from egressd.main import _read_provider_file
 

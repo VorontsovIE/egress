@@ -18,6 +18,8 @@ specific provider, or a baseline comparison against `direct`.
 3. **One-shot for one-off tasks.** For a single geo-specific command, use
    `egress-run ROUTE -- command` (or `egressctl` one-shot). Do **not** change
    the persistent default just to run one command.
+   Personal routes may use the compact form `@alias:node` (for example,
+   `@blanc:vless-49`); `egressctl list` shows this form for your own sources.
 4. **`direct` is a normal route.** It is in the route catalog, works as a
    default, as a one-shot, and as the baseline for probes/benchmarks.
 5. **Parallel tasks = parallel invocations.** For concurrent work, start
@@ -64,6 +66,7 @@ egressctl doctor                      # local + backend health checks
 
 egressctl route current               # my persistent default route
 egressctl route set ROUTE             # set my default (verify after!)
+# personal route shorthand: @alias:node, e.g. @blanc:vless-49
 egressctl mode current
 egressctl mode set proxy|tun          # tun only if capabilities allow
 
@@ -153,7 +156,7 @@ egress-run direct -- curl -s https://api.ipify.org
 ### 4. VPN one-shot
 
 ```bash
-egress-run blanc:FI-Helsinki-1 -- curl -s https://api.ipify.org
+egress-run @blanc:vless-49 -- curl -s https://api.ipify.org
 ```
 
 ### 5. Two concurrent one-shots, different routes

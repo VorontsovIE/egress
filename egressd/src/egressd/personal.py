@@ -5,7 +5,6 @@ authenticated client ID, never accepted from a request body.
 """
 from __future__ import annotations
 
-import hashlib
 import http.client
 import ipaddress
 import json
@@ -20,6 +19,7 @@ from urllib.parse import urljoin, urlsplit
 import yaml
 
 ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_PROVIDERS = 32
 ALLOWED_TYPES = {"vless", "vmess", "trojan", "ss", "hysteria2", "tuic",
@@ -33,10 +33,13 @@ def state_dir() -> Path:
 
 
 def provider_id(client_id: str, alias: str) -> str:
-    if not ALIAS_RE.fullmatch(alias):
+    if not isinstance(client_id, str) or not CLIENT_ID_RE.fullmatch(client_id) or \
+            not ALIAS_RE.fullmatch(alias):
         raise ValueError("invalid personal provider name")
-    owner = hashlib.sha256(client_id.encode()).hexdigest()[:24]
-    return f"p-{owner}-{alias}"
+    result = f"p-{client_id}-{alias}"
+    if len(result) > 99:
+        raise ValueError("personal provider name is too long")
+    return result
 
 
 def metadata_path(client_id: str, alias: str) -> Path:

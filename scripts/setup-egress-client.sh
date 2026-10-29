@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT=""
+CLIENT_EXPLICIT=0
 ENVIRONMENT=""
 EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-}"
 SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-}"
@@ -35,9 +36,13 @@ Usage:
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
 test. Building the engine requires stable Go 1.26.3 or newer.
-Without --client, the invoking UID gets one stable default profile:
-host-uid-<uid> for host setup and container-uid-<uid> for container setup.
+Without --client, the invoking account gets one stable default profile:
+host-<username> for host setup and container-<username> for container setup.
+If the account name is unavailable or unsafe, the ID falls back to *-uid-<uid>.
 Pass --client to use a different profile.
+On host, select an explicitly installed --client profile for commands with
+--config /etc/vibelab-egress/client.yaml or VIBELAB_EGRESS_CONFIG; automatic
+host enrollment otherwise selects the invoking user's default profile.
 Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
 --copy-personal-source snapshots a personal provider under the test client's
 own identity before running the Docker test; every supplied route must be a
@@ -49,7 +54,7 @@ fail() { echo "setup-egress-client: $*" >&2; exit 2; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --client) [ "$#" -ge 2 ] || fail "--client needs a value"; CLIENT="$2"; shift 2 ;;
+    --client) [ "$#" -ge 2 ] || fail "--client needs a value"; CLIENT="$2"; CLIENT_EXPLICIT=1; shift 2 ;;
     --environment) [ "$#" -ge 2 ] || fail "--environment needs a value"; ENVIRONMENT="$2"; shift 2 ;;
     --out) [ "$#" -ge 2 ] || fail "--out needs a value"; OUT="$2"; OUT_EXPLICIT=1; shift 2 ;;
     --secrets-dir) [ "$#" -ge 2 ] || fail "--secrets-dir needs a value"; SECRETS_DIR="$2"; shift 2 ;;
@@ -77,7 +82,7 @@ case "$ENVIRONMENT" in
         for route in "${ROUTES[@]}"; do
           route_provider="${route%%:*}"
           route_node="${route#*:}"
-          [[ "$route_provider" =~ ^p-[0-9a-f]{24}-[A-Za-z0-9._-]{1,32}$ && \
+          [[ "$route_provider" =~ ^p-[A-Za-z0-9._-]{1,64}-[A-Za-z0-9._-]{1,32}$ && \
              "$route_node" != "$route" && "$route_node" != *:* && \
              "$route_node" =~ ^[A-Za-z0-9._-]+$ ]] || \
             fail "--copy-personal-source requires personal provider:node route IDs"
@@ -94,10 +99,7 @@ esac
 if [ -z "$CLIENT" ]; then
   DEFAULT_UID="${SUDO_UID:-$(id -u)}"
   [[ "$DEFAULT_UID" =~ ^[0-9]+$ ]] || fail "cannot determine invoking UID; pass --client explicitly"
-  case "$ENVIRONMENT" in
-    host) CLIENT="host-uid-$DEFAULT_UID" ;;
-    container) CLIENT="container-uid-$DEFAULT_UID" ;;
-  esac
+  CLIENT="$(python3 "$ROOT/host/client_identity.py" "$DEFAULT_UID" "$ENVIRONMENT")"
   echo "using default client: $CLIENT (pass --client to override)"
 fi
 [ "$ENVIRONMENT" = container ] || [ "$COPY_PERSONAL_SOURCE" = 0 ] || \
@@ -127,7 +129,14 @@ fi
 if [ "$ENVIRONMENT" = host ]; then
   bash "$ROOT/scripts/install-client.sh" \
     --client "$CLIENT" --target host --bundle "$BUNDLE"
-  echo "Host client is ready. Check TUN support with: egressctl capabilities"
+  if [ "${CLIENT_EXPLICIT:-0}" = 1 ]; then
+    echo "Host client profile installed. Select this explicit override with:"
+    echo "  egressctl --config /etc/vibelab-egress/client.yaml whoami"
+    echo "  egressctl --config /etc/vibelab-egress/client.yaml capabilities"
+    echo "  egress-run --config /etc/vibelab-egress/client.yaml ROUTE -- command"
+  else
+    echo "Host client is ready. Check TUN support with: egressctl capabilities"
+  fi
 elif [ "$DOCKER_TEST" = 1 ]; then
   if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
     source_providers=()

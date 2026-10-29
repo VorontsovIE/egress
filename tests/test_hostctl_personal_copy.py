@@ -93,7 +93,7 @@ def test_copy_personal_snapshot_creates_target_owned_route_without_logging_yaml(
      yaml_text) = _fixture(tmp_path, monkeypatch)
     calls = []
     target_alias = "test-blanc-" + hashlib.sha256(source_provider.encode()).hexdigest()[:8]
-    target_provider = f"p-{hashlib.sha256(target.encode()).hexdigest()[:24]}-{target_alias}"
+    target_provider = f"p-{target}-{target_alias}"
     target_route = f"{target_provider}:vless-49"
 
     def fake_urlopen(request, timeout):
@@ -138,7 +138,7 @@ def test_copy_personal_snapshot_refuses_overwriting_non_snapshot_source(
     root, clients, _owner, target, source_provider, source_route, _yaml = \
         _fixture(tmp_path, monkeypatch)
     target_alias = "test-blanc-" + hashlib.sha256(source_provider.encode()).hexdigest()[:8]
-    target_provider = f"p-{hashlib.sha256(target.encode()).hexdigest()[:24]}-{target_alias}"
+    target_provider = f"p-{target}-{target_alias}"
     personal = root / "egressd" / "personal"
     (personal / f"{target_provider}.json").write_text(json.dumps({
         "provider_id": target_provider, "client_id": target,
