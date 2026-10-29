@@ -29,14 +29,16 @@ usage() {
 Usage:
   sudo scripts/setup-egress-client.sh --client <id> --environment host
   sudo scripts/setup-egress-client.sh --client <id> --environment container \
-      --docker-test --route <provider:route> [--copy-personal-source]
+      --docker-test --route <provider:route> [--route <provider:route> ...] \
+      [--copy-personal-source]
 
 Requires an installed backend. Builds the pinned TUN engine if needed,
 provisions the client, and installs it on the host or runs the generic Docker
 test. Building the engine requires stable Go 1.26.3 or newer.
 Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
---copy-personal-source snapshots a personal route under the test client's own
-identity before running the Docker test; it does not grant access to its owner.
+--copy-personal-source snapshots a personal provider under the test client's
+own identity before running the Docker test; all supplied routes must belong
+to that provider. It does not grant access to its owner.
 EOF
 }
 fail() { echo "setup-egress-client: $*" >&2; exit 2; }
@@ -69,7 +71,15 @@ case "$ENVIRONMENT" in
     if [ "$DOCKER_TEST" = 1 ]; then
       [ "${#ROUTES[@]}" -gt 0 ] || fail "--docker-test requires at least one --route"
       if [ "$COPY_PERSONAL_SOURCE" = 1 ]; then
-        [ "${#ROUTES[@]}" = 1 ] || fail "--copy-personal-source requires exactly one --route"
+        source_provider="${ROUTES[0]%%:*}"
+        for route in "${ROUTES[@]}"; do
+          route_provider="${route%%:*}"
+          route_node="${route#*:}"
+          [[ "$route_provider" == "$source_provider" && \
+             "$route_node" != "$route" && "$route_node" != *:* && \
+             "$route_node" =~ ^[A-Za-z0-9._-]+$ ]] || \
+            fail "--copy-personal-source routes must be nodes from one provider"
+        done
       fi
     elif [ "${#ROUTES[@]}" -gt 0 ]; then
       fail "--route requires --docker-test"
@@ -114,8 +124,14 @@ elif [ "$DOCKER_TEST" = 1 ]; then
       python3 "$ROOT/host/egress-hostctl" copy-personal-source \
         --source-route "${ROUTES[0]}" --target-client "$CLIENT")"
     copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"
-    echo "using test-owned snapshot route: $copied_route"
-    ROUTES=("$copied_route")
+    target_provider="${copied_route%%:*}"
+    copied_routes=()
+    for route in "${ROUTES[@]}"; do
+      node="${route#*:}"
+      copied_routes+=("$target_provider:$node")
+    done
+    ROUTES=("${copied_routes[@]}")
+    printf 'using test-owned snapshot routes: %s\n' "${ROUTES[*]}"
   fi
   bash "$ROOT/tests/docker/run-client-container.sh" "$BUNDLE" "${ROUTES[@]}"
 else

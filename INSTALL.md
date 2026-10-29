@@ -194,6 +194,21 @@ sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test --route blanc:FI-Helsinki-1
 ```
 
+To also check two different TUN routes concurrently, pass two route IDs. The
+harness starts both workloads before releasing them to fetch their public exit
+IP, and checks that they have distinct network namespaces and distinct public
+exit IPs:
+
+```bash
+sudo scripts/setup-egress-client.sh --client egress-test-client \
+  --environment container --docker-test \
+  --route 'blanc:FI-Helsinki-1' --route 'xeovo:US-New-York-1'
+```
+
+Choose routes known to use different exit IPs. With `--copy-personal-source`,
+pass two node IDs from the same personal provider; the source snapshot is copied
+once and both IDs are mapped to the test-owned snapshot.
+
 Для персонального маршрута host-профиля (ID начинается с `p-`) добавьте
 `--copy-personal-source`. Host скопирует нормализованный snapshot в новый
 персональный источник тестового клиента и заменит ID маршрута перед запуском
@@ -456,4 +471,7 @@ HTTPS-запросы в proxy и TUN mode через выбранный route. �
 контейнеру `CAP_NET_ADMIN` и не включает `--privileged`. Каждое выполнение
 создаёт свой namespace, так что параллельные запуски могут выбирать разные
 route ID. Пакетный engine получает только TUN fd и выбранную SOCKS-сессию;
-команда и её дочерние процессы остаются в клиентском контейнере.
+команда и её дочерние процессы остаются в клиентском контейнере. Если передать
+два `--route`, harness дополнительно запускает TUN workloads одновременно,
+сверяет namespace и проверяет, что каждый получил публичный exit IP, отличный
+от IP второго маршрута.

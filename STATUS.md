@@ -2,6 +2,19 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Проверка параллельных TUN routes в Docker — 2026-10-29
+
+Docker harness теперь при двух `--route` запускает одновременно два TUN
+workload из обычного тестового контейнера. Оба сначала записывают inode своего
+network namespace и ждут общего барьера; harness сверяет namespace с outer и
+между собой, после чего одновременно разрешает HTTPS-запрос к ipify. Проверка
+завершается успешно только если обе команды отработали и получили разные
+публичные exit IP. `--copy-personal-source` принимает несколько node IDs из
+одного personal provider и переносит их на test-owned snapshot. Добавлены
+worker и инструкции. Syntax/compile checks прошли; live concurrency прогон
+требует двух provider routes с разными exit IP и ещё не выполнен. Offline suite:
+**337 passed**.
+
 ## DNS в TUN для nameserver произвольного Docker-контейнера — 2026-10-29
 
 После прошлой правки DoH всё ещё не запускался в обычном Docker bridge:

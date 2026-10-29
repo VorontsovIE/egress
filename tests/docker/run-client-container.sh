@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the installed client in an ordinary, isolated Docker container.
 # Usage: tests/docker/run-client-container.sh <client-bundle> [route ...]
+# Two or more routes also trigger a concurrent TUN check for the first two.
 set -euo pipefail
 
 BUNDLE="${1:?usage: run-client-container.sh <client-bundle> [route ...]}"
@@ -115,4 +116,99 @@ for route in "${ROUTES[@]}"; do
     https://www.cloudflare.com/cdn-cgi/trace >/dev/null
   printf 'route %s: PASS\n' "$route"
 done
+
+if [ "${#ROUTES[@]}" -ge 2 ]; then
+  ROUTE_A="${ROUTES[0]}"
+  ROUTE_B="${ROUTES[1]}"
+  [ "$ROUTE_A" != "$ROUTE_B" ] || {
+    echo "concurrent TUN check needs two different route IDs" >&2
+    exit 2
+  }
+  CONCURRENT_DIR="/tmp/vibelab-egress-concurrent-${NAME}"
+  NS_A="$CONCURRENT_DIR/a.netns"
+  NS_B="$CONCURRENT_DIR/b.netns"
+  RELEASE="$CONCURRENT_DIR/release"
+  RESULT_A="$CONCURRENT_DIR/a.ip"
+  RESULT_B="$CONCURRENT_DIR/b.ip"
+  LOG_A="$CONCURRENT_DIR/a.log"
+  LOG_B="$CONCURRENT_DIR/b.log"
+  STATUS_A="$CONCURRENT_DIR/a.status"
+  STATUS_B="$CONCURRENT_DIR/b.status"
+  docker exec "$NAME" mkdir -m 700 "$CONCURRENT_DIR"
+
+  docker exec -d "$NAME" sh -c '
+    egress-run --mode tun "$1" -- python3 /workspace/tests/docker/concurrent-route-worker.py \
+      "$2" "$3" "$4" "$5" >"$6" 2>&1
+    rc=$?
+    printf "%s\n" "$rc" >"$7"
+    exit "$rc"
+  ' sh "$ROUTE_A" "$NS_A" "$NS_B" "$RELEASE" "$RESULT_A" "$LOG_A" "$STATUS_A"
+  docker exec -d "$NAME" sh -c '
+    egress-run --mode tun "$1" -- python3 /workspace/tests/docker/concurrent-route-worker.py \
+      "$2" "$3" "$4" "$5" >"$6" 2>&1
+    rc=$?
+    printf "%s\n" "$rc" >"$7"
+    exit "$rc"
+  ' sh "$ROUTE_B" "$NS_B" "$NS_A" "$RELEASE" "$RESULT_B" "$LOG_B" "$STATUS_B"
+
+  CONCURRENT_READY=0
+  for _ in {1..1200}; do
+    if docker exec "$NAME" test -s "$NS_A" && docker exec "$NAME" test -s "$NS_B"; then
+      CONCURRENT_READY=1
+      break
+    fi
+    if docker exec "$NAME" test -f "$STATUS_A" || docker exec "$NAME" test -f "$STATUS_B"; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$CONCURRENT_READY" != 1 ]; then
+    docker exec "$NAME" sh -c 'cat "$1" "$2" 2>/dev/null || true' \
+      sh "$LOG_A" "$LOG_B" >&2
+    echo "concurrent TUN routes failed to enter their namespaces" >&2
+    exit 1
+  fi
+
+  TUN_NETNS_A="$(docker exec "$NAME" cat "$NS_A")"
+  TUN_NETNS_B="$(docker exec "$NAME" cat "$NS_B")"
+  [ "$TUN_NETNS_A" != "$OUTER_NETNS" ] && [ "$TUN_NETNS_B" != "$OUTER_NETNS" ] \
+    && [ "$TUN_NETNS_A" != "$TUN_NETNS_B" ] || {
+      docker exec "$NAME" touch "$RELEASE"
+      echo "concurrent TUN routes shared a network namespace" >&2
+      exit 1
+    }
+  docker exec "$NAME" touch "$RELEASE"
+
+  CONCURRENT_DONE=0
+  for _ in {1..600}; do
+    if docker exec "$NAME" test -f "$STATUS_A" && docker exec "$NAME" test -f "$STATUS_B"; then
+      CONCURRENT_DONE=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$CONCURRENT_DONE" != 1 ] || \
+     [ "$(docker exec "$NAME" cat "$STATUS_A" 2>/dev/null || true)" != 0 ] || \
+     [ "$(docker exec "$NAME" cat "$STATUS_B" 2>/dev/null || true)" != 0 ] || \
+     ! docker exec "$NAME" test -s "$RESULT_A" || \
+     ! docker exec "$NAME" test -s "$RESULT_B"; then
+    docker exec "$NAME" sh -c 'cat "$1" "$2" 2>/dev/null || true' \
+      sh "$LOG_A" "$LOG_B" >&2
+    echo "concurrent TUN route workload failed" >&2
+    exit 1
+  fi
+
+  EXIT_IP_A="$(docker exec "$NAME" cat "$RESULT_A")"
+  EXIT_IP_B="$(docker exec "$NAME" cat "$RESULT_B")"
+  [ "$EXIT_IP_A" != "$EXIT_IP_B" ] || {
+    echo "concurrent route check needs routes with distinct public exit IPs" >&2
+    exit 1
+  }
+  printf 'concurrent TUN routes: PASS\n'
+  printf '  %s netns=%s exit_ip=%s\n' "$ROUTE_A" "$TUN_NETNS_A" \
+    "$EXIT_IP_A"
+  printf '  %s netns=%s exit_ip=%s\n' "$ROUTE_B" "$TUN_NETNS_B" \
+    "$EXIT_IP_B"
+fi
+
 printf 'ordinary Docker client container: PASS (all child processes stayed inside %s)\n' "$NAME"

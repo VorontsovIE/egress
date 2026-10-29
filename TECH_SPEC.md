@@ -2286,7 +2286,9 @@ Release принимается только если:
 1. `egress-run --mode tun ROUTE -- command` works for proxy-unaware TCP client on host and generic Docker container.
 2. Command remains in the calling environment with caller filesystem/environment and mapped caller identity.
 3. UDP/QUIC test works when route/protocol/backend supports it.
-4. Concurrent host TUN one-shot jobs through different routes work independently.
+4. Concurrent host and generic Docker TUN one-shot jobs through different
+   routes work independently; the Docker harness holds both workloads active,
+   compares their network namespaces and confirms their public exit IPs.
 5. `direct + tun` works as isolated direct path.
 6. No generic root escalation/remote exec.
 7. stale netns/TUN resources cleaned.
