@@ -1016,8 +1016,11 @@ Command/argv не отправляется backend для исполнения.
 и переключения на proxy нет.
 
 Клиент создаёт вложенные user и network namespaces, поднимает TUN и default
-routes внутри нового network namespace, проксирует loopback DNS через TUN и
-запускает workload после передачи TUN fd packet engine.
+routes внутри нового network namespace, перенаправляет DNS-запросы на локальный
+forwarder и запускает workload после передачи TUN fd packet engine. Для этого
+адреса nameserver из клиентского `/etc/resolv.conf` назначаются loopback
+интерфейсу только нового namespace; внешний namespace и его resolver не
+меняются. Forwarder отправляет запросы через выбранный TUN route.
 Workload, его argv, environment, cwd и stdio остаются в клиентской среде.
 Engine получает только TUN fd и одноразовый SOCKS endpoint/credential для
 выбранного route; он не получает argv и не запускает workload. Для route
@@ -1030,6 +1033,10 @@ direct используется direct packet forwarding. Закрытие ко�
 resolver по UDP, затем по TCP. Для пользовательских resolver используются
 только их адреса: сначала UDP, затем TCP. Все эти соединения идут внутри
 выбранного TUN route; DNS не отправляется через outer Docker resolver.
+Адреса nameserver, совпадающие со всеми настроенными `tun_dns_servers`, не
+могут быть использованы как upstream, поскольку в private namespace они
+перехвачены локальным forwarder; в этом случае запуск завершается с явной
+ошибкой вместо DNS timeout.
 
 На host требуются Linux, доступ к /dev/net/tun, util-linux unshare, iproute2 и
 разрешённые unprivileged user namespaces. Для Docker-контейнера дополнительно

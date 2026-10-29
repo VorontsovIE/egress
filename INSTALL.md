@@ -218,9 +218,14 @@ The harness starts an ordinary Docker client with `/dev/net/tun` plus the reposi
 profile `client/seccomp-tun.json`. The Docker profile allows the exact nested
 namespace tuple used by the client; do not add `--privileged` or
 `CAP_NET_ADMIN`. Install `util-linux`, `iproute2`, and `ca-certificates` in the
-image. Default TUN DNS uses Cloudflare DoH over the selected route, with UDP
-and TCP DNS fallback. The generic test image and launch flags are in
-`tests/docker/`.
+image. TUN reads nameserver addresses from the container's `/etc/resolv.conf`
+and makes those addresses local only inside each private network namespace.
+Its DNS forwarder then uses configured resolvers over the selected route; the
+default Cloudflare resolvers use DoH first, then UDP and TCP fallback. The
+outer container's DNS and network remain unchanged. At least one configured
+`tun_dns_servers` address must differ from all nameservers in `/etc/resolv.conf`
+so the forwarder has a non-recursive upstream. The generic test image and
+launch flags are in `tests/docker/`.
 
 For removal of older privileged helper installations, first let all jobs drain,
 then run `sudo scripts/remove-legacy-tun-helper.sh`. The script stops the host

@@ -1,7 +1,9 @@
 """TUN-local DNS forwarding uses the selected route and tolerates UDP limits."""
 from __future__ import annotations
 
+import socket
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -101,3 +103,67 @@ def test_custom_resolver_keeps_configured_dns_policy(monkeypatch):
                         lambda _query, address: address.encode())
 
     assert tun_bootstrap._forward_dns(b"dns-query", ("9.9.9.9",)) == b"9.9.9.9"
+
+
+def test_resolv_conf_collects_all_numeric_unicast_nameservers(tmp_path):
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        "# Docker bridge and local stub resolvers\n"
+        "nameserver 127.0.0.11\n"
+        "nameserver 172.18.0.2\n"
+        "nameserver 2606:4700:4700::1111\n"
+        "nameserver fe80::1%eth0\n"
+        "nameserver 172.18.0.2\n"
+        "nameserver 0.0.0.0\n"
+        "nameserver 224.0.0.1\n"
+        "nameserver resolver.example\n"
+    )
+
+    assert tun_bootstrap._outer_dns_servers(str(resolv_conf)) == (
+        "127.0.0.11", "172.18.0.2", "2606:4700:4700::1111", "fe80::1")
+
+
+def test_configure_network_localizes_nonloopback_resolvers(monkeypatch):
+    commands = []
+    monkeypatch.setattr(tun_bootstrap, "_outer_dns_servers", lambda: (
+        "127.0.0.11", "172.18.0.2", "2606:4700:4700::1111"))
+    monkeypatch.setattr(tun_bootstrap, "_ip", lambda *args: commands.append(args))
+
+    tun_bootstrap._configure_network(-1)
+
+    assert ("addr", "add", "172.18.0.2/32", "dev", "lo") in commands
+    assert ("-6", "addr", "add", "2606:4700:4700::1111/128", "dev", "lo", "nodad") in commands
+    assert not any("127.0.0.11/32" in arg for command in commands for arg in command)
+
+
+def test_dns_proxy_does_not_forward_to_its_intercepted_listener():
+    assert tun_bootstrap._usable_dns_upstreams(
+        ("172.18.0.2", "1.1.1.1"), ("1.1.1.1", "1.0.0.1")) == ("1.0.0.1",)
+    assert tun_bootstrap._usable_dns_upstreams(
+        ("2606:4700:4700::1111",),
+        ("2606:4700:4700:0:0::1111", "2606:4700:4700::1001"),
+    ) == ("2606:4700:4700::1001",)
+
+
+def test_dns_proxy_rejects_only_recursive_upstreams():
+    with pytest.raises(RuntimeError, match="overlap the caller's resolver"):
+        tun_bootstrap._usable_dns_upstreams(("9.9.9.9",), ("9.9.9.9",))
+
+
+def test_udp_dns_forwarder_replies_to_client_socket(monkeypatch):
+    monkeypatch.setattr(tun_bootstrap, "_forward_dns",
+                        lambda query, _upstreams: query + b"-answer")
+    server = tun_bootstrap.socketserver.ThreadingUDPServer(
+        ("127.0.0.1", 0), tun_bootstrap._ForwardDNSUDPHandler)
+    server.upstreams = ("1.1.1.1",)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+            client.settimeout(2)
+            client.sendto(b"query", server.server_address)
+            assert client.recvfrom(1024)[0] == b"query-answer"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

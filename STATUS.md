@@ -2,6 +2,21 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## DNS в TUN для nameserver произвольного Docker-контейнера — 2026-10-29
+
+После прошлой правки DoH всё ещё не запускался в обычном Docker bridge:
+container `resolv.conf` содержал публичные и bridge-IP nameserver, а локальный
+forwarder принимал только loopback-адреса. Теперь каждый nameserver из
+`resolv.conf` становится локальным адресом loopback только внутри отдельного
+TUN namespace, и DNS-запросы workload перехватываются локальным forwarder.
+Forwarder исключает совпадающие адреса из upstream, чтобы не зациклиться;
+если подходящего upstream нет, запуск завершается с понятной ошибкой.
+Исправлена отправка UDP-ответа обратно клиентскому сокету. Внешний Docker
+namespace и его DNS-настройки не меняются. Targeted unit tests: **8 passed**;
+полный direct TUN HTTPS-запрос в Docker bridge с nameserver `172.18.0.2`,
+`1.1.1.1`, `8.8.8.8` и `8.8.4.4` прошёл. Live provider-route проверка ещё
+требуется.
+
 ## Надёжный DNS в TUN через TCP маршрут — 2026-10-29
 
 После исправления проверки namespace Docker harness дошёл до HTTPS, но

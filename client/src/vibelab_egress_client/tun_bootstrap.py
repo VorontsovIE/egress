@@ -10,6 +10,7 @@ import array
 import ctypes
 import fcntl
 import http.client
+import ipaddress
 import json
 import os
 import signal
@@ -71,18 +72,20 @@ def _ip(*args: str) -> None:
         raise RuntimeError((proc.stderr or "ip command failed").strip())
 
 
-def _outer_loopback_dns() -> tuple[str, ...]:
+def _outer_dns_servers(path: str = "/etc/resolv.conf") -> tuple[str, ...]:
+    """Return numeric nameservers from the caller's resolver configuration."""
     servers = []
     try:
-        for line in open("/etc/resolv.conf", encoding="ascii"):
+        for line in open(path, encoding="ascii"):
             fields = line.split()
             if len(fields) == 2 and fields[0] == "nameserver":
                 try:
-                    ip = __import__("ipaddress").ip_address(fields[1])
+                    ip = ipaddress.ip_address(fields[1].split("%", 1)[0])
                 except ValueError:
                     continue
-                if ip.is_loopback and fields[1] not in servers:
-                    servers.append(fields[1])
+                address = str(ip)
+                if not ip.is_unspecified and not ip.is_multicast and address not in servers:
+                    servers.append(address)
     except OSError:
         pass
     return tuple(servers)
@@ -188,25 +191,52 @@ def _forward_dns(query: bytes, upstreams: tuple[str, ...]) -> bytes:
     raise OSError(f"all configured DNS servers failed: {last_error}")
 
 
-def _start_local_dns_proxy() -> int | None:
-    """Forward local stub DNS through this namespace's default TUN route."""
-    listeners = _outer_loopback_dns()
-    upstreams = tuple(x.strip() for x in
-                      os.environ.get("VIBELAB_EGRESS_TUN_DNS", "").split(",") if x.strip())
+def _usable_dns_upstreams(listeners: tuple[str, ...],
+                          configured: tuple[str, ...]) -> tuple[str, ...]:
+    # The caller's resolver addresses are local aliases in this namespace.
+    # Forwarding to one of those same addresses would recurse back into this
+    # proxy, so only retain configured upstreams that are not intercepted.
+    intercepted = {str(ipaddress.ip_address(address)) for address in listeners}
+    upstreams = []
+    for address in configured:
+        canonical = str(ipaddress.ip_address(address.split("%", 1)[0]))
+        if canonical not in intercepted:
+            upstreams.append(canonical)
+    upstreams = tuple(upstreams)
+    if not upstreams:
+        raise RuntimeError(
+            "all configured TUN DNS servers overlap the caller's resolver addresses")
+    return upstreams
+
+
+class _ForwardDNSUDPHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        query, request_socket = self.request
+        try:
+            response = _forward_dns(query, self.server.upstreams)
+            request_socket.sendto(response, self.client_address)
+        except OSError:
+            pass
+
+
+def _start_local_dns_proxy(configured: tuple[str, ...] | None = None) -> int | None:
+    """Forward the caller's DNS requests through this namespace's TUN route."""
+    # The network namespace has its own loopback and no Docker bridge device.
+    # Make every resolver from the caller's resolv.conf local in this namespace
+    # so DNS requests are accepted here instead of sent as unsupported UDP via
+    # the packet engine. _configure_network installs the corresponding local
+    # routes before the workload starts.
+    listeners = _outer_dns_servers()
+    if configured is None:
+        configured = tuple(x.strip() for x in
+                           os.environ.get("VIBELAB_EGRESS_TUN_DNS", "").split(",")
+                           if x.strip())
     if not listeners:
         return None
-    if not upstreams:
+    if not configured:
         raise RuntimeError("no TUN DNS servers configured")
+    upstreams = _usable_dns_upstreams(listeners, configured)
     servers = []
-
-    class UDPHandler(socketserver.BaseRequestHandler):
-        def handle(self):
-            query, client = self.request
-            try:
-                response = _forward_dns(query, upstreams)
-                self.server.socket.sendto(response, client)
-            except OSError:
-                pass
 
     class TCPHandler(socketserver.StreamRequestHandler):
         def handle(self):
@@ -231,7 +261,10 @@ def _start_local_dns_proxy() -> int | None:
                    {"address_family": family, "daemon_threads": True})
         bind = (address, 53, 0, 0) if family == socket.AF_INET6 else (address, 53)
         for server_class in (udp, tcp):
-            server = server_class(bind, UDPHandler if server_class is udp else TCPHandler)
+            handler = _ForwardDNSUDPHandler if server_class is udp else TCPHandler
+            server = server_class(bind, handler)
+            if server_class is udp:
+                server.upstreams = upstreams
             servers.append(server)
     pid = os.fork()
     if pid:
@@ -259,6 +292,14 @@ def _new_tun() -> int:
 
 def _configure_network(fd: int) -> None:
     _ip("link", "set", "lo", "up")
+    for address in _outer_dns_servers():
+        ip = ipaddress.ip_address(address)
+        if ip.is_loopback:
+            continue
+        if ip.version == 6:
+            _ip("-6", "addr", "add", f"{ip}/128", "dev", "lo", "nodad")
+        else:
+            _ip("addr", "add", f"{ip}/32", "dev", "lo")
     # The namespace has no physical interface. These are its only external
     # routes; if the TUN device stops, packets have nowhere else to go.
     _ip("addr", "add", "198.18.0.1/30", "dev", "egress0")
@@ -335,6 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         control.close()
         os.close(tun_fd)
         tun_fd = None
+        dns_upstreams = tuple(x.strip() for x in
+                              os.environ.get("VIBELAB_EGRESS_TUN_DNS", "").split(",")
+                              if x.strip())
         os.environ.pop("VIBELAB_EGRESS_TUN_CONTROL_FD", None)
         os.environ.pop("VIBELAB_EGRESS_TUN_DNS", None)
         os.environ.pop("VIBELAB_EGRESS_TUN_ENGINE", None)
@@ -345,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
                 if item and item != module_root)
             if not os.environ["PYTHONPATH"]:
                 os.environ.pop("PYTHONPATH", None)
-        dns_pid = _start_local_dns_proxy()
+        dns_pid = _start_local_dns_proxy(dns_upstreams)
         workload = None
         signal.signal(signal.SIGINT, lambda _signum, _frame: None)
         signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
