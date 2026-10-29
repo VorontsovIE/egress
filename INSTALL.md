@@ -217,8 +217,10 @@ sudo bash tests/docker/run-client-container.sh \
 The harness starts an ordinary Docker client with `/dev/net/tun` plus the repository
 profile `client/seccomp-tun.json`. The Docker profile allows the exact nested
 namespace tuple used by the client; do not add `--privileged` or
-`CAP_NET_ADMIN`. Install `util-linux` and `iproute2` in the image. The generic
-test image and launch flags are in `tests/docker/`.
+`CAP_NET_ADMIN`. Install `util-linux`, `iproute2`, and `ca-certificates` in the
+image. Default TUN DNS uses Cloudflare DoH over the selected route, with UDP
+and TCP DNS fallback. The generic test image and launch flags are in
+`tests/docker/`.
 
 For removal of older privileged helper installations, first let all jobs drain,
 then run `sudo scripts/remove-legacy-tun-helper.sh`. The script stops the host

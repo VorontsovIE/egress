@@ -2,6 +2,19 @@
 
 Обновляется после каждого завершённого шага. Источник правды по требованиям — `TECH_SPEC.md`.
 
+## Надёжный DNS в TUN через TCP маршрут — 2026-10-29
+
+После исправления проверки namespace Docker harness дошёл до HTTPS, но
+завершился с DNS timeout. Причина: loopback DNS proxy отправлял запросы только
+UDP; у выбранного маршрута DNS по UDP может не проходить, хотя TCP egress
+работает. Для стандартных Cloudflare resolver теперь первым используется DoH
+через тот же выбранный TUN route, к закреплённому resolver IP и с проверкой
+`cloudflare-dns.com` TLS. При сбое остаются UDP и TCP DNS fallback; custom
+resolver адреса по-прежнему используются напрямую. Прямой TUN HTTPS/DNS внутри
+обычного Docker-контейнера и unit-тесты fallback прошли. Offline suite —
+**332 passed**, install harness — **77 passed**. Реальный provider route нужно
+перепроверить на backend пользователя.
+
 ## Устойчивое сравнение TUN namespace в Docker harness — 2026-10-29
 
 Проверка сравнивала inode network namespace двух последовательных запусков.

@@ -9,14 +9,16 @@ from __future__ import annotations
 import array
 import ctypes
 import fcntl
+import http.client
 import json
 import os
 import signal
 import socket
+import socketserver
+import ssl
 import struct
 import subprocess
 import sys
-import socketserver
 import threading
 
 TUNSETIFF = 0x400454CA
@@ -96,6 +98,96 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes | None:
     return bytes(chunks)
 
 
+_CLOUDFLARE_DOH_HOST = "cloudflare-dns.com"
+_CLOUDFLARE_DOH_IPS = frozenset({
+    "1.1.1.1", "1.0.0.1",
+    "2606:4700:4700::1111", "2606:4700:4700::1001",
+})
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to a configured resolver IP while verifying Cloudflare SNI."""
+
+    def __init__(self, address: str, timeout: float = 4.0):
+        self.address = address
+        super().__init__(_CLOUDFLARE_DOH_HOST, 443, timeout=timeout,
+                         context=ssl.create_default_context())
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self.address, self.port), self.timeout,
+                                        self.source_address)
+        try:
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        except BaseException:
+            sock.close()
+            raise
+
+
+def _forward_dns_doh(query: bytes, upstream: str) -> bytes:
+    connection = _PinnedHTTPSConnection(upstream)
+    try:
+        connection.request(
+            "POST", "/dns-query", body=query,
+            headers={"Accept": "application/dns-message",
+                     "Content-Type": "application/dns-message"},
+        )
+        response = connection.getresponse()
+        content_type = response.getheader("Content-Type", "").split(";", 1)[0]
+        content_type = content_type.strip().lower()
+        if response.status != 200 or content_type != "application/dns-message":
+            raise OSError("DNS-over-HTTPS resolver rejected the query")
+        answer = response.read(65535)
+        if not answer:
+            raise OSError("DNS-over-HTTPS resolver returned an empty answer")
+        return answer
+    finally:
+        connection.close()
+
+
+def _forward_dns_udp(query: bytes, upstream: str) -> bytes:
+    family = socket.AF_INET6 if ":" in upstream else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(3)
+        target = (upstream, 53, 0, 0) if family == socket.AF_INET6 else (upstream, 53)
+        sock.sendto(query, target)
+        return sock.recv(65535)
+
+
+def _forward_dns_tcp(query: bytes, upstream: str) -> bytes:
+    family = socket.AF_INET6 if ":" in upstream else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.settimeout(4)
+        target = (upstream, 53, 0, 0) if family == socket.AF_INET6 else (upstream, 53)
+        sock.connect(target)
+        sock.sendall(struct.pack("!H", len(query)) + query)
+        header = _recv_exact(sock, 2)
+        if header is None:
+            raise OSError("DNS-over-TCP response is missing")
+        size = struct.unpack("!H", header)[0]
+        answer = _recv_exact(sock, size)
+        if answer is None:
+            raise OSError("DNS-over-TCP response is truncated")
+        return answer
+
+
+def _forward_dns(query: bytes, upstreams: tuple[str, ...]) -> bytes:
+    """Forward DNS over the selected TUN route, with TCP fallbacks for UDP."""
+    last_error: Exception | None = None
+    cloudflare = [address for address in upstreams if address in _CLOUDFLARE_DOH_IPS]
+    for address in cloudflare:
+        try:
+            return _forward_dns_doh(query, address)
+        except (OSError, http.client.HTTPException) as exc:
+            last_error = exc
+    for forwarder in (_forward_dns_udp, _forward_dns_tcp):
+        for address in upstreams:
+            try:
+                return forwarder(query, address)
+            except (OSError, http.client.HTTPException) as exc:
+                last_error = exc
+    raise OSError(f"all configured DNS servers failed: {last_error}")
+
+
 def _start_local_dns_proxy() -> int | None:
     """Forward local stub DNS through this namespace's default TUN route."""
     listeners = _outer_loopback_dns()
@@ -107,25 +199,11 @@ def _start_local_dns_proxy() -> int | None:
         raise RuntimeError("no TUN DNS servers configured")
     servers = []
 
-    def forward(query: bytes) -> bytes:
-        last = None
-        for upstream in upstreams:
-            family = socket.AF_INET6 if ":" in upstream else socket.AF_INET
-            try:
-                with socket.socket(family, socket.SOCK_DGRAM) as sock:
-                    sock.settimeout(3)
-                    target = (upstream, 53, 0, 0) if family == socket.AF_INET6 else (upstream, 53)
-                    sock.sendto(query, target)
-                    return sock.recv(65535)
-            except OSError as exc:
-                last = exc
-        raise OSError(f"all configured DNS servers failed: {last}")
-
     class UDPHandler(socketserver.BaseRequestHandler):
         def handle(self):
             query, client = self.request
             try:
-                response = forward(query)
+                response = _forward_dns(query, upstreams)
                 self.server.socket.sendto(response, client)
             except OSError:
                 pass
@@ -140,25 +218,9 @@ def _start_local_dns_proxy() -> int | None:
                 query = self.rfile.read(size)
                 if len(query) != size:
                     return
-                upstream = upstreams[0]
-                family = socket.AF_INET6 if ":" in upstream else socket.AF_INET
-                with socket.socket(family, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(4)
-                    target = (upstream, 53, 0, 0) if family == socket.AF_INET6 else (upstream, 53)
-                    sock.connect(target)
-                    sock.sendall(header + query)
-                    response_header = _recv_exact(sock, 2)
-                    if response_header is None:
-                        return
-                    response_size = struct.unpack("!H", response_header)[0]
-                    response = bytearray()
-                    while len(response) < response_size:
-                        chunk = sock.recv(response_size - len(response))
-                        if not chunk:
-                            return
-                        response.extend(chunk)
+                response = _forward_dns(query, upstreams)
                 self.wfile.write(struct.pack("!H", len(response)) + response)
-            except (OSError, struct.error):
+            except (OSError, http.client.HTTPException, struct.error):
                 pass
 
     for address in listeners:

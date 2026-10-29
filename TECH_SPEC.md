@@ -1024,6 +1024,13 @@ Engine получает только TUN fd и одноразовый SOCKS endp
 direct используется direct packet forwarding. Закрытие команды останавливает
 её engine и освобождает namespace.
 
+При стандартных resolver IP Cloudflare (`1.1.1.1`, `1.0.0.1`) клиент сначала
+отправляет DNS query через DNS-over-HTTPS на закреплённый IP с проверкой TLS
+для `cloudflare-dns.com`. Если DoH недоступен, клиент пробует настроенные
+resolver по UDP, затем по TCP. Для пользовательских resolver используются
+только их адреса: сначала UDP, затем TCP. Все эти соединения идут внутри
+выбранного TUN route; DNS не отправляется через outer Docker resolver.
+
 На host требуются Linux, доступ к /dev/net/tun, util-linux unshare, iproute2 и
 разрешённые unprivileged user namespaces. Для Docker-контейнера дополнительно
 передаётся только /dev/net/tun и точечный seccomp profile, допускающий нужный

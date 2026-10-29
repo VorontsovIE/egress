@@ -126,5 +126,6 @@ Install it inside the target container with:
 For Docker TUN, start the container with /dev/net/tun and:
   --security-opt seccomp=$ROOT/client/seccomp-tun.json
 The image also needs util-linux (unshare) and iproute2 (ip).
+For TUN DNS over HTTPS, install ca-certificates in the image as well.
 EOF
 fi
