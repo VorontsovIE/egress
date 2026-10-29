@@ -1,109 +1,38 @@
 # vibelab-egress
 
-Управляемый egress-слой на базе Mihomo для исследовательских и coding-агентов.
-Один backend (Docker Compose stack: `mihomo` + `egressd`) обслуживает несколько
-execution environments (host, Docker container, другие контейнеры/VM);
-клиентский пакет (`egressctl` + `egress-run`, stdlib-only) ставится локально
-в каждую среду.
+**vibelab-egress** routes locally running commands through selected proxy routes. A Docker Compose backend (`mihomo` + `egressd`) serves multiple Linux hosts and containers. Install the small Python client (`egressctl` and `egress-run`), whose core uses only the standard library, wherever your workload runs.
 
-На host каждый локальный пользователь получает личный профиль автоматически при первом
-вызове клиента, без sudo и без домашнего каталога. Пользователь может добавить
-личную подписку или proxy через `egressctl source add`; в контейнере исходник
-остаётся внутри контейнера, а backend получает только нормализованные узлы
-(подробности: `INSTALL.md`, § «Личные профили и источники»).
+## Quick start
 
-```text
-Docker host
-├── client containers (isolated workloads)
-└── vibelab-egress stack
-    ├── mihomo            # pinned v1.19.32: providers, rules, GEO, listeners, TUN
-    └── egressd           # authenticated /v1 control API + data-plane capabilities
-        ▲
-        │ (client token, per environment)
-host / container / other container
-    ├── egressctl         # control plane: routes, defaults, providers, probes
-    └── egress-run        # local exec: `egress-run ROUTE -- command`
-```
+1. Build the TUN packet engine once with Go 1.26.3+, then deploy the backend on a Linux machine with Docker Engine and Compose v2. See [INSTALL.md](INSTALL.md) for exact commands and proxy-only alternatives.
+2. Provision and install a client profile for each host or container.
+3. Check the connection and available routes:
 
-Ключевой invariant: `egress-run` запускает команду **локально** в среде
-вызова; отдельный запуск выбирает собственные route и mode, backend никогда
-не получает arbitrary command payload и не является remote-exec service
-(TECH_SPEC §1.1, §10). Для Docker-клиента установка package/config выполняется
-внутри его image или контейнера; подробные host/container инструкции — в
-`INSTALL.md`.
+   ```sh
+   egressctl config validate
+   egressctl whoami
+   egressctl list
+   ```
 
-## Документация
+4. Run a command through a route:
 
-| Файл | Назначение |
-|---|---|
-| `TECH_SPEC.md` | Источник правды по требованиям (52 раздела; layout §44, acceptance §49/50) |
-| `INSTALL.md` | Установка: A. backend (Docker host), B. client (каждая среда) |
-| `STATUS.md` | Статус фаз A0–A8, журнал решений — обновляется после каждого шага |
-| `POC_REPORT.md` | Отчёт Phase 0 PoC (22/22) |
-| `host/LIVE_ACCEPTANCE.md` | Live-acceptance на целевом хосте (один JSON-отчёт) |
+   ```sh
+   egress-run provider:route -- curl https://example.com/
+   ```
 
-## Быстрый старт
+   Replace `provider:route` with a route ID shown by `egressctl list`.
 
-**Backend** (один раз на Docker host, root) — `INSTALL.md`, шаг A:
+`egress-run` executes the command locally. It sends route/session requests to the backend, never the command itself. Use `egress-run --help` and `egressctl --help` for command-line help.
 
-```sh
-scripts/build-tun-engine.sh             # once; requires Go 1.26.3
-bash scripts/install-backend-host.sh      # 10 шагов, лог <root>/install-backend-host.log
-bash scripts/verify-backend-host.sh       # pass/fail по каждому сервису
-```
+## Documentation
 
-**Client** (в каждую execution environment) — `INSTALL.md`, шаг B:
+- [Install and configure](INSTALL.md)
+- [Everyday usage](USER_GUIDE.md)
+- [CLI reference](CLI_REFERENCE.md)
+- [Technical specification and implementation status](TECH_SPEC.md)
+- [Development](DEVELOPMENT.md)
+- [Agent usage skill](skills/egress/SKILL.md)
 
-```sh
-sudo scripts/setup-egress-client.sh --environment host
-egressctl config validate && egressctl whoami && egressctl doctor
-```
+## Requirements
 
-Одноразовый тест из обычного Docker-контейнера (после установки backend).
-Замените `<username>` в route на имя владельца host-маршрута:
-
-```sh
-sudo scripts/setup-egress-client.sh --environment container --docker-test \
-  --route 'p-host-<username>-blanc:vless-49' --copy-personal-source
-```
-
-`--copy-personal-source` нужен только для host-owned personal route (`p-…`).
-Он создаёт отдельный snapshot тестового клиента, не открывая ему host-маршрут.
-
-Для личного provider `blanc` короткая форма маршрута — `@blanc:vless-49`.
-Дальше — обычный workflow: `egress-run <route> -- command`,
-`egressctl route set/list`, `egressctl best`, skill для агентов —
-`skills/egress/SKILL.md`.
-
-## Разработка и тесты
-
-Оффлайн (без Docker, без root, stdlib-only):
-
-```sh
-python3 -m pytest tests/ client/tests/ -q    # полный свит (последний прогон: 348 passed)
-python3 -m pytest tests/security/ -q         # A8 security gate (54)
-python3 -m pytest tests/install/ -q          # оффлайн-свит install-скриптов, stubbed docker (77 checks)
-```
-
-`tests/install/README.md` — как добавлять сценарии. Правила коммитов, стиля
-и инвариантов — в `AGENTS.md` (корень репозитория) и `DEVELOPMENT.md`.
-
-## Базовые security-инварианты
-
-- Defaults и one-shot сессии — per-client; действия одного клиента не
-  меняют состояние другого.
-- Секреты в логах/отчётах — только путь + sha256[:8], никогда значения.
-- Public API — narrow `/v1`; raw Mihomo API недоступен клиентам, client
-  provisioning — только host-side bootstrap.
-- Host-инструменты — Python stdlib, фиксированный argv, без
-  `shell=True`/`eval`/`exec` (контролируется `tests/security/`).
-- Docker socket egress stack и клиентам не выдаётся; CIDR-синхронизация —
-  через `egress-hostctl sync-docker-cidrs` (сгенерированный артефакт).
-
-## Текущий статус
-
-Фазы A0–A8 закрыты в части, реализуемой в среде разработки (container,
-без Docker); live-acceptance на целевом хосте — см. «Next» в `STATUS.md`
-и `host/LIVE_ACCEPTANCE.md`. Свежая ветка install-logging: структурный
-лог установки, robust health gate, self-explaining harness, оффлайн-свит
-install-скриптов.
+The backend installer requires Linux, root access, Docker Engine with Compose v2, and Python 3. The core Python client requires Python 3.11+ and uses only the standard library. Container-side personal-source normalization additionally requires PyYAML; other client commands do not. TUN mode has additional Linux namespace, `/dev/net/tun`, `unshare`, `ip`, and packet-engine requirements; proxy mode is the simplest way to start.

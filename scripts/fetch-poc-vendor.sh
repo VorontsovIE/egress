@@ -15,7 +15,7 @@
 #                                         (kept in git; see DEVELOPMENT.md)
 #
 # Build recipes for the three POC binaries (poc/mihomo, poc/mihomo-gvisor,
-# poc/wgserver/wgserver) are in DEVELOPMENT.md, section «Сборка (редко)».
+# poc/wgserver/wgserver) are in DEVELOPMENT.md, "Building POC binaries".
 #
 # Usage:
 #   sh scripts/fetch-poc-vendor.sh     # fetch missing parts (idempotent;

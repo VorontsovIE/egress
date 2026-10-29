@@ -1,8 +1,8 @@
 """Domain probe / benchmark engine (spec sections 23, 24, 25).
 
 The probe runs through a **route-specific one-shot path** (spec 24: "Probe
-должен выполняться через route-specific one-shot path и потому безопасно
-parallelize-иться"): for each route the engine allocates a dedicated one-shot
+must use the route-specific one-shot path and can therefore be parallelized"):
+for each route the engine allocates a dedicated one-shot
 slot, points the slot's select group at the route, runs a DNS -> TCP -> TLS ->
 HTTP request through that slot's authenticated SOCKS listener, classifies the
 outcome, and releases the slot. Because every probe owns its slot, probes are

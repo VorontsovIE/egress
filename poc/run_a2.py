@@ -1,4 +1,4 @@
-"""A2 live-Mihomo checks (spec section 46, A2 "Проверить").
+"""A2 live-Mihomo checks (spec section 46, A2 verification list).
 
 Brings up a real Mihomo (pinned v1.19.32, ``poc/mihomo``) with the production
 config generator and provider files produced by the A2 adapters from the

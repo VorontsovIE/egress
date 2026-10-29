@@ -489,7 +489,7 @@ def cmd_capabilities(args) -> None:
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="egressctl",
-                                description="vibelab-egress client control CLI")
+                                description="Manage routes and run diagnostics for a vibelab-egress client.")
     p.add_argument("--config", help="explicit client config path")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     sub = p.add_subparsers(dest="command", required=True)
@@ -507,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc = rsub.add_parser("current", help="show default route")
     rc.set_defaults(fn=cmd_route_current)
     rs = rsub.add_parser("set", help="set default route")
-    rs.add_argument("route")
+    rs.add_argument("route", help="route ID or personal alias such as @work:node")
     rs.set_defaults(fn=cmd_route_set)
 
     mode = add("mode", cmd_mode_current, "default execution mode")
@@ -515,27 +515,33 @@ def build_parser() -> argparse.ArgumentParser:
     mc = msub.add_parser("current", help="show default mode")
     mc.set_defaults(fn=cmd_mode_current)
     ms = msub.add_parser("set", help="set default mode")
-    ms.add_argument("mode", choices=["proxy", "tun"])
+    ms.add_argument("mode", choices=["proxy", "tun"],
+                    help="default mode used by egress-run --default")
     ms.set_defaults(fn=cmd_mode_set)
 
     add("providers", cmd_providers, "list providers")
 
-    source = add("source", cmd_source_list, "personal subscription sources")
+    source = add("source", cmd_source_list,
+                 "personal subscriptions (container normalization requires PyYAML)")
     ssub = source.add_subparsers(dest="source_cmd", required=True)
     sl = ssub.add_parser("list", help="list personal sources")
     sl.set_defaults(fn=cmd_source_list)
-    sa = ssub.add_parser("add", help="add a private subscription or proxy source")
-    sa.add_argument("name")
+    sa = ssub.add_parser(
+        "add", help="add a private source; container use requires PyYAML",
+        description="Add a personal source. In containers, local normalization requires PyYAML.")
+    sa.add_argument("name", help="personal source alias")
     choice = sa.add_mutually_exclusive_group(required=True)
     choice.add_argument("--url", help="subscription URL; use '-' to read a line from stdin")
-    choice.add_argument("--file")
+    choice.add_argument("--file", help="path to a local subscription or proxy-list file")
     choice.add_argument("--uri", help="one proxy URI; use '-' to read a line from stdin")
     sa.set_defaults(fn=cmd_source_add)
-    sr = ssub.add_parser("refresh", help="refresh a private source")
-    sr.add_argument("name")
+    sr = ssub.add_parser(
+        "refresh", help="refresh a private source; container use requires PyYAML",
+        description="Refresh a personal source. In containers, local normalization requires PyYAML.")
+    sr.add_argument("name", help="personal source alias")
     sr.set_defaults(fn=cmd_source_refresh)
     sd = ssub.add_parser("remove", help="remove a private source")
-    sd.add_argument("name")
+    sd.add_argument("name", help="personal source alias")
     sd.set_defaults(fn=cmd_source_remove)
 
     up = add("update", cmd_update, "trigger provider update")
@@ -544,45 +550,47 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--if-older-than", help="skip if updated within this duration, e.g. 6h")
 
     ls = add("list", cmd_list, "list routes")
-    ls.add_argument("--country")
-    ls.add_argument("--provider")
-    ls.add_argument("--healthy", action="store_true")
+    ls.add_argument("--country", help="filter by country code, e.g. FI")
+    ls.add_argument("--provider", help="filter by provider ID")
+    ls.add_argument("--healthy", action="store_true", help="show only healthy routes")
 
-    t = add("test", cmd_test, "test connectivity via a route")
-    t.add_argument("route", nargs="?")
+    t = add("test", cmd_test, "test a route or catalog connectivity")
+    t.add_argument("route", nargs="?",
+                   help="route ID; omit to test catalog routes up to the backend limit")
 
     pd = add("probe-domain", cmd_probe_domain, "probe a domain through routes")
-    pd.add_argument("domain")
+    pd.add_argument("domain", help="domain name to probe through selected routes")
     pd.add_argument("--all", action="store_true",
                     help="catalog routes up to the backend per-request limit")
-    pd.add_argument("--country")
-    pd.add_argument("--provider")
+    pd.add_argument("--country", help="filter routes by country code")
+    pd.add_argument("--provider", help="filter routes by provider ID")
     pd.add_argument("--routes", help="comma-separated route IDs")
-    pd.add_argument("--parallel", type=int)
-    pd.add_argument("--timeout", type=float)
-    pd.add_argument("--scheme", choices=("http", "https"))
-    pd.add_argument("--port", type=int)
-    pd.add_argument("--path")
-    pd.add_argument("--method", choices=("HEAD", "GET"))
-    pd.add_argument("--expected-status")
+    pd.add_argument("--parallel", type=int, help="maximum concurrent route probes")
+    pd.add_argument("--timeout", type=float, help="per-stage timeout in seconds")
+    pd.add_argument("--scheme", choices=("http", "https"), help="probe URL scheme")
+    pd.add_argument("--port", type=int, help="destination port")
+    pd.add_argument("--path", help="HTTP request path")
+    pd.add_argument("--method", choices=("HEAD", "GET"), help="HTTP request method")
+    pd.add_argument("--expected-status", help="expected HTTP status or comma-separated statuses")
     pd.add_argument("--check", help="comma-separated stages: dns,tcp,tls,http")
-    pd.add_argument("--max-routes", type=int)
+    pd.add_argument("--max-routes", type=int, help="maximum number of routes to probe")
     pd.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                     help="machine-readable output")
 
     bm = add("benchmark", cmd_benchmark,
-             "throughput benchmark: one route, or a shortlist (spec 25)")
+             "measure throughput for one route or a latency shortlist")
     bm.add_argument("route", nargs="?",
                     help="route id; omit for the latency shortlist")
-    bm.add_argument("--country")
-    bm.add_argument("--provider")
+    bm.add_argument("--country", help="filter shortlist by country code")
+    bm.add_argument("--provider", help="filter shortlist by provider ID")
     bm.add_argument("--top-latency", type=int, default=5,
                     help="shortlist size (default 5)")
     bm.add_argument("--bytes", help="download size, e.g. 8M (default 8M)")
 
-    b = add("best", cmd_best, "best route by transparent ranking (spec 26)")
-    b.add_argument("--country")
-    b.add_argument("--provider")
+    b = add("best", cmd_best,
+            "rank routes using health, latency, GEO, and optional speed data")
+    b.add_argument("--country", help="filter by country code")
+    b.add_argument("--provider", help="filter by provider ID")
     b.add_argument("--domain",
                    help="only routes with a fresh successful probe of this domain")
     b.add_argument("--max-latency", type=int, help="exclude routes slower than this (ms)")
@@ -612,7 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     cv.set_defaults(fn=cmd_config_validate)
 
     add("capabilities", cmd_capabilities,
-         "local capabilities (tun availability, spec 50.12)")
+         "show local TUN support and client capabilities")
     add("doctor", cmd_doctor, "local + backend health checks")
     return p
 

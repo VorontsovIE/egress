@@ -33,8 +33,8 @@
 # Exit codes: 0 ok, 2 usage, 3 environment error, 4 verification failed.
 #
 # Test mode:
-#   VIBELAB_EGRESS_TEST_MODE=1 — только для stubbed-тестов (tests/install),
-#   снимает требование root; в production не используется.
+#   VIBELAB_EGRESS_TEST_MODE=1 — only for stubbed tests (tests/install); it
+#   bypasses the root check and must not be used for production installs.
 set -Eeuo pipefail
 
 ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"

@@ -1,34 +1,32 @@
 # Handoff: client-local TUN
 
-Обновлено: 2026-10-20. Предыдущая версия документа описывала systemd TUN service и больше не является инструкцией для текущей реализации.
+Updated 2026-10-20. The earlier systemd TUN service design is obsolete and is not an instruction for the current implementation.
 
-## Текущая архитектура
+## Current design
 
-- `egress-run --mode tun ROUTE -- command` создаёт отдельный user/network namespace на каждый запуск.
-- Workload и его дочерние процессы остаются внутри вызывающей среды, включая обычный Docker-контейнер.
-- Отдельный статический packet engine получает только TUN fd и SOCKS credentials выбранной one-shot сессии; argv, cwd, environment и stdio workload ему не передаются.
-- Local loopback DNS proxy внутри нового namespace отправляет DNS через TUN и тот же выбранный route.
-- В Docker передаются `/dev/net/tun` и `client/seccomp-tun.json`; outer container не получает `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, `--privileged`, host network или Docker socket.
-- Миграция старых host/container TUN service находится в `scripts/remove-legacy-tun-helper.sh`. Скрипт проверяет job state и отказывается останавливать среду, если не может подтвердить отсутствие активных запусков.
+- `egress-run --mode tun ROUTE -- command` creates a separate user and network namespace for each invocation.
+- The workload and child processes remain in the calling environment, including an ordinary Docker container.
+- A static packet engine receives the TUN file descriptor and selected one-shot SOCKS credentials; it does not receive workload arguments, working directory, environment, or stdio.
+- A local loopback DNS proxy sends DNS through TUN and the same selected route.
+- Docker receives `/dev/net/tun` and `client/seccomp-tun.json`. The outer container does not receive `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, privileged mode, host networking, or the Docker socket.
+- `scripts/remove-legacy-tun-helper.sh` migrates old host/container TUN services. It refuses to stop the environment if it cannot confirm there are no active jobs.
 
-## Сборка и установка
+## Build and install
 
-Собрать static engine Go 1.26.3 на доверенной build-машине:
+Build the static engine using Go 1.26.3 on a trusted build machine:
 
-```bash
+```sh
 scripts/build-tun-engine.sh
 ```
 
-Затем provisioning включает amd64/arm64 engines в client bundle. Установка клиента на host или в container проверяет checksum и выбирает engine по архитектуре. Подробные инструкции: `INSTALL.md`.
+Provisioning includes amd64 and arm64 engines in the client bundle. Installation verifies checksums and selects the binary for the target architecture. See `INSTALL.md` for current instructions.
 
-## Проверено в рабочем дереве
+## Previously verified
 
-- Python/Bash syntax checks.
-- `tests/` и `client/tests/` offline suite.
-- Install-script harness.
-- Static engine cross-build для Linux amd64 и arm64.
-- Обычный Docker-контейнер: создание user/network namespace и TUN без `CAP_NET_ADMIN`.
-- Реальный TUN direct HTTPS и DNS из контейнера; два вызова получили разные network namespace IDs.
-- SOCKS5 auth/TCP forwarding через TUN проверены с локальным тестовым SOCKS endpoint; SOCKS UDP DNS проверен отдельным тестовым endpoint.
+- Python and Bash syntax checks, offline Python suite, and install-script harness.
+- Linux amd64 and arm64 static engine builds.
+- User/network namespace and TUN setup in an ordinary Docker container without `CAP_NET_ADMIN`.
+- Direct HTTPS and DNS through TUN in a container; concurrent invocations received different network namespace IDs.
+- SOCKS5 authentication/TCP forwarding through a local test endpoint and SOCKS UDP DNS through a separate test endpoint.
 
-Полный acceptance через настоящие backend provider routes требует настроенного backend и действительного client bundle; live harness и generic Docker acceptance описаны в `host/LIVE_ACCEPTANCE.md` и `INSTALL.md`.
+Acceptance through real backend provider routes requires a configured backend and valid client bundle. See `host/LIVE_ACCEPTANCE.md` and `INSTALL.md`.

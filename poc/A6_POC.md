@@ -1,44 +1,20 @@
-# A6: промежуточный PoC host-native strict/TUN
+# A6: Intermediate host-native strict/TUN PoC
 
-Дата: 2026-10-16. Среда PoC: одноразовый контейнер Ubuntu 24.04 на локальном
-Docker host с `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `/dev/net/tun`; без Docker socket
-в тестируемом helper и без host mount. Этот прогон подтверждает сетевые
-механизмы, но **не** является live-приёмкой на globe.
+Date: 2026-10-16. The PoC ran in a disposable Ubuntu 24.04 container with `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, and `/dev/net/tun`, without a Docker socket or host mounts. It validates network mechanisms but is not live acceptance on a production host.
 
-## Подтверждено
+## Confirmed
 
-- `ip netns add` создаёт отдельный netns при наличии `CAP_SYS_ADMIN` и
-  `CAP_NET_ADMIN`; `ip netns exec` поднимает `lo`.
-- Бинарник Mihomo v1.19.32 из закреплённого образа с digest
-  `sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e`
-  имеет SHA256 `6de241191ca39f9ac1cd6e3194fc9303c19055d3549c8bdb4ff1349c89173819`.
-  Mihomo запустился с заранее созданным TUN, принадлежащим отдельному UID, без
-  `CAP_NET_ADMIN` у его процесса.
-- `direct + tun`: отдельный netns, veth, локальный NAT и `nft` filter;
-  процесс с UID/GID 65534 выполнил `id`, затем получил внешний IPv4 через
-  HTTPS; оба процесса завершились с кодом 0.
-- Proxy path: Mihomo в netns (отдельный UID) направил TCP клиента без proxy
-  environment через TUN и SOCKS5 к фиктивному upstream; upstream подтвердил
-  CONNECT к публичному адресу, клиент получил `VIA_PROXY`, код 0. Для
-  предотвращения петли пришлось явно задать `interface-name` для SOCKS5
-  outbound — без него Mihomo выбирал `tun0` как исходящий интерфейс.
+- `ip netns add` creates an isolated network namespace with the required capabilities; `ip netns exec` brings up loopback.
+- Mihomo v1.19.32 from the pinned image can use a pre-created TUN owned by a separate UID without `CAP_NET_ADMIN` in the Mihomo process.
+- Direct TUN networking used a separate namespace, veth, local NAT, and nftables filter. A process running as UID/GID 65534 completed HTTPS and exited successfully.
+- Proxy traffic traversed TUN and SOCKS5 to a fake upstream. The upstream observed a CONNECT request and the client received the expected response. An explicit SOCKS outbound `interface-name` was required to prevent a routing loop.
 
-## Не подтверждено
+## Not confirmed by this PoC
 
-- Запуск из настоящей host-службы systemd с файловой системой, cwd,
-  окружением, UID/GID и группами вызывающего пользователя.
-- Реальный опубликованный one-shot listener, SOCKS5 UDP associate, QUIC,
-  DNS, параллельные задания и cleanup после аварийного завершения.
-- Совместимость host firewall/UFW на globe и фактический набор capabilities
-  systemd. Пока эти проверки не пройдены, capability и A6 нельзя считать
-  закрытыми.
+- Running from a real host systemd service with the caller's filesystem, working directory, environment, UID/GID, and groups.
+- The published one-shot listener, SOCKS5 UDP associate, QUIC, DNS, concurrent jobs, or cleanup after abnormal termination.
+- Compatibility with the production host firewall/UFW and actual systemd capabilities. A6/live acceptance must not be considered complete until these checks pass.
 
-## Дополнительный прогон реализации
+## Follow-up implementation run
 
-После сборки `native_netns.py` повторён изолированный Docker PoC с настоящими
-методами backend. `create` → `pin_direct` → `exec_in` → `destroy` запустил
-процесс с UID/GID 65534 в `/tmp`, RC 0. Proxy-прогон запустил Mihomo под
-worker UID со сброшенными capabilities; fake SOCKS5 получил CONNECT к
-`1.1.1.1:80`, HTTP-клиент без proxy env получил `VIA_PROXY`, RC 0. Оба прогона
-сделаны в одноразовом контейнере, поэтому host systemd/one-shot/DNS/UDP и
-продуктовая приёмка остаются непроверенными.
+After building `native_netns.py`, an isolated Docker PoC exercised the backend methods `create` → `pin_direct` → `exec_in` → `destroy`; a process with UID/GID 65534 ran in `/tmp` and returned code 0. A proxy run started Mihomo under a worker UID with capabilities dropped; the fake SOCKS5 server received CONNECT to `1.1.1.1:80`, and the HTTP client received the expected proxied response. These runs were in a disposable container, so host systemd, one-shot, DNS/UDP, and product acceptance remained unverified.

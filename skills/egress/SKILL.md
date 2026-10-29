@@ -45,7 +45,7 @@ specific provider, or a baseline comparison against `direct`.
     fails with an explicit `unsupported_in_environment` error — there is no
     silent fallback to proxy. Do not rely on one.
 11. **Never route internal traffic through the VPN.** Docker-internal
-    destinations, the LiteLLM endpoint, localhost and other HARD DIRECT /
+    destinations, the configured operator control-plane endpoint, localhost and other HARD DIRECT /
     internal targets must stay direct. `egress-run` already sets `no_proxy`
     for RFC1918/localhost; do not override it.
 12. **Never touch the backend internals.** No raw Mihomo admin API, no
@@ -230,6 +230,6 @@ the explanation shows exactly which components scored.
 - calling the Mihomo admin API (port 9090) or any non-`/v1` backend endpoint;
 - reading provider subscription files or client tokens of other clients;
 - requesting host root / Docker socket / raw shell on the backend host;
-- routing LiteLLM, Docker-internal or localhost traffic through a proxy;
+- routing the operator control plane, Docker-internal or localhost traffic through a proxy;
 - assuming a node name's country is the verified exit country;
 - benchmarking or probing the entire route inventory.

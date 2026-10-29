@@ -17,14 +17,15 @@ not use host networking, `--privileged`, or `CAP_NET_ADMIN`.
 2. Build the static TUN engine with `scripts/build-tun-engine.sh` before
    provisioning the client bundle.
 3. Host client is installed and `egressctl status` succeeds.
-4. Для generic container test нужен Docker и маршрут, видимый тестовому
-   профилю. Персональный маршрут host-профиля сначала копируется в snapshot
-   тестового клиента. Замените `<username>` на имя владельца host-маршрута:
+4. The generic container test requires Docker and a route visible to the test
+   profile. A host profile's personal route must first be copied into a
+   snapshot owned by the test client. Replace `<host-user>` with the account
+   that owns the host profile:
 
 ```bash
 sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test \
-  --route 'p-host-<username>-blanc:vless-49' --copy-personal-source
+  --route 'p-host-<host-user>-blanc:vless-49' --copy-personal-source
 ```
 
 The harness builds and runs an ordinary Docker image, installs the bundled

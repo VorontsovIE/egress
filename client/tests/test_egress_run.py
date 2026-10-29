@@ -6,6 +6,7 @@ Covers the contract:
   * SIGINT/SIGTERM proxied to the child;
   * one-shot session closed on exit (finally);
   * explicit route/mode never changes the persistent default;
+  * ``--default`` uses the stored mode unless the invocation overrides it;
   * ``direct`` uses no proxy at all;
   * ``--mode tun`` -> explicit unsupported (no silent fallback);
   * config/token discovery shared with egressctl.
@@ -168,11 +169,16 @@ class TestProxy:
     def test_default_uses_default_proxy_auth(self, monkeypatch, cfg_file):
         seen = {}
 
+        class Stub:
+            def get_default_mode(self):
+                return {"mode": "proxy"}
+
         def run_env(env, command):
             seen.update(env)
             return 0
         monkeypatch.setattr(egress_run, "_run_local", run_env)
-        code = run_egress_run(monkeypatch, cfg_file, ["--default", "--", "true"])
+        code = run_egress_run(monkeypatch, cfg_file,
+                              ["--default", "--", "true"], api_stub=Stub())
         assert code == 0
         assert "socks5h://os-user:os-pass@127.0.0.1:1080" in seen["all_proxy"]
 

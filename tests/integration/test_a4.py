@@ -23,6 +23,7 @@ environment:
  16. route list / reconciliation;
  17. health test (offline: mihomo delay degrades, direct baseline works);
  23. explicit route never changes the persistent default;
+  24. ``egress-run --default`` uses the saved mode unless explicitly overridden;
  25. ``--mode tun`` -> explicit unsupported (no silent fallback);
  26. exit status / signal semantics through the real binary path.
 
@@ -77,11 +78,12 @@ def backend(tmp_path_factory):
     base = tmp_path_factory.mktemp("a4")
     clients = base / "clients"
     clients.mkdir()
-    for cid in ("host-main", "container-main"):
+    for cid, modes in (("host-main", ["proxy", "tun"]),
+                       ("container-main", ["proxy"])):
         (clients / f"{cid}.token").write_text(f"tok-{cid}\n")
         env = "host" if cid == "host-main" else "container"
         (clients / f"{cid}.profile.json").write_text(json.dumps(
-            {"client_id": cid, "environment": env, "modes": ["proxy"]}))
+            {"client_id": cid, "environment": env, "modes": modes}))
         (clients / f"{cid}.proxy-creds").write_text(f"{cid}-user:{cid}-pass\n")
 
     provs = base / "providers"
@@ -305,13 +307,36 @@ class TestDefaults:
     def test_mode_set_tun_unsupported(self, backend):
         """tun is not in this client's modes -> explicit unsupported, no
         silent fallback (spec 16, acceptance 25)."""
-        cfg, env = _client_env(backend["base"], "host-main", backend["port"])
+        cfg, env = _client_env(backend["base"], "container-main", backend["port"])
         p = _ctl(cfg, env, "mode", "set", "tun")
         assert p.returncode == 1
         assert "unsupported" in p.stderr.lower()
         # the mode is still proxy (no silent fallback)
         p = _ctl(cfg, env, "mode", "current")
         assert "default mode: proxy" in p.stdout
+
+    def test_default_mode_controls_egress_run_and_can_be_overridden(
+            self, backend, tmp_path):
+        cfg, env = _client_env(backend["base"], "host-main", backend["port"])
+        p = _ctl(cfg, env, "mode", "set", "tun")
+        assert p.returncode == 0, p.stderr
+        try:
+            # This client's local config disables TUN. Using the stored mode
+            # must fail closed instead of silently running through proxy.
+            p = _run(cfg, env, "--default", "--", "true")
+            assert p.returncode == 6
+            assert "tun" in p.stderr.lower()
+
+            # An explicit --mode overrides the stored default for this run.
+            marker = tmp_path / "mode-override"
+            p = _run(cfg, env, "--mode", "proxy", "--default", "--",
+                     sys.executable, "-c",
+                     f"import os; open({str(marker)!r}, 'w').write(os.environ['ALL_PROXY'])")
+            assert p.returncode == 0, p.stderr
+            assert marker.read_text() == (
+                "socks5h://host-main-user:host-main-pass@127.0.0.1:1080")
+        finally:
+            _ctl(cfg, env, "mode", "set", "proxy")
 
 
 # ---------------------------------------------------------------------------

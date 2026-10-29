@@ -1,4 +1,4 @@
-"""A3 live-Mihomo checks (spec A3 "Обязательные tests", data-plane paths).
+"""A3 live-Mihomo checks (spec A3 required tests, data-plane paths).
 
 Brings up a real Mihomo (pinned v1.19.32, ``poc/mihomo``) and a real ``egressd``
 (uvicorn), then exercises the public ``/v1`` API against the live data plane:

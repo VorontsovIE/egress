@@ -10,8 +10,8 @@ Stable route ID format (spec 13):
 
 The stable-id is the adapter's clean node name (``stable_slug`` of the display
 name), which is deterministic and independent of mutable display-name
-punctuation/case (spec 13: "Stable route ID не должен зависеть только от
-изменяемого display name").
+punctuation/case (spec 13: "A stable route ID must not depend only on the
+mutable display name").
 
 The Mihomo node name is the provider tag (``override.additional-prefix``,
 spec 11.1) applied to the clean name:

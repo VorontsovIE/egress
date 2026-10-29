@@ -1,7 +1,7 @@
 """Metrics DB / audit store (spec section 39, 40).
 
 SQLite. Stores the entities the spec requires, **without raw secrets**
-(section 39: "Provider/client raw secrets в DB не копировать"):
+(section 39: "Do not copy raw provider/client secrets into the database"):
 
   * client profile metadata (no raw secrets)
   * route metadata

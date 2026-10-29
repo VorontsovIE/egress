@@ -7,7 +7,7 @@
 # root the success path additionally exercises the real client install
 # (scripts/install-client.sh -> /usr/local + /etc/vibelab-egress); without
 # root the client step is skipped (--skip-client) because /usr/local and
-# /etc are root-owned (see README.md, «Ограничения»).
+# /etc are root-owned (see README.md, "Limitations").
 #
 # Scenarios:
 #   0. syntax: bash -n all scripts/*.sh, py_compile host utilities

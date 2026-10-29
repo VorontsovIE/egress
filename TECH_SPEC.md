@@ -1,48 +1,60 @@
 ---
-title: "Техническое задание: управляемый egress-слой на базе Mihomo"
+title: "Technical Specification: Mihomo-Based Managed Egress"
 status: "Architecture review / client-local CLI model"
 date: "2026-10-09"
-lang: ru-RU
+lang: en-US
 ---
 
-# 0. Назначение документа
+# 0. Purpose
 
-Этот документ является **полным самостоятельным техническим заданием** на разработку, установку и тестирование управляемого egress-слоя для исследовательских и coding-агентов.
+> **Implementation status:** This document contains current requirements as well as historical/planned requirements. See `STATUS.md` for implementation status and `INSTALL.md`, `USER_GUIDE.md`, and `CLI_REFERENCE.md` for current user-facing behavior. Treat a requirement as planned until the status summary or code confirms it is implemented.
 
-Документ должен быть достаточен для передачи coding-агенту без доступа к истории обсуждения.
+## Implementation status map
 
-Базовая инфраструктура:
+This map describes the current source tree. Live availability still depends on deployment configuration and provider routes.
 
-- Linux host `globe`, Ubuntu 24.04;
+| Status | Capabilities |
+|---|---|
+| **Implemented** | Backend `/v1` API; client identity and per-client defaults; provider catalog/update and personal sources; `egressctl` route/mode/source/update/test/probe/benchmark/best/doctor commands; local `egress-run` proxy/direct execution; client-local TUN bootstrap and packet engine; host/container provisioning and acceptance tooling. |
+| **Environment-dependent** | Live provider connectivity, public endpoint/firewall reachability, Docker acceptance, and TUN availability. TUN requires documented Linux namespace/device/runtime capabilities and a matching engine binary. |
+| **Not shipped** | Admin UI (Section 42) and MCP server (Section 43) are optional design extensions and are not part of the current implementation. |
+
+Sections 45–51 preserve PoC evidence, historical work sequencing, and acceptance criteria. Their presence does not mean every deployment-specific acceptance check has passed.
+
+This document defines the architecture, requirements, installation, and testing of a managed egress layer for workloads and coding agents.
+
+It is intended to be self-contained and usable without access to project discussion history. Requirements are normative; use `STATUS.md` and the source code to distinguish implemented behavior from planned work.
+
+Deployment assumptions:
+
+- Linux host (Ubuntu 24.04 is a tested reference environment, not a required host identity);
 - Docker Engine, cgroup v2;
-- одним из пользователей egress будет container внутри контейнера (он работает в Docker + container runtime; считается недоверенным execution environment)
-- LiteLLM работает на host и доступен container через host-side relay;
-- основной networking/proxy engine нового egress-слоя — **Mihomo**;
-- production deployment должен использовать pinned stable Mihomo version/image digest, а не `latest`.
+- one client may be a nested container runtime and is treated as an untrusted execution environment;
+- Mihomo is the networking and proxy engine;
+- production deployments MUST pin a stable Mihomo version and image digest rather than use `latest`.
 
-Везде далее термин «клиентский контейнер» означает произвольный Docker-контейнер, пользующийся egress. Вместо LiteLLM — другой сервис в докер-контейнере в той же локальной сети или сервис в сети хоста, к которому клиентский контейнер подключается напрямую.
+The term “client container” means any Docker container using the egress service. The project is standalone and does not depend on a particular application, model gateway, or repository checkout path.
 
-# 1. Краткое резюме решения
+# 1. Solution summary
 
-Нужно развернуть отдельный Docker Compose stack `vibelab-egress` на базе Mihomo.
+Deploy a dedicated Docker Compose stack, `vibelab-egress`, based on Mihomo.
 
-`vibelab-egress` является отдельным deployment от container и других execution environments:
+The backend is deployed separately from clients and their execution environments:
 
-- Mihomo и `egressd` работают в отдельном Docker Compose stack;
-- они НЕ запускаются внутри клиентского контейнера;
-- они НЕ устанавливаются как основной data/control plane непосредственно на host;
-- один backend обслуживает несколько execution environments: host, Docker container и при необходимости другие контейнеры/VM;
-- **`egressctl` и `egress-run` устанавливаются локально в каждую среду, в которой требуется выполнять код**;
-- локальные clients используют один и тот же protocol/API, но разные client profiles/configs и разные адреса подключения к backend;
-- `egress-run` всегда является тонким локальным execution wrapper: команда запускается в той же execution environment, где был запущен `egress-run`, а не удалённо на host/backend;
-- agent Skill устанавливается в agent environment рядом с локальными client tools;
-- TUN выполняется клиентом в локальном per-run namespace; privileged host service не используется.
+- Mihomo and `egressd` run in a dedicated Docker Compose stack.
+- They do not run inside client containers or replace the host's general data/control plane.
+- One backend serves multiple environments: hosts, Docker containers, and optionally other containers or VMs.
+- **Install `egressctl` and `egress-run` locally in each environment where workloads execute.**
+- Clients share the same protocol/API but use separate profiles, configurations, and backend addresses.
+- `egress-run` is a local execution wrapper: it runs the command in the same environment as the wrapper, never remotely on the backend.
+- Install the agent skill alongside client tools when an agent uses the service.
+- TUN runs locally in a per-invocation namespace; the current design does not use a privileged host service.
 
-Mihomo должен выполнять максимально возможную часть работы штатными механизмами:
+Mihomo SHOULD handle as much functionality as possible through its native mechanisms:
 
 - proxy providers/subscriptions;
-- WireGuard/VLESS и другие поддерживаемые outbounds;
-- обновление providers;
+- WireGuard/VLESS and other supported outbounds;
+- provider updates;
 - health/latency tests;
 - per-client selector/default routing;
 - SOCKS/listener data plane;
@@ -50,25 +62,25 @@ Mihomo должен выполнять максимально возможную
 - routing rules;
 - DIRECT bypass.
 
-Собственный код должен быть минимальным и состоять из:
+Custom code SHOULD remain minimal and consist of:
 
-1. `egressd` — узкого public control/security adapter поверх Mihomo API;
-2. общего client package с `egressctl` и `egress-run`;
-3. provider adapters — **только если** BlancVPN/Xeovo/другой провайдер не дают Mihomo-compatible subscription;
+1. `egressd`, a narrow public control/security adapter over the Mihomo API;
+2. a shared client package with `egressctl` and `egress-run`;
+3. provider adapters, **only if** a provider does not offer a Mihomo-compatible subscription;
 4. bounded throughput benchmark;
 5. domain availability probe across routes;
 6. client-local strict/TUN namespace bootstrap and packet engine;
-7. обязательного agent Skill `skills/egress/SKILL.md`;
-8. install/bootstrap scripts и тестового harness;
-9. `README.md` для пользователей, включающего отдельный раздел для агентов.
+7. the agent skill at `skills/egress/SKILL.md`;
+8. installation/bootstrap scripts and test harnesses;
+9. user documentation, including agent usage guidance.
 
 ## 1.1. Deployment topology
 
-Deployment topology является нормативной частью архитектуры.
+The deployment topology is normative for the architecture.
 
 ### Backend Docker Compose stack `vibelab-egress`
 
-Основной egress stack MUST работать в Docker и MUST быть отдельным от container deployment.
+The main egress stack MUST run in Docker and MUST be deployed separately from client containers.
 
 ```text
 Docker host
@@ -81,18 +93,18 @@ Docker host
     `-- egressd
 ```
 
-Предпочтительно запускать Mihomo и `egressd` как два отдельных services одного Compose project:
+Prefer running Mihomo and `egressd` as two services in one Compose project:
 
 ```text
 vibelab-egress-mihomo
 vibelab-egress-egressd
 ```
 
-Объединение их в один container допускается только при отдельном обосновании и не должно автоматически расширять privileges `egressd` до privileges Mihomo/TUN.
+Combining them in one container requires a separate justification and MUST NOT automatically grant `egressd` the privileges required by Mihomo or TUN.
 
-### Что живёт внутри egress stack
+### Components inside the egress stack
 
-В Docker stack должны находиться:
+The Docker stack contains:
 
 - Mihomo;
 - `egressd`;
@@ -101,16 +113,16 @@ vibelab-egress-egressd
 - persistent Mihomo state;
 - per-client selector state;
 - health/latency state;
-- throughput/domain-probe state, если он хранится;
-- authenticated default и one-shot SOCKS/proxy endpoints;
+- throughput/domain-probe state, if persisted;
+- authenticated default and one-shot SOCKS/proxy endpoints;
 - public narrow `egressd` API;
-- TUN endpoint самого Mihomo, если он нужен backend-side функциям.
+- Mihomo's own TUN endpoint, if required by backend-side features.
 
-VPN credentials и subscription secrets доступны egress stack, но не client environments.
+VPN credentials and subscription secrets are available to the egress stack, but not to client environments.
 
-### Client package: устанавливается там, где исполняется workload
+### Client package: installed where the workload runs
 
-Одинаковый client package устанавливается независимо:
+Install the same client package independently in each environment:
 
 ```text
 host environment
@@ -130,34 +142,34 @@ other container / VM
 └── client.yaml
 ```
 
-Ключевой invariant:
+Key invariant:
 
-> `egress-run ROUTE -- command` запускает `command` локально в той execution environment, где запущен `egress-run`.
+> `egress-run ROUTE -- command` runs `command` locally in the same execution environment as `egress-run`.
 
-Следовательно:
+Therefore:
 
-- host `egress-run` запускает host process с host filesystem/environment;
-- container `egress-run` запускает process внутри Docker container с его filesystem/environment;
-- backend никогда не получает arbitrary command payload для обычного proxy execution;
-- `egressd` не является remote-exec service.
+- Host `egress-run` starts a host process with the host filesystem and environment.
+- Container `egress-run` starts a process inside that container with its filesystem and environment.
+- The backend never receives an arbitrary command payload for normal proxy execution.
+- `egressd` is not a remote execution service.
 
 ### Environment-specific client config
 
-Один и тот же client binary MUST работать с environment-specific config.
+The same client binary MUST work with an environment-specific configuration.
 
-Рекомендуемый canonical path:
+Recommended canonical path:
 
 ```text
 /etc/vibelab-egress/client.yaml
 ```
 
-и override:
+and the override:
 
 ```text
 VIBELAB_EGRESS_CONFIG=/path/to/client.yaml
 ```
 
-Минимальная схема:
+Minimum configuration:
 
 ```yaml
 client_id: container-main
@@ -172,7 +184,7 @@ tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1
 ```
 
-Для host:
+For a host client:
 
 ```yaml
 client_id: host-main
@@ -187,15 +199,15 @@ tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1
 ```
 
-`client_id` в локальном config нужен для диагностики, но server MUST определять реальную client identity по credential/token. Нельзя доверять произвольному `client_id`, присланному клиентом.
+The local `client_id` is for diagnostics. The server MUST determine the actual client identity from its credential/token and MUST NOT trust an arbitrary client-supplied ID.
 
-Client config не содержит provider/VPN secrets или Mihomo admin secret. API token/default proxy auth SHOULD храниться в отдельных secret files, а не inline в YAML.
+Client configuration contains no provider/VPN secrets or Mihomo admin secret. The API token and default proxy credentials SHOULD be stored in separate secret files, not inline in YAML.
 
 ### Per-client default state
 
-Default route и default execution mode являются **per-client**, а не глобальными для всего backend.
+The default route and execution mode are **per client**, not global to the backend.
 
-Пример:
+Example:
 
 ```text
 host-main:
@@ -207,38 +219,38 @@ container-main:
   default mode  = proxy
 ```
 
-Изменение default в container не должно менять host default и наоборот.
+Changing a container default MUST NOT change the host default, or vice versa.
 
-Для каждого provisioned client Mihomo/config generator SHOULD иметь отдельную selector group, например:
+Mihomo/config generation SHOULD provide a separate selector group for each provisioned client, for example:
 
 ```text
 CLIENT::host-main
 CLIENT::container-main
 ```
 
-`egressd` переключает только selector, относящийся к authenticated client.
+`egressd` changes only the selector associated with the authenticated client.
 
-Provisioning/removal client profiles является administrative/bootstrap operation и не входит в public agent API.
+Provisioning and removing client profiles are administrative/bootstrap operations and are not part of the public agent API.
 
-### Что живёт непосредственно на host
+### Components installed on the host
 
-На host могут находиться:
+The host may contain:
 
-1. обычная копия client package (`egressctl`, `egress-run`, host `client.yaml`);
-2. install/bootstrap scripts;
-3. firewall rules;
-4. fixed acceptance/test harness;
-5. narrow deployment helper;
-6. Docker-CIDR synchronization helper;
-7. client-local strict/TUN namespace and static packet engine.
+1. A regular copy of the client package (`egressctl`, `egress-run`, and host `client.yaml`).
+2. Installation/bootstrap scripts.
+3. Firewall rules.
+4. A fixed acceptance/test harness.
+5. A narrow deployment helper.
+6. A Docker CIDR synchronization helper.
+7. The client-local strict/TUN namespace and static packet engine.
 
-Host client package является обычным пользователем backend и не получает Mihomo admin API/provider secrets.
+The host client package is an ordinary backend client and does not receive Mihomo admin API access or provider secrets.
 
-На host НЕ должны постоянно работать второй экземпляр Mihomo или второй полноценный egress control plane без отдельного архитектурного решения.
+The host MUST NOT run a second persistent Mihomo instance or full egress control plane without a separate architecture decision.
 
-### Доступ к backend
+### Backend access
 
-Один backend обслуживает несколько local clients:
+One backend serves multiple local clients:
 
 ```text
 HOST workload
@@ -259,40 +271,40 @@ HOST workload
 Docker container workload
 ```
 
-Agent-facing endpoints публикуются:
+Agent-facing endpoints are published:
 
-- на host loopback для host-native clients;
-- на разрешённом Docker gateway/interface для container clients;
-- никогда на public NIC.
+- on host loopback for host clients;
+- on an allowed Docker gateway/interface for container clients;
+- never on a public network interface.
 
-Mihomo raw/admin API не публикуется ни на public interface, ни напрямую в client networks. К нему обращается только `egressd` и строго ограниченные administrative procedures.
+The raw Mihomo admin API is not published on a public interface or directly to client networks. Only `egressd` and tightly restricted administrative procedures may access it.
 
 ### Privilege separation
 
-container MUST NOT получать ради egress:
+For egress access, a client container MUST NOT receive:
 
 - Docker socket;
 - raw Mihomo admin API;
 - provider subscription secrets/private keys;
 - host root shell;
-- возможность изменять host nftables/routes;
-- TUN получает только через `/dev/net/tun` и отдельный per-run user/network namespace; outer container не получает `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, host networking или privileged mode.
+- the ability to change host nftables/routes;
+- TUN access except through `/dev/net/tun` and a separate per-run user/network namespace; the outer container receives no `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, host networking, or privileged mode.
 
-Клиент сам создаёт nested user/network namespaces; dataplane engine получает только открытый TUN file descriptor и selected route credentials. Engine не запускает workload и не является generic exec API.
+The client creates nested user/network namespaces. The data-plane engine receives only the open TUN file descriptor and selected route credentials. It does not launch workloads and is not a generic execution API.
 
-# 2. Термины
+# 2. Terms
 
 ## 2.1. Route
 
-`route` — логическое направление egress.
+`route` is a logical egress destination.
 
-Route ID может быть:
+Route IDs may identify:
 
 - `direct`;
-- конкретной локацией BlancVPN/Xeovo/другого провайдера;
-- конкретной локацией без провайдера, включая VLESS-ноды и по возможности VMESS, Trojan, Hysteria, Shadowsocks и другие поддерживаемые Mihomo protocols.
+- a location from a configured provider;
+- a location from a provider-free source, including VLESS and other protocols supported by Mihomo.
 
-Примеры:
+Examples:
 
 ```text
 direct
@@ -301,20 +313,20 @@ xeovo:nl-amsterdam-01
 vless:personal-01
 ```
 
-`direct` является **полноценным route ID**, а не специальным отсутствием маршрута.
+`direct` is a **full route ID**, not the absence of a route.
 
-Он доступен:
+It is available for:
 
-- как persistent default route;
-- как explicit one-shot route;
-- в domain probing;
-- в benchmark/health tests там, где это осмысленно.
+- persistent default routing;
+- an explicit one-shot route;
+- domain probes;
+- benchmarks/health tests where meaningful.
 
 ## 2.2. Client profile
 
-`client profile` — identity одной execution environment, которая пользуется backend.
+`client profile` is the identity of one execution environment using the backend.
 
-Примеры:
+Examples:
 
 ```text
 host-main
@@ -322,39 +334,39 @@ container-main
 research-container-02
 ```
 
-Client identity определяется backend по credential/token. Она задаёт:
+The backend derives client identity from the credential/token. A profile defines:
 
-- отдельный persistent default route;
-- отдельный persistent default execution mode;
-- разрешённые capabilities/modes;
+- a separate persistent default route;
+- a separate persistent default execution mode;
+- allowed capabilities/modes;
 - audit identity;
 - default proxy authentication identity/selector;
-- rate/resource limits при необходимости.
+- rate/resource limits, if required.
 
-Одна execution environment обычно имеет один client profile, но архитектура не должна запрещать несколько профилей.
+One execution environment usually has one profile, but the architecture MUST allow multiple profiles.
 
 ## 2.3. Default route
 
-Persistent route **конкретного client profile**, используемый `egress-run --default` и default proxy identity этого client.
+The persistent route for a **specific client profile**, used by `egress-run --default` and that client's default proxy identity.
 
-Default route НЕ означает global default route host OS и НЕ является единым глобальным selector для всех clients.
+The default route is NOT the host OS default route and is NOT one global selector shared by all clients.
 
-Обычные host services (`sshd`, Docker daemon, LiteLLM и т. п.), не запущенные через egress-интерфейс, не должны автоматически попадать в egress.
+Ordinary host services that are not launched through the egress interface MUST NOT be routed through egress automatically.
 
 ## 2.4. One-shot route
 
-Route, указанный для одной операции/команды. One-shot не меняет default route клиента.
+The route selected for one operation or command. A one-shot route does not change the client's default route.
 
-One-shot operations должны поддерживать **параллельное выполнение через разные routes**, включая `direct`.
+One-shot operations MUST support **concurrent execution through different routes**, including `direct`.
 
 ## 2.5. Execution mode
 
-Независимая от route сущность:
+An execution mode is independent of route:
 
 - `proxy` — userspace SOCKS/proxy path;
-- `tun` — strict/network-enforced path, где приложение не обязано знать о proxy.
+- `tun` — strict, network-enforced path that does not require applications to understand proxies.
 
-Route и execution mode независимы:
+Route and execution mode are independent:
 
 ```text
 route=direct, mode=proxy
@@ -363,85 +375,78 @@ route=xeovo:nl-amsterdam-01, mode=tun
 route=direct, mode=tun
 ```
 
-Для `direct + tun` смысл `tun` — strict/network-enforced execution без proxy/VPN egress; реализация может использовать isolated netns + direct NAT/path.
+For `direct + tun`, TUN means strict/network-enforced execution without proxy/VPN egress; an implementation may use an isolated network namespace and direct NAT/path.
 
-Поддержка `tun` является capability конкретной execution environment. Нельзя silently fallback из `tun` в `proxy`.
+TUN support is a capability of the specific execution environment. The client MUST NOT silently fall back from TUN to proxy mode.
 
 ## 2.6. Local client
 
-`egressctl` и `egress-run` являются local clients.
+`egressctl` and `egress-run` are local clients.
 
-- `egressctl` управляет backend через public `egressd` API;
-- `egress-run` получает у backend нужную network capability/session и запускает локальную команду;
-- ни один из них не содержит provider secrets;
-- ни один из них не должен требовать Mihomo admin secret;
-- один и тот же client package должен работать на host и внутри container с разными configs.
+- `egressctl` manages the backend through the public `egressd` API.
+- `egress-run` obtains the required network capability/session from the backend and launches a local command.
+- Neither client contains provider secrets or requires the Mihomo admin secret.
+- The same client package works on a host and inside containers with different configurations.
 
-# 3. Архитектурные принципы
+# 3. Architectural principles
 
-1. **Mihomo-first.** Не писать собственные protocol engines, provider updater, selector или latency engine, если это уже штатно делает Mihomo.
-2. **Local execution.** `egress-run` запускает command в той же execution environment, где запущен сам wrapper. Backend не исполняет command удалённо.
-3. **Один backend, много clients.** Host/container/другие среды используют один `vibelab-egress`, но имеют отдельные client profiles/configs/defaults.
-4. **container остаётся недоверенным.** Не выдавать ему Docker socket, host root shell, provider secrets или Mihomo admin secret.
-5. **Public API parity.** Public `egressd` API и control capabilities `egressctl` должны быть изоморфны: `egressctl` — удобный клиент API, а не security boundary.
-6. **No hidden privileged CLI.** `egressctl` не получает скрытых административных endpoints/capabilities, недоступных прямому public API client с тем же credential.
-7. **Data plane и control plane разделены.** Control идёт через `egressd`; сетевой трафик — через Mihomo/data-plane endpoints.
-8. **Все внутренние Docker destinations для container clients всегда DIRECT.** Это hard security/routing invariant.
-9. **LiteLLM всегда DIRECT** как частный случай local/operator control plane; дополнительные direct destinations задаются оператором.
-10. **Per-client default.** Default route/mode одного client не влияет на defaults других clients.
-11. **Default route и one-shot routes независимы.**
-12. **One-shot concurrency обязательна.** Нельзя использовать один mutable global `ONESHOT` selector с lock как финальную архитектуру.
-13. **`direct` доступен везде**, где семантически доступна конкретная proxy/VPN location.
-14. **Proxy first, TUN when needed.** Proxy mode обязателен для v1; TUN capability может отличаться по execution environment.
-15. **Нет глобального host VPN.** Egress применяется только к явно подключённым clients/commands.
-16. **Provider subscriptions/keys остаются в backend.**
-17. **Fail safe / last-known-good.** Failed provider update не уничтожает рабочую конфигурацию.
-18. **Фактическая доступность домена измеряется запросом**, а не выводится только из GeoIP/GeoSite.
-19. **No remote arbitrary exec.** Public backend API никогда не принимает произвольную shell command для исполнения на host/backend.
-20. **Capabilities explicit.** Unsupported `tun`/UDP/etc. возвращаются явно и диагностируемо.
+1. **Mihomo first.** Do not build protocol engines, provider updaters, selectors, or latency engines that Mihomo already provides.
+2. **Local execution.** `egress-run` starts commands in its own execution environment; the backend never executes commands remotely.
+3. **One backend, multiple clients.** Hosts and containers share one backend but retain separate client profiles, configurations, and defaults.
+4. **Treat client containers as untrusted.** Do not give them the Docker socket, host root shell, provider secrets, or Mihomo admin secret.
+5. **Public API parity.** `egressctl` is a convenient client of the public `egressd` API, not a security boundary.
+6. **No hidden privileged CLI.** `egressctl` MUST NOT have administrative endpoints or capabilities unavailable to a direct API client with the same credential.
+7. **Separate data plane and control plane.** Control uses `egressd`; traffic uses Mihomo/data-plane endpoints.
+8. **Keep internal Docker destinations DIRECT for container clients.** This is a hard security/routing invariant.
+9. **Keep the operator's control plane DIRECT.** Additional direct destinations are configured explicitly by the operator.
+10. **Per-client defaults.** A client's default route/mode MUST NOT affect other clients.
+11. **Default routes and one-shot routes are independent.**
+12. **Support concurrent one-shot sessions.** A single mutable global `ONESHOT` selector guarded by a lock is not an acceptable final design.
+13. **Make `direct` available wherever a proxy/VPN location can be selected.**
+14. **Proxy first, TUN when needed.** Proxy mode is required for v1; TUN support may vary by execution environment.
+15. **No global host VPN.** Egress applies only to explicitly connected clients/commands.
+16. **Keep provider subscriptions and keys on the backend.**
+17. **Fail safe with last-known-good state.** A failed provider update MUST NOT destroy working configuration.
+18. **Measure domain availability with a request**, not only by inferring it from GEO data.
+19. **No arbitrary remote execution.** The public API MUST NOT accept arbitrary shell commands for execution on the host/backend.
+20. **Report capabilities explicitly.** Unsupported TUN, UDP, or other capabilities MUST be diagnosable.
 
-# 4. Цели
+# 4. Goals
 
-Система должна позволять пользователю/агенту из host или container execution environment:
+From a host or container execution environment, users/agents should be able to:
 
-- установить одинаковый `egressctl`/`egress-run` client package;
-- подключиться к одному backend через environment-specific config;
-- видеть собственный client identity/capabilities;
-- видеть все доступные routes;
-- видеть **свой** текущий default route и mode;
-- менять свой default route/mode, не влияя на другие clients;
-- запускать локальную команду через любой route, включая `direct`;
-- запускать несколько one-shot команд одновременно через разные routes;
-- обновлять subscriptions/providers;
-- при необходимости инициировать provider update через заданный working route;
-- проверять health/latency routes;
-- проверять доступность конкретного domain через набор или все routes;
-- выполнять bounded throughput benchmark shortlist routes;
-- выбирать route по стране/provider/latency/speed/health/domain availability;
-- использовать GeoIP/GeoSite/ASN metadata как дополнительный контекст;
-- диагностировать deployment через `egressctl doctor`;
-- использовать Skill для agent workflows;
-- устанавливать/настраивать backend и отдельные clients по воспроизводимой документации;
-- при наличии environment capability запускать local command в strict/TUN режиме.
+- install the same `egressctl`/`egress-run` client package;
+- connect to one backend through environment-specific configuration;
+- inspect their own client identity and capabilities and list available routes;
+- inspect and change their own default route/mode without affecting other clients;
+- run local commands through any route, including `direct`;
+- run concurrent one-shot commands through different routes;
+- update providers, optionally through a specified working route;
+- check route health/latency and domain availability through selected or all routes;
+- run bounded throughput benchmarks and rank routes by country, provider, latency, speed, health, or domain availability;
+- use GeoIP/GeoSite/ASN metadata as additional context;
+- diagnose the deployment with `egressctl doctor` and use the agent skill;
+- install/configure backend and clients using reproducible documentation;
+- run local commands in strict/TUN mode when the environment supports it.
 
-# 5. Не-цели первой версии
+# 5. Non-goals for v1
 
-Не входят автоматически:
+The following are not included in v1:
 
-- глобальный VPN для всего host;
-- изменение host default route;
+- a global VPN for the entire host;
+- changing the host default route;
 - public proxy/API service;
-- прямой agent access к полному Mihomo API;
-- собственная реализация WireGuard/VLESS;
-- scraping web cabinets провайдеров;
-- full-fleet speed-test при каждом выборе;
-- отключение container runtime ради strict mode;
-- выдача container Docker socket;
+- direct agent access to the full Mihomo API;
+- custom implementations of WireGuard/VLESS;
+- scraping provider web portals;
+- full-fleet speed tests on every route selection;
+- disabling the container runtime to enable strict mode;
+- giving a container the Docker socket;
 - generic privileged RPC / arbitrary host shell.
 
-# 6. Исходная инфраструктура и DIRECT control plane
+# 6. Reference infrastructure and DIRECT control plane
 
-Текущая логика container → LiteLLM (напомню: вместо container и litellm могут быть другие пользователи сети в докер-контейнерах, обращающиеся друг к другу через внутреннюю докер-сеть):
+The original integration path used a client container connecting to a service on the host. The same pattern applies to any operator-selected local control-plane service:
 
 ```text
 container (container runtime)
@@ -452,27 +457,27 @@ host.docker.internal / docker0 gateway
    |
    +--> host relay :4001
           |
-          +--> 127.0.0.1:4000 LiteLLM
+          +--> 127.0.0.1:4000 operator control-plane service
 ```
 
-Egress не должен нарушать этот path.
+Egress MUST NOT break this path.
 
-Hard DIRECT должен покрывать не только LiteLLM, а **все локальные Docker networks** и явно заданный operator control plane.
+Hard DIRECT MUST cover **all local Docker networks** and the explicitly configured operator control plane.
 
-Если ресурс, к которому мы обращаемся напрямую (типа LiteLLM) находится на другой машине, должна быть возможность явно задать, что это подключение тоже HARD DIRECT.
+If a directly accessed service is on another machine, the operator MUST be able to configure that destination as HARD DIRECT.
 
 # 7. Threat model
 
-## 7.1. Недоверенные субъекты
+## 7.1. Untrusted subjects
 
-- container agent;
-- команды/код, запущенные агентом;
-- любой client, имеющий только ordinary public API credential;
-- внешние websites/repositories;
+- a client container agent;
+- commands/code launched by the agent;
+- any client with only an ordinary public API credential;
+- external websites/repositories;
 - provider subscription content;
-- другие containers на Docker network без корректного client credential.
+- other containers on the Docker network without valid client credentials.
 
-## 7.2. Доверенные компоненты
+## 7.2. Trusted components
 
 - host administrator;
 - pinned Mihomo image/binary;
@@ -481,29 +486,29 @@ Hard DIRECT должен покрывать не только LiteLLM, а **вс
 - local per-invocation TUN namespace bootstrap;
 - provider secret store.
 
-`egressctl` и `egress-run` не являются security boundary: недоверенный code может повторить их public API calls самостоятельно.
+`egressctl` and `egress-run` are not security boundaries: untrusted code can make the same public API calls directly.
 
 ## 7.3. Security invariants
 
-1. container не видит provider subscription URLs/private keys/VLESS secrets.
-2. container не видит Mihomo admin secret.
-3. Mihomo admin API не публикуется на host/docker gateway как client-facing service.
-4. Public `egressd` API безопасен при прямом вызове без `egressctl`.
-5. Public API не предоставляет generic `exec`, arbitrary file access, arbitrary config patch или raw Mihomo API passthrough.
-6. `egressctl` использует только тот же public API и не имеет скрытого privileged transport.
-7. Client identity определяется credential/token, а не доверенным полем `client_id` запроса.
-8. Agent-facing ports не слушают public NIC.
-9. Internal Docker CIDRs всегда DIRECT в default, one-shot, probe и strict modes для container clients.
-10. Operator-defined HARD DIRECT destinations имеют приоритет над выбранным route.
-11. Provider subscription update по умолчанию выполняется DIRECT; update via route не должен требовать раскрытия provider secret client-side.
-12. Local TUN bootstrap не превращается в root-shell API; workload capabilities сбрасываются до exec.
-13. Никакой автоматический fallback `container runtime -> runc` недопустим.
-14. Provider config/subscription parser считается input-validation boundary.
-15. One client не может менять default route/mode другого client через public API.
-16. Provider/API credentials разных trust domains должны быть разделены.
-17. `egress-run` command argv/environment не отправляются backend в ordinary proxy mode.
+1. A client container MUST NOT see provider subscription URLs, private keys, or VLESS secrets.
+2. A client container MUST NOT see the Mihomo admin secret.
+3. The Mihomo admin API MUST NOT be published on the host or Docker gateway as a client-facing service.
+4. The public `egressd` API MUST be safe when called directly without `egressctl`.
+5. The public API MUST NOT provide generic `exec`, arbitrary file access/config patching, or raw Mihomo API passthrough.
+6. `egressctl` MUST use the same public API and MUST NOT have hidden privileged transport.
+7. Client identity MUST come from the credential/token, not a trusted request `client_id` field.
+8. Agent-facing ports MUST NOT listen on a public network interface.
+9. Internal Docker CIDRs MUST remain DIRECT in default, one-shot, probe, and strict modes for container clients.
+10. Operator-defined HARD DIRECT destinations take precedence over the selected route.
+11. Provider updates use DIRECT by default. Updating through a route MUST NOT require client-side disclosure of provider secrets.
+12. Local TUN bootstrap MUST NOT become a root-shell API; drop workload capabilities before execution.
+13. Automatic fallback from a container runtime to `runc` is prohibited.
+14. Provider configuration/subscription parsing is an input-validation boundary.
+15. A client MUST NOT change another client's default route/mode through the public API.
+16. Provider/API credentials from different trust domains MUST be isolated.
+17. In ordinary proxy mode, `egress-run` MUST NOT send command arguments or environment to the backend.
 
-# 8. Итоговая схема
+# 8. Overall architecture
 
 ```text
                               HOST
@@ -549,80 +554,79 @@ Never client-facing:
   generic host exec
 ```
 
-Host и container используют один backend, но разные client configs и credentials.
+The host and containers use one backend but separate client configurations and credentials.
 
-Default state различается по client profile; one-shot sessions дополнительно различаются по route/session и могут выполняться параллельно.
+Default state is isolated by client profile. One-shot sessions are isolated by route/session and may run concurrently.
 
 # 9. Mihomo responsibilities
 
-Mihomo должен отвечать за:
+Mihomo is responsible for:
 
 - proxy providers/subscriptions;
 - provider health-check;
 - per-node delay tests;
-- WireGuard/VLESS и другие поддерживаемые protocols;
-- per-client selector groups (`CLIENT::<client_id>` или эквивалент);
+- WireGuard/VLESS and other supported protocols;
+- per-client selector groups (`CLIENT::<client_id>` or equivalent);
 - authenticated default SOCKS listener;
 - route-addressable authenticated one-shot listener;
-- routing rules/`IN-USER` или подтверждённый эквивалент;
+- routing rules/`IN-USER` or an equivalent mechanism confirmed by testing;
 - GeoIP/GeoSite/ASN rules;
 - HARD DIRECT bypass;
 - provider refresh API;
 - direct route.
 
-Наличие общего aggregate group допустимо как implementation detail, но **не должно превращать default route в один глобальный selector для всех clients**.
+A shared aggregate group may be used as an implementation detail, but **MUST NOT turn the default route into one global selector shared by all clients**.
 
-Production version должна быть pinned по tag + digest после PoC; точная syntax/features проверяются против этой pinned версии.
+Pin the production version by tag and digest after the PoC. Verify exact syntax/features against that pinned version.
 
 # 10. egressd responsibilities
 
-`egressd` — тонкий public control/security adapter.
+`egressd` is a narrow public control/security adapter.
 
-Он должен:
+It is responsible for:
 
-- ходить во внутренний Mihomo API;
-- предоставлять authenticated public API, соответствующий возможностям `egressctl`;
-- аутентифицировать client profile по credential/token;
-- возвращать `/self` identity/capabilities;
-- нормализовать location catalog и stable route IDs;
-- provision-time связывать client profiles с Mihomo per-client selector groups;
-- хранить per-client default route/mode;
-- переключать только selector authenticated client;
-- обновлять providers и reconciliation state;
-- при исчезновении route переводить только затронутые client defaults на `direct`;
-- собирать/хранить health metadata;
-- выполнять domain probes;
-- выполнять bounded benchmarks;
-- управлять one-shot route credentials/mapping/session metadata;
-- выдавать network capability для `egress-run`, но не запускать пользовательские commands;
-- хранить audit log с client identity;
-- не раскрывать provider secrets.
+- communicate with the internal Mihomo API;
+- provide an authenticated public API matching `egressctl` capabilities;
+- authenticate client profiles using credentials/tokens;
+- return `/self` identity/capabilities;
+- normalize the location catalog and stable route IDs;
+- bind client profiles to Mihomo per-client selector groups during provisioning;
+- store per-client default route/mode;
+- change only the authenticated client's selector;
+- update providers and reconciliation state;
+- change only affected client defaults to `direct` when a route disappears;
+- collect/store health metadata;
+- run domain probes and bounded benchmarks;
+- manage one-shot route credentials, mappings, and session metadata;
+- issue network capabilities to `egress-run` without launching user commands;
+- store audit logs with client identity;
+- avoid disclosing provider secrets.
 
-`egressd` НЕ должен:
+`egressd` MUST NOT:
 
-- принимать arbitrary shell command для исполнения;
-- исполнять workload клиента;
-- быть generic proxy к Mihomo admin API;
-- предоставлять arbitrary netns/firewall operations;
-- доверять client-provided `client_id` вместо authenticated identity.
+- accept arbitrary shell commands for execution;
+- execute client workloads;
+- act as a generic proxy to the Mihomo admin API;
+- provide arbitrary namespace/firewall operations;
+- trust a client-provided `client_id` instead of the authenticated identity.
 
 ## 10.1. Public API parity rule
 
-Все обычные control-plane возможности `egressctl` должны быть выражены через documented public `/v1` API.
+All ordinary `egressctl` control-plane capabilities MUST be exposed through the documented public `/v1` API.
 
-`egressctl` не имеет скрытых privileged endpoints. Прямой HTTP client с тем же token должен иметь ровно те же permissions, что `egressctl`.
+`egressctl` MUST NOT have hidden privileged endpoints. A direct HTTP client using the same token has exactly the same permissions as `egressctl`.
 
-Исключение: local execution mechanics `egress-run` (например local `exec()` или per-run TUN namespace) не являются server control-plane capabilities и поэтому не обязаны быть REST endpoints.
+Exception: local execution mechanics in `egress-run` (such as local `exec()` or a per-run TUN namespace) are not server control-plane capabilities and do not need REST endpoints.
 
 # 11. Providers/subscriptions
 
-## 11.1. Native provider — предпочтительный вариант
+## 11.1. Native provider — preferred option
 
-Если BlancVPN/Xeovo выдают Mihomo/Clash-compatible YAML/URI/base64 subscription, использовать `proxy-providers` напрямую.
+If a provider supplies a Mihomo/Clash-compatible YAML, URI, or base64 subscription, use `proxy-providers` directly.
 
-Mihomo поддерживает `http`, `file`, `inline`, interval updates, health-check, filter/exclude-filter и override.
+Mihomo supports `http`, `file`, and `inline` providers, interval updates, health checks, filters/exclude-filters, and overrides.
 
-Пример концепции:
+Conceptual example:
 
 ```yaml
 proxy-providers:
@@ -643,27 +647,27 @@ proxy-providers:
 
 ## 11.2. Adapter path
 
-Если provider выдаёт WireGuard `.conf` или иной несовместимый формат:
+If a provider supplies a WireGuard `.conf` or another incompatible format:
 
 ```text
 provider source -> provider-specific adapter -> Mihomo provider YAML
 ```
 
-Adapter обязан:
+The adapter MUST:
 
-- иметь fixtures без secrets;
-- делать atomic replace;
-- сохранять last-known-good;
-- не логировать private keys;
-- иметь отдельные tests.
+- include fixtures without secrets;
+- replace files atomically;
+- preserve last-known-good state;
+- never log private keys;
+- have dedicated tests.
 
 ## 11.3. Custom VLESS
 
-Custom VLESS node(s) должны быть static proxies или file provider.
+Custom VLESS nodes SHOULD be configured as static proxies or through a file provider.
 
-# 12. Обновление подписок
+# 12. Subscription updates
 
-Обязательные команды:
+Required commands:
 
 ```bash
 egressctl update
@@ -672,32 +676,31 @@ egressctl update --provider xeovo
 egressctl update --if-older-than 6h
 ```
 
-Дополнительно должна быть возможность запросить transport route для provider refresh, если direct update блокируется:
+The user SHOULD also be able to select a transport route for provider refresh when direct updates are blocked:
 
 ```bash
 egressctl update --provider blanc --via xeovo:fi-helsinki-03
 egressctl update --provider blanc --via direct
 ```
 
-`--via` задаёт egress route backend-side download/update и не раскрывает subscription URL/token client-side.
+`--via` selects the egress route for the backend-side download/update; it MUST NOT expose the subscription URL/token to the client.
 
-Если реализация native Mihomo `proxy-providers` не позволяет безопасно выполнить конкретный refresh через произвольный route без global selector race, `egressd` должен выполнить controlled fetch через route-specific data plane, проверить/атомарно записать provider artifact и затем выполнить reconcile. Нельзя временно менять shared default selector ради provider update.
+If native Mihomo `proxy-providers` cannot safely refresh through an arbitrary route without a global selector race, `egressd` MUST perform a controlled fetch through a route-specific data plane, validate and atomically write the provider artifact, then reconcile. It MUST NOT temporarily change a shared default selector for a provider update.
 
-TUN transport для provider refresh может быть добавлен в Phase 2, если он реально нужен; proxy-capable HTTP fetch является предпочтительным механизмом.
+TUN transport for provider refresh may be added in Phase 2 if needed; proxy-capable HTTP fetch is preferred.
 
-После update система должна:
+After an update, the system MUST:
 
-1. обновить provider через Mihomo либо adapter/controlled fetch;
-2. перечитать inventory;
-3. обновить normalized catalog;
-4. обновить one-shot route mappings;
-5. проверить defaults всех client profiles;
-6. каждый default, чей route исчез, переключить именно для этого client на `direct`;
-7. запустить быстрый health-check новых/изменённых nodes;
-8. обновить GEO assets при необходимости/по отдельной политике freshness;
-9. записать audit event с caller client identity и способом update.
+1. Update the provider through Mihomo or an adapter/controlled fetch.
+2. Reload the inventory and normalized catalog.
+3. Update one-shot route mappings.
+4. Check defaults for all client profiles.
+5. Change only a client whose default route disappeared to `direct`.
+6. Run a fast health check for new/changed nodes.
+7. Update GEO assets when required by the freshness policy.
+8. Record an audit event with caller identity and update method.
 
-Failed update не должен уничтожать previous working provider state.
+A failed update MUST NOT destroy the previous working provider state.
 
 # 13. Route catalog
 
@@ -722,7 +725,7 @@ Agent-facing route object:
 }
 ```
 
-`direct` должен присутствовать в catalog как synthetic route:
+`direct` MUST appear in the catalog as a synthetic route:
 
 ```json
 {
@@ -733,27 +736,27 @@ Agent-facing route object:
 }
 ```
 
-Stable route ID не должен зависеть только от изменяемого display name.
+A stable route ID MUST NOT depend solely on a mutable display name.
 
 # 14. GeoIP / GeoSite / ASN
 
-## 14.1. Использование Mihomo GEO data
+## 14.1. Using Mihomo GEO data
 
-Mihomo должен быть настроен на использование и автоматическое обновление GEO data.
+Configure Mihomo to use and automatically update GEO data.
 
-Рекомендуемый upstream:
+Recommended upstream:
 
 ```text
 https://github.com/MetaCubeX/meta-rules-dat
 ```
 
-Использовать поддерживаемые Mihomo assets:
+Use supported Mihomo assets:
 
-- `geoip.dat` или `geoip.metadb`/`country.mmdb`;
+- `geoip.dat` or `geoip.metadb`/`country.mmdb`;
 - `geosite.dat`;
 - `GeoLite2-ASN.mmdb`.
 
-В конфигурации должны использоваться штатные параметры Mihomo:
+Use Mihomo's native configuration options:
 
 ```yaml
 geo-auto-update: true
@@ -765,37 +768,37 @@ geox-url:
   asn: ...
 ```
 
-## 14.2. Назначение GEO data
+## 14.2. Uses of GEO data
 
-GEO data используются для:
+GEO data are used for:
 
-- верификации фактической страны exit IP;
+- verifying the actual exit IP country;
 - ASN enrichment;
-- классификации маршрутов;
+- classifying routes;
 - GEOIP/GEOSITE routing rules;
-- heuristics при выборе кандидатов;
-- объяснения агенту, почему route подходит/не подходит.
+- heuristics when selecting candidates;
+- explaining to the agent why a route is or is not suitable.
 
-## 14.3. Ограничение
+## 14.3. Limitation
 
-GeoIP/GeoSite **не считаются достоверной базой блокировок**.
+GeoIP/GeoSite **are not an authoritative source for block status**.
 
-Если задача звучит как «доступен ли `example.com` из страны X», окончательный ответ должен основываться на реальном probe через route.
+If the question is whether `example.com` is reachable from country X, the final answer MUST be based on a real probe through a route.
 
-GEO data дают context, probe даёт evidence.
+GEO data provide context; a probe provides evidence.
 
 # 15. Default route
 
-Default route является per-client.
+The default route is per client.
 
-Для каждого provisioned client Mihomo SHOULD иметь отдельную selector group:
+Mihomo SHOULD have a separate selector group for every provisioned client:
 
 ```text
 CLIENT::host-main = select(direct + all allowed provider nodes)
 CLIENT::container-main = select(direct + all allowed provider nodes)
 ```
 
-`egressd` public API действует относительно authenticated caller.
+The `egressd` public API operates in the context of the authenticated caller.
 
 CLI:
 
@@ -805,15 +808,15 @@ egressctl route set direct
 egressctl route set blanc:fi-helsinki-03
 ```
 
-Допускаются aliases:
+Use the `route` subcommand; the following are the supported forms:
 
 ```bash
 egressctl status
-egressctl use direct
-egressctl use ROUTE
+egressctl route set direct
+egressctl route set ROUTE
 ```
 
-`route current` возвращает минимум:
+`route current` returns at least:
 
 - authenticated `client_id`;
 - route ID;
@@ -822,13 +825,13 @@ egressctl use ROUTE
 - default execution mode;
 - selector/backend reconciliation status.
 
-Изменение route одним client не влияет на selectors/defaults других clients.
+Changing a route for one client MUST NOT affect other clients' selectors/defaults.
 
-Если selected route исчез после provider update, только затронутые client profiles получают fallback `direct` + warning/audit event.
+If a selected route disappears after a provider update, only the affected client profile falls back to `direct` and receives a warning/audit event.
 
 # 16. Default execution mode
 
-Система хранит default execution mode **per-client**:
+The system stores the default execution mode **per client**:
 
 ```text
 proxy | tun
@@ -842,13 +845,13 @@ egressctl mode set proxy
 egressctl mode set tun
 ```
 
-Это не переключает global host networking и не меняет mode других clients.
+This does not change global host networking or the mode of other clients.
 
-Default mode используется `egress-run --default` локально в конкретной execution environment.
+`egress-run --default` uses this mode locally in the corresponding execution environment.
 
-Backend `/self`/capabilities должен сообщать, какие modes разрешены для client profile. Локальный client также проверяет наличие локальной namespace/TUN capability.
+The backend `/self`/capabilities endpoint reports which modes are allowed for a client profile. The local client also checks for local namespace/TUN capability.
 
-Если `tun` недоступен, операция должна вернуть явный `unsupported`/`unsupported_in_environment`, без silent fallback в `proxy`.
+If TUN is unavailable, the operation MUST return an explicit `unsupported`/`unsupported_in_environment` result and MUST NOT silently fall back to proxy mode.
 
 # 17. Proxy data plane
 
@@ -856,32 +859,32 @@ Backend `/self`/capabilities должен сообщать, какие modes р�
 
 `1080/tcp` — authenticated default SOCKS endpoint.
 
-Каждый client получает собственную default proxy identity/credential. По этой identity Mihomo направляет трафик в selector данного client profile:
+Each client receives its own default proxy identity/credential. Mihomo uses this identity to route traffic to that client's selector:
 
 ```text
 client-default:host-main       -> CLIENT::host-main
 client-default:container-main -> CLIENT::container-main
 ```
 
-Фактические usernames/passwords не обязаны буквально содержать client ID; предпочтительны opaque credentials.
+Actual usernames/passwords do not need to contain the client ID; opaque credentials are preferred.
 
-Порядок routing:
+Routing order:
 
 1. hard DIRECT bypass rules;
 2. client identity -> client selector;
 3. selector -> current per-client default route.
 
-Это позволяет generic proxy-aware applications пользоваться persistent client default без `egress-run`.
+This lets generic proxy-aware applications use the persistent client default without `egress-run`.
 
 ## 17.2. One-shot listener
 
 `1081/tcp` — authenticated route-addressable SOCKS endpoint.
 
-Он НЕ использует один mutable `ONESHOT` selector.
+It MUST NOT use one mutable `ONESHOT` selector.
 
-Маршрут определяется на уровне SOCKS authentication identity / `IN-USER` rule либо другого Mihomo-native route-addressable mechanism, подтверждённого PoC.
+The route is selected through SOCKS authentication identity/`IN-USER` rules or another Mihomo-native route-addressable mechanism confirmed by the PoC.
 
-Концептуально:
+Conceptually:
 
 ```text
 (client A, route direct)               -> DIRECT
@@ -889,23 +892,23 @@ client-default:container-main -> CLIENT::container-main
 (client B, route xeovo:nl-01)          -> [xeovo] Amsterdam 01
 ```
 
-Hard DIRECT bypass имеет более высокий приоритет, чем выбранный one-shot route.
+Hard DIRECT bypass rules take precedence over the selected one-shot route.
 
 ## 17.3. Credentials/capabilities
 
-Default proxy credential является client-scoped secret.
+The default proxy credential is a client-scoped secret.
 
-One-shot capability может быть:
+A one-shot capability may use:
 
-- client+route credential, созданным при reconcile;
+- a client+route credential created during reconciliation;
 - short-lived session credential;
-- иным mechanism, если он обеспечивает concurrency, audit identity и не требует mutable global selector.
+- another mechanism that supports concurrency and audit identity without a mutable global selector.
 
-Provider private credentials никогда не выдаются client.
+Provider private credentials MUST never be given to clients.
 
 # 18. One-shot concurrency
 
-Обязательное требование:
+Required behavior:
 
 ```bash
 egress-run blanc:fi-helsinki-03 -- cmd-A
@@ -913,24 +916,24 @@ egress-run xeovo:us-new-york-02 -- cmd-B
 egress-run direct -- cmd-C
 ```
 
-могут выполняться одновременно в одной или разных execution environments.
+may run concurrently in the same or different execution environments.
 
-Они не должны:
+Concurrent calls MUST NOT:
 
-- менять default route ни одного client;
-- менять route друг друга;
-- блокировать друг друга глобальным mutex;
-- зависеть от единственного mutable `ONESHOT.now`.
+- change any client's default route;
+- change one another's routes;
+- block one another using a global mutex;
+- depend on a single mutable `ONESHOT.now` value.
 
-`egressd` хранит active one-shot sessions/jobs только как observability state:
+`egressd` stores active one-shot sessions/jobs only as observability state:
 
 ```bash
 egressctl oneshot active
 ```
 
-По умолчанию команда показывает sessions authenticated client; cross-client observability не является public capability.
+By default, the command shows sessions belonging to the authenticated client; cross-client observability is not a public capability.
 
-Пример:
+Example:
 
 ```json
 {
@@ -942,11 +945,11 @@ egressctl oneshot active
 }
 ```
 
-Глобального «current one-shot route» не существует.
+There is no global “current one-shot route.”
 
-# 19. Генерация one-shot routing map
+# 19. One-shot routing map generation
 
-При provider/client reconciliation config generator строит mapping:
+During provider/client reconciliation, the config generator builds a mapping:
 
 ```text
 (client identity, stable route ID)
@@ -954,22 +957,22 @@ egressctl oneshot active
     -> authenticated one-shot data-plane identity
 ```
 
-Требования:
+Requirements:
 
-- `direct` всегда присутствует;
-- mapping обновляется атомарно;
-- name collisions между providers исключаются prefix-ами/stable internal names;
-- capability не раскрывает provider keys;
-- исчезнувший route перестаёт выдаваться новым sessions;
-- существующая session получает детерминированную ошибку/завершение, если upstream route исчез;
-- количество generated identities/rules должно быть измерено на реальном catalog из нескольких сотен routes и признано приемлемым в PoC;
-- если client×route cardinality окажется слишком большой, разрешается заменить mapping на другой Mihomo-native concurrency-safe mechanism, но не на shared mutable selector.
+- `direct` is always present;
+- mappings are updated atomically;
+- provider name collisions are prevented with prefixes/stable internal names;
+- capabilities do not reveal provider keys;
+- a disappeared route is no longer issued to new sessions;
+- an existing session receives a deterministic error/termination if its upstream route disappears;
+- generated identity/rule counts are measured on a real catalog with hundreds of routes and validated in the PoC;
+- if client×route cardinality is too large, another Mihomo-native concurrency-safe mechanism may replace the mapping, but a shared mutable selector is not acceptable.
 
 # 20. `egress-run` proxy mode
 
-`egress-run` является локальным thin execution client.
+`egress-run` is a local, thin execution client.
 
-Интерфейс:
+Interface:
 
 ```bash
 egress-run --default -- command ...
@@ -978,103 +981,102 @@ egress-run direct -- command ...
 egress-run --mode proxy ROUTE -- command ...
 ```
 
-Алгоритм proxy mode:
+Proxy-mode algorithm:
 
-1. загрузить local `client.yaml`;
-2. authenticated call к public `egressd` API;
-3. для `--default` получить текущий per-client default route/mode;
-4. запросить/получить route-specific proxy capability/session;
-5. настроить proxy path для **локально запускаемого** child process;
-6. локально `exec`/spawn target command;
-7. корректно проксировать exit code/signals;
-8. закрыть session/обновить observability state.
+1. Load local `client.yaml`.
+2. Make an authenticated call to the public `egressd` API.
+3. For `--default`, retrieve the current per-client default route/mode.
+4. Request or retrieve a route-specific proxy capability/session.
+5. Configure the proxy path for the **locally launched** child process.
+6. Locally `exec`/spawn the target command.
+7. Preserve exit codes and forward signals correctly.
+8. Close the session/update observability state.
 
-Command/argv не отправляется backend для исполнения.
+The command/argv is never sent to the backend for execution.
 
-Для максимальной совместимости wrapper должен поддерживать:
+For maximum compatibility, the wrapper SHOULD support:
 
-1. native proxy env/config для известных clients, когда это надёжно;
-2. `proxychains-ng`/эквивалент для generic dynamically linked TCP clients.
+1. Native proxy environment/configuration for known clients, when reliable.
+2. `proxychains-ng`/equivalent for generic dynamically linked TCP clients.
 
-Документировать ограничения proxy mode:
+Document proxy-mode limitations:
 
-- static binaries/direct syscalls могут обходить `LD_PRELOAD`;
-- UDP/QUIC поддерживаются неполно;
-- setuid binaries несовместимы;
-- некоторые runtimes игнорируют env proxy;
-- environment variables alone не являются network-enforcement mechanism.
+- static binaries/direct syscalls may bypass `LD_PRELOAD`;
+- UDP/QUIC support is incomplete;
+- setuid binaries are incompatible;
+- some runtimes ignore proxy environment variables;
+- environment variables alone do not enforce network routing.
 
-Если приложение требует гарантированного перехвата, использовать `--mode tun` только при наличии соответствующей environment capability.
+If an application requires guaranteed traffic interception, use `--mode tun` only when the environment has the required capabilities.
 
 # 21. Strict/TUN mode
 
-`egress-run --mode tun ROUTE -- command ...` выполняет command локально в
-вызывающей среде и направляет его сеть через отдельный TUN на каждый запуск.
-Это одинаково работает на Linux host и в произвольном Docker-контейнере.
-`proxy` и `tun` являются независимыми per-invocation режимами; каждый вызов
-может выбирать собственный route. При ошибке setup TUN команда не запускается
-и переключения на proxy нет.
+`egress-run --mode tun ROUTE -- command ...` runs the command locally in the
+calling environment and routes its traffic through a fresh TUN for each
+invocation. This applies to Linux hosts and Docker containers. `proxy` and
+`tun` are independent per-invocation modes; each invocation can select its own
+route. If TUN setup fails, the command does not start and there is no proxy
+fallback.
 
-Клиент создаёт вложенные user и network namespaces, поднимает TUN и default
-routes внутри нового network namespace, перенаправляет DNS-запросы на локальный
-forwarder и запускает workload после передачи TUN fd packet engine. Для этого
-адреса nameserver из клиентского `/etc/resolv.conf` назначаются loopback
-интерфейсу только нового namespace; внешний namespace и его resolver не
-меняются. Forwarder отправляет запросы через выбранный TUN route.
-Workload, его argv, environment, cwd и stdio остаются в клиентской среде.
-Engine получает только TUN fd и одноразовый SOCKS endpoint/credential для
-выбранного route; он не получает argv и не запускает workload. Для route
-direct используется direct packet forwarding. Закрытие команды останавливает
-её engine и освобождает namespace.
+The client creates nested user and network namespaces, configures TUN and
+default routes in the new network namespace, redirects DNS requests to a local
+forwarder, and starts the workload after passing the TUN file descriptor to the
+packet engine. Nameserver addresses from the client's `/etc/resolv.conf` are
+assigned to loopback only inside the new namespace; the outer namespace and
+its resolver are unchanged. The forwarder sends queries through the selected
+TUN route. The workload, argv, environment, cwd, and stdio remain in the client
+environment. The engine receives only the TUN descriptor and one-shot SOCKS
+endpoint/credentials for the selected route; it receives no argv and launches
+no workload. The `direct` route uses direct packet forwarding. When the
+command exits, its engine stops and the namespace is released.
 
-При стандартных resolver IP Cloudflare (`1.1.1.1`, `1.0.0.1`) клиент сначала
-отправляет DNS query через DNS-over-HTTPS на закреплённый IP с проверкой TLS
-для `cloudflare-dns.com`. Если DoH недоступен, клиент пробует настроенные
-resolver по UDP, затем по TCP. Для пользовательских resolver используются
-только их адреса: сначала UDP, затем TCP. Все эти соединения идут внутри
-выбранного TUN route; DNS не отправляется через outer Docker resolver.
-Адреса nameserver, совпадающие со всеми настроенными `tun_dns_servers`, не
-могут быть использованы как upstream, поскольку в private namespace они
-перехвачены локальным forwarder; в этом случае запуск завершается с явной
-ошибкой вместо DNS timeout.
+For the default Cloudflare resolver IPs (`1.1.1.1`, `1.0.0.1`), the client
+first sends DNS queries over DNS-over-HTTPS to a pinned IP and verifies TLS for
+`cloudflare-dns.com`. If DoH is unavailable, it tries configured resolvers over
+UDP and then TCP. Custom resolvers use only their configured addresses, first
+over UDP and then TCP. All connections use the selected TUN route; DNS is not
+sent through the outer Docker resolver. A nameserver matching every configured
+`tun_dns_servers` cannot be used as an upstream because it is intercepted by
+the local forwarder in the private namespace. In that case startup fails with
+an explicit error instead of timing out.
 
-На host требуются Linux, доступ к /dev/net/tun, util-linux unshare, iproute2 и
-разрешённые unprivileged user namespaces. Каждый запуск использует
-`unshare --user --map-root-user --net`: UID/GID вызывающего процесса отображаются
-в UID/GID 0 нового user namespace. Это даёт bootstrap `CAP_NET_ADMIN` только
-внутри нового namespace, необходимую для `TUNSETIFF` и настройки сети, без
-capability во внешнем host/container namespace. Workload видит UID 0 внутри
-этого namespace (отображённый на UID вызывающего процесса снаружи). Для
-Docker-контейнера дополнительно передаётся только /dev/net/tun и точечный
-seccomp profile, допускающий нужный набор флагов unshare. Не выдавать outer
-container CAP_NET_ADMIN, CAP_SYS_ADMIN, host networking, privileged mode или
-Docker socket. После сетевой настройки workload теряет capabilities, получает
-no_new_privs и запрет на создание/переход в другие namespaces.
+On the host, TUN requires Linux, access to `/dev/net/tun`, util-linux `unshare`,
+iproute2, and enabled unprivileged user namespaces. Each invocation uses
+`unshare --user --map-root-user --net`: the caller's UID/GID map to UID/GID 0
+inside the new user namespace. This gives bootstrap `CAP_NET_ADMIN` only in
+that namespace for `TUNSETIFF` and network setup, without capabilities in the
+outer host/container namespace. The workload sees UID 0 inside the namespace,
+mapped to the caller's UID outside. A Docker client additionally receives only
+`/dev/net/tun` and a narrow seccomp profile allowing the required `unshare`
+flags. Do not grant the outer container `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, host
+networking, privileged mode, or the Docker socket. After network setup, the
+workload drops capabilities, receives `no_new_privs`, and cannot create or
+enter other namespaces.
 
-Docker acceptance использует обычный временный контейнер и проверяет proxy,
-TUN, локальность workload и реальный HTTPS-запрос. Общий helper и передача
-workload/его control-процесса вне client container не используются.
+Docker acceptance uses an ordinary temporary container and checks proxy, TUN,
+local workload execution, and a real HTTPS request. It does not use a shared
+helper or move the workload/control process outside the client container.
 
 # 22. Hard DIRECT bypass
 
-Через egress никогда не должны идти:
+The following traffic MUST never pass through egress:
 
 - `127.0.0.0/8`;
 - `::1/128`;
-- все актуальные local Docker network CIDRs;
+- all current local Docker network CIDRs;
 - Docker bridge gateways;
 - `host.docker.internal`;
 - operator-defined `EGRESS_BYPASS_CIDRS`;
 - operator-defined `EGRESS_BYPASS_DOMAINS`;
-- служебные endpoints egress control plane.
+- egress control-plane service endpoints.
 
-Не следует безусловно bypass-ить все RFC1918 ranges: будущая private remote network может быть доступна именно через VPN.
+Do not unconditionally bypass every RFC1918 range: a private remote network may be reachable only through a VPN.
 
-Docker CIDRs должны генерироваться на host helper-ом из `docker network inspect`; egress containers не получают Docker socket.
+Generate Docker CIDRs on the host using `docker network inspect`; egress containers MUST NOT receive the Docker socket.
 
-# 23. Проверка health/latency
+# 23. Health/latency checks
 
-Mihomo provider health-check и per-node delay test являются основой.
+Mihomo provider health checks and per-node delay tests are the foundation.
 
 CLI:
 
@@ -1085,15 +1087,15 @@ egressctl test --provider blanc
 egressctl test --country FI
 ```
 
-Основная метрика — HTTP/HTTPS delay к configurable 204 endpoint.
+The primary metric is HTTP/HTTPS delay to a configurable 204 endpoint.
 
-Не называть её ICMP ping.
+Do not call this an ICMP ping.
 
-`direct` также должен тестироваться как baseline.
+Test `direct` as a baseline as well.
 
-# 24. Проверка доступности конкретного домена по routes
+# 24. Domain availability checks through routes
 
-Обязательная feature.
+This is a required feature.
 
 CLI:
 
@@ -1106,7 +1108,7 @@ egressctl probe-domain example.com --routes direct,blanc:fi-01,xeovo:fi-02
 egressctl probe-domain example.com --parallel 16 --json
 ```
 
-Дополнительные параметры:
+Additional parameters:
 
 ```text
 --scheme http|https
@@ -1119,7 +1121,7 @@ egressctl probe-domain example.com --parallel 16 --json
 --max-routes N
 ```
 
-Для каждого route возвращать минимум:
+Return at least the following fields for each route:
 
 ```json
 {
@@ -1139,11 +1141,11 @@ egressctl probe-domain example.com --parallel 16 --json
 }
 ```
 
-Probe должен выполняться через route-specific one-shot path и потому безопасно parallelize-иться.
+The probe MUST use a route-specific one-shot path so probes can safely run in parallel.
 
-`direct` участвует наравне с proxy routes.
+Include `direct` alongside proxy routes.
 
-Важно различать:
+Distinguish at least:
 
 - DNS failure;
 - TCP timeout/refused;
@@ -1153,11 +1155,11 @@ Probe должен выполняться через route-specific one-shot pat
 - connection reset;
 - generic proxy failure.
 
-Это даст агенту полезную информацию о характере блокировки.
+This gives the agent useful information about the type of failure or blocking.
 
 # 25. Throughput benchmark
 
-Mihomo delay test не является speed test.
+Mihomo delay tests are not speed tests.
 
 CLI:
 
@@ -1173,15 +1175,15 @@ Pipeline:
 all routes -> cheap health/latency -> shortlist -> bounded download benchmark
 ```
 
-Не benchmark-ить сотни routes автоматически.
+Do not automatically benchmark hundreds of routes.
 
-Benchmark должен использовать route-specific one-shot proxy path и поддерживать parallel jobs с configurable cap.
+Benchmarks MUST use a route-specific one-shot proxy path and support parallel jobs with a configurable cap.
 
-`direct` допустим как baseline.
+`direct` may be used as a baseline.
 
 # 26. `egressctl best`
 
-Команды:
+Commands:
 
 ```bash
 egressctl best
@@ -1192,27 +1194,27 @@ egressctl best --country FI --domain example.com
 egressctl best --speed-aware
 ```
 
-Если указан `--domain`, route должен считаться кандидатом только при успешном свежем domain probe либо после on-demand probe shortlist.
+If `--domain` is specified, a route is a candidate only after a recent successful domain probe or an on-demand probe of the shortlist.
 
-Ranking по умолчанию:
+Default ranking:
 
-1. фильтры country/provider;
+1. country/provider filters;
 2. health;
-3. domain reachability, если domain задан;
+3. domain reachability, if a domain is specified;
 4. freshness;
 5. latency;
 6. optional throughput score;
 7. GEO verification/confidence.
 
-Формула должна быть прозрачной и возвращаться в JSON explanation.
+The ranking formula MUST be transparent and included in the JSON explanation.
 
 # 27. API egressd
 
 Version prefix `/v1`.
 
-Public API является API ordinary clients и соответствует control capabilities `egressctl`.
+The public API is for ordinary clients and corresponds to the control capabilities exposed by `egressctl`.
 
-Минимум:
+At minimum:
 
 ```text
 GET  /v1/self
@@ -1254,73 +1256,72 @@ POST /v1/geo/update
 
 Semantics:
 
-- authenticated token определяет client profile;
-- `/v1/self` возвращает `client_id`, environment label, allowed modes/capabilities и API compatibility metadata;
-- `/v1/default*` всегда относится к authenticated client;
-- public API не принимает произвольный target `client_id` для изменения чужих defaults;
-- `/v1/proxy/default-capability` выдаёт authenticated client его default proxy endpoint/credential metadata без provider secrets;
-- `/v1/oneshot/session` не меняет selector/default и выдаёт route-specific data-plane capability;
-- API никогда не возвращает provider private credentials;
-- public API никогда не выполняет arbitrary user command.
+- The authenticated token identifies the client profile.
+- `/v1/self` returns `client_id`, environment label, allowed modes/capabilities, and API compatibility metadata.
+- `/v1/default*` always refers to the authenticated client.
+- The public API does not accept an arbitrary target `client_id` to change another client's defaults.
+- `/v1/proxy/default-capability` returns the authenticated client's default proxy endpoint/credential metadata without provider secrets.
+- `/v1/oneshot/session` does not change a selector/default and returns a route-specific data-plane capability.
+- The API never returns provider private credentials or executes arbitrary user commands.
 
-Administrative provisioning clients/secrets/config generation должно идти через host-side bootstrap/admin tooling, не через ordinary public API.
+Administrative provisioning of clients/secrets/configuration MUST use host-side bootstrap/admin tooling, not the ordinary public API.
 
 ## 27.1. Public API parity
 
-Для каждого public control action `egressctl` должен существовать документированный API endpoint/operation.
+Every public control action in `egressctl` MUST have a documented API endpoint/operation.
 
-Интеграционные тесты должны сравнивать CLI behaviour с прямыми API calls.
+Integration tests SHOULD compare CLI behavior with direct API calls.
 
-Нельзя считать отсутствие команды в CLI security control: public API сам обязан enforce permissions.
+The absence of a CLI command is not a security control: the public API itself MUST enforce permissions.
 
 # 28. Authentication / authorization
 
-Каждая execution environment получает отдельный client credential.
+Each execution environment receives a separate client credential.
 
-Примеры:
+Examples:
 
 ```text
 host-main token
 container-main token
 ```
 
-Token связывается server-side с client profile и его permissions/capabilities.
+Bind each token server-side to its client profile and permissions/capabilities.
 
-container token может разрешать:
+A container token may allow:
 
 - self/status/list;
-- read/set **своего** default route/mode;
+- read/set **its own** default route/mode;
 - provider update trigger;
 - health/probe/benchmark;
 - create own one-shot sessions;
 - read own active sessions;
-- GEO status/update trigger, если разрешено policy.
+- trigger GEO status/update operations, if allowed by policy.
 
-Не разрешено:
+It MUST NOT allow:
 
-- impersonate другой client;
-- менять defaults другого client;
+- impersonate another client;
+- change another client's defaults;
 - raw Mihomo API;
 - read provider secrets;
 - arbitrary config patch;
 - arbitrary host command;
-- firewall/network namespace operations напрямую;
+- perform firewall/network namespace operations directly;
 - client provisioning/removal.
 
-Mihomo admin secret доступен только `egressd`/backend administration.
+The Mihomo admin secret is available only to `egressd`/backend administration.
 
-Client token считается доступным всему code внутри соответствующей execution environment. Поэтому token permissions должны быть безопасны для недоверенного code этой среды.
+The client token is considered accessible to all code in its execution environment. Its permissions MUST therefore be safe for untrusted code in that environment.
 
 # 29. Client configuration and discovery
 
-Один client package должен поддерживать config discovery в порядке:
+The client package supports configuration discovery in this order:
 
-1. explicit `--config PATH` (если команда поддерживает global option);
+1. explicit `--config PATH` (if supported by the command);
 2. `VIBELAB_EGRESS_CONFIG`;
 3. `/etc/vibelab-egress/client.yaml`;
-4. optional user config path только если это явно документировано.
+4. optional user config path, only if explicitly documented.
 
-CLI должен иметь:
+The CLI provides:
 
 ```bash
 egressctl config show
@@ -1328,17 +1329,17 @@ egressctl config validate
 egressctl whoami
 ```
 
-`config show` по умолчанию редактирует/маскирует token/credentials.
+`config show` redacts/masks tokens and credentials by default.
 
-При startup client SHOULD сравнить локальный expected `client_id` с `/v1/self`; mismatch является ошибкой конфигурации.
+At startup, the client SHOULD compare the local expected `client_id` with `/v1/self`; a mismatch is a configuration error.
 
-Host и container configs должны генерироваться provisioning/install tooling, а не копироваться вручную с заменой секретов.
+Host and container configurations MUST be generated by provisioning/install tooling, not copied manually with secrets replaced.
 
-# 30. CLI и `egress-run` contract
+# 30. CLI and `egress-run` contract
 
 ## 30.1. `egressctl`
 
-Обязательные команды:
+Required commands:
 
 ```bash
 egressctl status
@@ -1379,11 +1380,11 @@ egressctl config validate
 egressctl doctor
 ```
 
-Все read-команды поддерживают `--json` там, где это применимо.
+All read commands support `--json` where applicable.
 
-Exit codes стабильны и документированы.
+Exit codes are stable and documented.
 
-`egressctl` использует только documented public `egressd` API.
+`egressctl` uses only the documented public `egressd` API.
 
 ## 30.2. `egress-run`
 
@@ -1395,72 +1396,72 @@ egress-run --mode proxy ROUTE -- command ...
 egress-run --mode tun ROUTE -- command ...
 ```
 
-`--default` использует persistent default route + default mode authenticated client profile.
+`--default` uses the persistent default route and mode of the authenticated client profile.
 
-Explicit route никогда не меняет default route.
+An explicit route never changes the default route.
 
-Explicit mode никогда не меняет persistent default mode.
+An explicit mode never changes the persistent default mode.
 
-Target command запускается локально; обычный backend API не получает command для исполнения.
+The target command runs locally; the ordinary backend API does not receive commands for execution.
 
-`egress-run` обязан:
+`egress-run` MUST:
 
-- использовать тот же config/token discovery, что `egressctl`;
-- корректно передавать argv без shell-reparse по умолчанию;
-- сохранять exit status;
-- проксировать SIGINT/SIGTERM;
+- use the same config/token discovery as `egressctl`;
+- pass argv correctly without shell reparsing by default;
+- preserve the exit status;
+- forward SIGINT/SIGTERM;
 - cleanup session capability;
-- выводить понятную ошибку при unsupported mode;
-- поддерживать concurrent local invocations.
+- report unsupported modes clearly;
+- support concurrent local invocations.
 
-# 31. Skill для агента
+# 31. Agent skill
 
-Deliverable **обязателен**:
+Required deliverable:
 
 ```text
 skills/egress/SKILL.md
 ```
 
-Skill устанавливается в agent execution environment вместе/рядом с local client package и учит использовать локальные `egressctl`/`egress-run`.
+Install the skill in the agent execution environment alongside the local client package. It teaches agents to use local `egressctl`/`egress-run` commands.
 
-Skill должен обучить агента:
+The skill teaches agents to:
 
-1. Начинать с `egressctl whoami`/`status`, чтобы знать client profile и capabilities.
-2. Проверять `route current` перед изменением persistent default.
-3. Помнить, что default per-client: изменение container default не меняет host default.
-4. Предпочитать one-shot для единичной geo-specific задачи.
-5. Использовать `direct` как обычный route, в том числе для baseline comparison.
-6. Не менять default route ради одной команды.
-7. Перед выбором routes использовать свежие health metrics.
-8. Для вопроса о доступности конкретного сайта использовать `probe-domain`, а не только GeoIP/GeoSite.
-9. При repeated failures/stale inventory выполнять provider update, при необходимости через working `--via ROUTE`.
-10. Не benchmark-ить весь fleet; сначала shortlist.
-11. Выбирать `tun` только если proxy mode недостаточен и `whoami/capabilities` подтверждает поддержку.
-12. Не ожидать silent fallback `tun -> proxy`.
-13. Никогда не пытаться направить HARD DIRECT/internal Docker destinations через VPN.
-14. Никогда не обращаться напрямую к Mihomo admin API/provider secrets.
-15. После `route set` проверять `route current`.
-16. Для country-specific задачи при необходимости подтверждать exit country через GEO lookup/exit-IP check.
-17. При параллельных задачах использовать независимые `egress-run ROUTE` invocations, не менять default.
-18. Понимать ограничения proxy mode (`proxychains`, UDP/QUIC, static/setuid binaries).
-19. Не пытаться получить host root/Docker socket для TUN из container.
+1. Start with `egressctl whoami`/`status` to inspect the client profile and capabilities.
+2. Check `route current` before changing a persistent default.
+3. Remember that defaults are per client: changing one profile's default does not affect another.
+4. Prefer one-shot routing for a single location-specific task.
+5. Use `direct` as a normal route and for baseline comparisons.
+6. Do not change the default route for a single command.
+7. Use fresh health metrics when selecting routes.
+8. Use `probe-domain` to check site availability; do not rely only on GeoIP/GeoSite.
+9. Update providers after repeated failures or stale inventory; use a working `--via ROUTE` if needed.
+10. Do not benchmark the entire fleet; start with a shortlist.
+11. Choose TUN only when proxy mode is insufficient and `whoami`/capabilities reports support.
+12. Do not expect silent fallback from TUN to proxy.
+13. Never try to route HARD DIRECT/internal Docker destinations through a VPN.
+14. Never access the Mihomo admin API or provider secrets directly.
+15. Check `route current` after `route set`.
+16. For country-specific tasks, verify exit country with GEO lookup/exit-IP checks when needed.
+17. For concurrent tasks, use independent `egress-run ROUTE` invocations instead of changing the default.
+18. Understand proxy-mode limits (`proxychains`, UDP/QUIC, static/setuid binaries).
+19. Do not request host root or the Docker socket to use TUN from a container.
 
-Skill должен содержать decision tree и примеры минимум для:
+The skill MUST include a decision tree and examples for at least:
 
 - current/set default;
 - direct one-shot;
 - VPN one-shot;
 - 2+ concurrent one-shot;
 - domain probe across routes;
-- provider update через direct и через рабочий route;
+- provider update through DIRECT and through a working route;
 - proxy->tun decision;
-- диагностику `unsupported_in_environment`.
+- diagnose `unsupported_in_environment`.
 
-# 32. Установка и bootstrap
+# 32. Installation and bootstrap
 
-Проект обязан включать backend installer и client installer отдельно.
+The project MUST provide separate backend and client installers.
 
-Минимум:
+At minimum:
 
 ```text
 INSTALL.md
@@ -1470,15 +1471,15 @@ scripts/verify-backend-host.sh
 scripts/provision-client.sh
 scripts/install-client.sh
 scripts/verify-client.sh
-scripts/bootstrap-dev-access.sh   # если используется narrow dev/test bridge
+scripts/bootstrap-dev-access.sh   # when using a narrow dev/test bridge
 ```
 
-`INSTALL.md` должен описывать два независимых шага:
+`INSTALL.md` MUST describe two independent steps:
 
 ### A. Backend deployment
 
 - prerequisites;
-- persistent paths и `findmnt`/`df`;
+- persistent paths and `findmnt`/`df`;
 - Docker/Compose;
 - secrets/provider subscriptions;
 - firewall;
@@ -1492,102 +1493,98 @@ scripts/bootstrap-dev-access.sh   # если используется narrow dev
 
 ### B. Client installation in each execution environment
 
-Для каждого client profile:
+For each client profile:
 
-1. установить одинаковые `egressctl` + `egress-run` binaries/package;
-2. положить environment-specific `/etc/vibelab-egress/client.yaml`;
-3. предоставить отдельный API token и default-proxy auth как read-only secrets;
-4. установить Skill, если environment agent-capable;
-5. выполнить `egressctl config validate`;
-6. выполнить `egressctl whoami`;
-7. выполнить `egressctl doctor`/smoke tests.
+1. install the same `egressctl` + `egress-run` binaries/package;
+2. install an environment-specific `/etc/vibelab-egress/client.yaml`;
+3. provide a separate API token and default-proxy credentials as read-only secrets;
+4. install the skill if the environment runs an agent;
+5. run `egressctl config validate`;
+6. run `egressctl whoami`;
+7. run `egressctl doctor`/smoke tests.
 
-Production container installation должна быть reproducible: предпочтительно bake client package + Skill в image либо подключать их детерминированным read-only artifact/mount. Не полагаться только на ручную установку в writable container layer, которая исчезнет при recreate.
+Production container installation MUST be reproducible: preferably bake the client package and skill into the image or mount them as deterministic read-only artifacts. Do not rely only on manual installation into a writable container layer that disappears on recreation.
 
-Provisioning tool должен уметь генерировать отдельные client bundles/config templates для host и container без provider secrets.
+The provisioning tool MUST generate separate client bundles/config templates for hosts and containers without provider secrets.
 
-# 33. Особое ограничение: разработчик находится внутри container
+# 33. Optional constrained development environments
 
-Coding/test agent предполагается запущенным **изнутри уже работающего Docker container**.
-
-Он должен разрабатывать и тестировать local client именно из этой среды.
-
-Implementation plan не может предполагать, что агент имеет:
+Contributors may develop or test the local client from inside an already-running container. Such an environment is untrusted and may not provide:
 
 - host root;
 - host `systemctl`;
 - Docker socket;
 - host network namespace;
-- доступ к `/etc` host;
+- access to host `/etc`;
 - Mihomo admin API.
 
-## 33.1. Что агент должен уметь делать самостоятельно из container
+## 33.1. Checks available to a client/container contributor
 
-После первоначального bootstrap/provisioning агент должен уметь:
+After initial bootstrap/provisioning, a contributor should be able to:
 
-- редактировать repository в shared workspace;
-- запускать unit/parser/config-generation tests;
-- устанавливать/обновлять dev version local client package внутри container;
-- валидировать container `client.yaml`;
-- выполнять `egressctl whoami/status`;
-- обращаться к public `egressd` API через `egressctl` и напрямую в API parity tests;
-- обращаться к authenticated SOCKS endpoints;
-- читать/менять только свой default route/mode;
-- запускать local `egress-run` и убеждаться, что process остаётся внутри container runtime;
-- запускать concurrent one-shot proxy tests;
-- обновлять providers через public API;
-- запускать domain probes/benchmarks;
-- проверять HARD DIRECT/LiteLLM connectivity;
-- проверять, что host client default не меняется его действиями (через host acceptance report или dedicated cross-client assertion);
-- читать безопасные host-test reports.
+- edit the checked-out repository;
+- run unit/parser/config-generation tests;
+- install/update a development version of the local client package inside the container;
+- validate the container's `client.yaml`;
+- run `egressctl whoami/status`;
+- call the public `egressd` API through `egressctl` and directly for API parity tests;
+- access authenticated SOCKS endpoints;
+- read/change only its own default route/mode;
+- run local `egress-run` and verify the process remains inside the container;
+- run concurrent one-shot proxy tests;
+- update providers through the public API;
+- run domain probes/benchmarks;
+- check HARD DIRECT and operator control-plane connectivity;
+- verify that its actions do not change another client's default (using a host acceptance report or a dedicated cross-client assertion);
+- read safe host-test reports.
 
 ## 33.2. Host-side operations
 
-Основной runtime egress-системы находится в Docker Compose stack `vibelab-egress`.
+The primary egress runtime runs in the `vibelab-egress` Docker Compose stack.
 
-Host privilege требуется для:
+Host privileges are required for:
 
-- первоначального backend bootstrap;
+- initial backend bootstrap;
 - Docker Compose deploy/redeploy;
 - firewall/persistent dirs;
-- публикации loopback/docker-gateway ports;
+- publishing loopback/Docker-gateway ports;
 - Docker-CIDR synchronization;
 - host client provisioning/install;
 - host acceptance harness;
 - local client TUN namespace and static packet engine.
 
-Mihomo и `egressd` не устанавливаются как постоянные host daemons.
+Mihomo and `egressd` are not installed as persistent host daemons.
 
-Один раз администратор вручную выполняет bootstrap либо использует заранее установленный narrow deployment/test interface.
+An administrator performs the initial bootstrap or provides a preinstalled narrow deployment/test interface.
 
-После этого container agent может:
+Afterward, a container-based contributor may:
 
 - validate staged backend/client bundle;
-- request deploy/redeploy только `vibelab-egress` из фиксированного path;
-- получить filtered status/logs;
-- запустить фиксированный host acceptance harness;
+- request deploy/redeploy only the egress stack from its fixed deployment path;
+- retrieve filtered status/logs;
+- run the fixed host acceptance harness;
 - sync Docker CIDRs;
-- request deterministic install/update client artifact в заранее разрешённую target environment, если такой helper реализован.
+- request deterministic installation/update of a client artifact in an approved target environment, if such a helper is implemented.
 
-Запрещено:
+Prohibited operations:
 
-- arbitrary shell command на host;
+- arbitrary shell commands on the host;
 - arbitrary compose path/container management;
-- arbitrary file copy в `/etc`;
+- arbitrary file copying into `/etc`;
 - Docker socket passthrough;
-- generic host exec ради выполнения container workload.
+- generic host execution of a container workload.
 
-Для PoC допустим ручной administrator loop: агент подготавливает artifacts/instructions, пользователь выполняет host-only commands и возвращает structured test report. Production acceptance требует воспроизводимого installer/harness.
+For a PoC, a manual administrator loop is acceptable: the contributor prepares artifacts/instructions, an administrator runs host-only commands and returns a structured report. Production acceptance requires a reproducible installer/harness.
 
 # 34. Host acceptance harness
 
-Нужен root-owned фиксированный test harness, например:
+A fixed, root-owned test harness is required, for example:
 
 ```text
 egress-host-test
 ```
 
-Он выполняет только заранее определённые проверки и выдаёт JSON report без secrets:
+It runs only predefined checks and returns a JSON report without secrets:
 
 - socket binds/public exposure/firewall;
 - Compose health;
@@ -1599,14 +1596,14 @@ egress-host-test
 - host client config/token presence and permissions;
 - host `egressctl whoami` identity;
 - host current default route/mode;
-- per-client isolation assertion: тестовое изменение container default не меняет host default;
-- client-local namespace, TUN fd handoff, capability drop и seccomp policy.
+- per-client isolation assertion: changing a test container's default does not change the host default;
+- client-local namespace, TUN fd handoff, capability drop, and seccomp policy.
 
-container agent может запросить только фиксированный harness/report через narrow dev/test mechanism; harness не принимает arbitrary shell command.
+A container-based contributor may request only the fixed harness/report through a narrow dev/test mechanism; the harness does not accept arbitrary shell commands.
 
 # 35. Docker/internal CIDR synchronization
 
-Egress stack не получает Docker socket.
+The egress stack MUST NOT receive the Docker socket.
 
 Host helper:
 
@@ -1614,9 +1611,9 @@ Host helper:
 egress-hostctl sync-docker-cidrs
 ```
 
-собирает Docker networks через host Docker CLI/API и пишет только generated CIDR artifact.
+collects Docker networks through the host Docker CLI/API and writes only a generated CIDR artifact.
 
-Trigger:
+Triggers:
 
 - install;
 - Docker restart;
@@ -1625,30 +1622,30 @@ Trigger:
 
 # 36. Network exposure
 
-Public client-facing services доступны только через trusted local paths:
+Public client-facing services are available only through trusted local paths:
 
 ```text
 host clients:      127.0.0.1:<ports>
 container clients: docker gateway / explicitly allowed local interface:<ports>
 ```
 
-Нельзя bind на public IP / unrestricted `0.0.0.0` без explicit firewall/interface restriction.
+Do not bind to a public IP or unrestricted `0.0.0.0` without explicit firewall/interface restrictions.
 
-Минимум:
+At minimum, expose:
 
 - authenticated default SOCKS;
 - authenticated one-shot SOCKS;
 - public narrow `egressd` API.
 
-Mihomo admin API — только private Compose network.
+The Mihomo admin API is accessible only on the private Compose network.
 
-UFW/nftables должны разрешать container clients только с нужных local subnets/interfaces.
+UFW/nftables MUST allow container clients only from the required local subnets/interfaces.
 
-Network reachability сама по себе не заменяет application auth: control API и proxy endpoints должны иметь client credentials.
+Network reachability does not replace application authentication: control API and proxy endpoints MUST require client credentials.
 
 # 37. Secrets
 
-Рекомендуемый layout backend:
+Recommended backend layout:
 
 ```text
 /etc/vibelab-egress/secrets/
@@ -1662,9 +1659,9 @@ Network reachability сама по себе не заменяет application au
     container-main.token
 ```
 
-Client environment получает только свой API token и отдельный default-proxy credential; one-shot credentials/capabilities выдаются через public API и не являются provider secrets.
+Each client environment receives only its own API token and separate default-proxy credentials. One-shot credentials/capabilities are issued through the public API and are not provider secrets.
 
-Примеры client-side:
+Client-side examples:
 
 ```text
 host:
@@ -1678,24 +1675,24 @@ container:
   /run/secrets/vibelab_egress_default_proxy_auth
 ```
 
-Permissions `0700/0600` или эквивалентные read-only secret mounts.
+Use permissions `0700/0600` or equivalent read-only secret mounts.
 
-Provider/Mihomo secrets не должны попадать:
+Provider/Mihomo secrets MUST NOT appear in:
 
-- в client configs;
-- в Git;
-- в tar/zip artifacts;
-- в обычные logs;
-- в public API responses;
-- в `docker inspect` environment, если можно использовать mounted files.
+- client configurations;
+- Git;
+- tar/zip artifacts;
+- ordinary logs;
+- public API responses;
+- `docker inspect` environment variables when mounted files can be used instead.
 
-Client token внутри container не считается тайной от code самого container; его permissions должны быть безопасны для всего trust domain этого container.
+A client token inside a container is not secret from code in that container; its permissions MUST be safe for the container's entire trust domain.
 
 # 38. Persistence
 
-Persistent root configurable и должен находиться на достаточно большом filesystem.
+The persistent root is configurable and MUST be located on a filesystem with sufficient capacity.
 
-Пример:
+Example:
 
 ```text
 /var/lib/vibelab-egress/
@@ -1707,32 +1704,32 @@ Persistent root configurable и должен находиться на дост�
   geo/
 ```
 
-Перед install проверять `findmnt -T` и `df -h`.
+Before installation, check `findmnt -T` and `df -h`.
 
 # 39. Metrics DB
 
-SQLite достаточно.
+SQLite is sufficient.
 
-Таблицы/сущности:
+Tables/entities:
 
-- client profile metadata без raw secrets;
+- client profile metadata without raw secrets;
 - route metadata;
 - health/latency samples;
 - domain probe samples;
 - benchmark samples;
 - provider update events;
 - per-client default selection events;
-- one-shot jobs/sessions с `client_id`;
+- one-shot jobs/sessions with `client_id`;
 - GEO verification cache;
 - schema version.
 
-Provider/client raw secrets в DB не копировать, если для работы достаточно references/hashes.
+Do not copy raw provider/client secrets into the database when references/hashes are sufficient.
 
 # 40. Observability
 
 `egressd` logs — structured JSON.
 
-Audit events должны включать authenticated `client_id`, когда операция client-initiated:
+Audit events MUST include the authenticated `client_id` for client-initiated operations:
 
 - provider update;
 - default route/mode change;
@@ -1742,11 +1739,11 @@ Audit events должны включать authenticated `client_id`, когда
 - GEO update;
 - reconciliation fallback to direct.
 
-`egressctl doctor` проверяет относительно текущего client profile:
+`egressctl doctor` checks the current client profile for:
 
 1. local config parse/permissions;
 2. API/auth;
-3. `/v1/self` identity совпадает с expected `client_id`;
+3. `/v1/self` identity matches the expected `client_id`;
 4. API/client version compatibility;
 5. Mihomo/backend readiness;
 6. current default route/mode;
@@ -1758,46 +1755,46 @@ Audit events должны включать authenticated `client_id`, когда
 12. GEO data freshness;
 13. optional domain probe;
 14. local strict/TUN capability;
-15. отсутствие silent fallback.
+15. absence of silent fallback.
 
-Doctor не должен печатать API/proxy credentials.
+Doctor MUST NOT print API/proxy credentials.
 
 # 41. GEO data update
 
-Команды:
+Commands:
 
 ```bash
 egressctl geo status
 egressctl geo update
 ```
 
-Допускается нативный Mihomo auto-update + explicit API-triggered update.
+Native Mihomo auto-update and explicit API-triggered updates are both allowed.
 
-`geo status` должен показывать:
+`geo status` SHOULD show:
 
 - source URLs;
 - last update time;
-- file/version/hash, если доступно;
+- file/version/hash, when available;
 - staleness;
-- наличие GeoIP/GeoSite/ASN datasets.
+- presence of GeoIP/GeoSite/ASN datasets.
 
 # 42. Admin UI
 
-MetaCubeXD/Zashboard допустим только как admin convenience.
+MetaCubeXD/Zashboard may be used only as an administrative convenience.
 
-Он не является частью agent API.
+It is not part of the agent API.
 
-Если установлен:
+If installed:
 
-- bind только на host loopback;
-- full Mihomo secret не доступен container;
-- UI может быть отключён без влияния на agent workflows.
+- bind only on host loopback;
+- keep the full Mihomo secret inaccessible to containers;
+- allow disabling the UI without affecting agent workflows.
 
 # 43. MCP
 
-MCP — optional Phase 3 и не заменяет local client package.
+MCP is optional Phase 3 functionality and does not replace the local client package.
 
-Если реализуется, он является thin wrapper над тем же public `egressd` API и действует от имени отдельного client profile/credential либо явно выбранного local profile:
+If implemented, it is a thin wrapper over the same public `egressd` API and acts as a separate client profile/credential or an explicitly selected local profile:
 
 ```text
 egress_status
@@ -1811,15 +1808,15 @@ egress_best
 egress_benchmark
 ```
 
-MCP:
+MCP MUST:
 
-- не реализует networking engine;
-- не получает Mihomo admin secret/provider secrets;
-- не предоставляет возможностей шире public API/`egressctl`;
-- не запускает arbitrary shell command;
-- не заменяет `egress-run` для local workload execution.
+- MUST NOT implement a networking engine;
+- MUST NOT receive the Mihomo admin secret/provider secrets;
+- MUST NOT provide capabilities beyond the public API/`egressctl`;
+- MUST NOT run arbitrary shell commands;
+- MUST NOT replace `egress-run` for local workload execution.
 
-Если агент имеет local shell и Skill, preferred path остаётся `egressctl`/`egress-run`.
+If the agent has a local shell and the skill, the preferred path remains `egressctl`/`egress-run`.
 
 # 44. Repository layout
 
@@ -1883,65 +1880,66 @@ vibelab-egress/
     security/
 ```
 
-Не должно быть двух независимых реализаций CLI для host и container: это один client package с разными configs/capabilities.
+There MUST NOT be separate CLI implementations for hosts and containers; use one client package with different configurations/capabilities.
 
-# 45. Phase 0 — обязательный PoC
+# 45. Phase 0 — required proof of concept
 
-До production implementation проверить:
+Before production implementation, verify:
 
-1. реальный subscription format BlancVPN;
-2. реальный subscription format Xeovo;
-3. native Mihomo provider compatibility;
-4. минимальный adapter, если нужен;
-5. custom VLESS end-to-end;
-6. WireGuard route через Mihomo;
-7. provider manual update API;
-8. provider health/delay API;
-9. создание минимум двух per-client selector groups (`host-main`, `container-main`);
-10. независимое query/set selector для каждого client;
-11. `direct` в каждом client selector;
-12. authenticated default proxy identity -> correct client selector;
-13. one-shot `IN-USER`/equivalent route to concrete proxy;
-14. **три concurrent one-shot через разные routes**, включая `direct`;
-15. one-shot не меняет ни один client default;
-16. generated client×route mapping масштабируется на фактические несколько сотен routes либо найден лучший concurrency-safe native mechanism;
-17. hard Docker CIDR bypass на default и one-shot listeners;
-18. GEO data download/update and GEOIP/ASN matching;
-19. domain probe через direct + минимум две locations;
-20. Mihomo admin API остаётся private;
-21. provider route disappearance: only affected client fallback to direct;
-22. один и тот же client package работает на host и container с разными configs;
-23. `/v1/self` correctly binds token -> client identity;
-24. попытка подменить `client_id` не позволяет управлять другим profile;
-25. `egressctl` public operations воспроизводимы direct API calls с теми же permissions;
-26. `egress-run` внутри container запускает child внутри Docker container, а не на backend/host;
-27. proxy mode end-to-end из container;
-28. proxy mode end-to-end с host client;
-29. provider update через explicit working `--via ROUTE` без shared selector race;
-30. проверить local strict/TUN backend на host и generic Docker container; зафиксировать обязательные runtime capabilities и их fail-closed поведение.
+1. A real subscription format from each provider under evaluation.
+2. Native Mihomo provider compatibility.
+3. A minimal adapter if one is needed.
+4. Custom VLESS end-to-end.
+5. A WireGuard route through Mihomo.
+6. Manual provider update API.
+7. Provider health/delay API.
+8. At least two per-client selector groups.
+9. Independent selector query/set for each client.
+10. A `direct` route in every client selector.
+11. Authenticated default-proxy identity maps to the correct client selector.
+12. One-shot `IN-USER`/equivalent routing to a concrete proxy.
+13. **Three concurrent one-shot sessions using different routes**, including `direct`.
+14. One-shot routing does not change any client default.
+15. Client×route mapping scales to several hundred routes or another concurrency-safe native mechanism is identified.
+16. Hard Docker CIDR bypass applies to default and one-shot listeners.
+17. GEO data download/update and GEOIP/ASN matching.
+18. Domain probe through `direct` and at least two locations.
+19. Mihomo admin API remains private.
+20. When a provider route disappears, only the affected client falls back to `direct`.
+21. The same client package works on a host and container with different configurations.
+22. `/v1/self` correctly binds a token to a client identity.
+23. Spoofing `client_id` cannot control another profile.
+24. Public `egressctl` operations can be reproduced with direct API calls using the same permissions.
+25. `egress-run` in a container starts the child inside that container, not on the backend/host.
+26. Proxy mode works end-to-end from a container.
+27. Proxy mode works end-to-end from a host client.
+28. Provider update via an explicit working `--via ROUTE` avoids shared-selector races.
+29. Verify local strict/TUN on a host and generic Docker container; record required runtime capabilities and fail-closed behavior.
 
-Результат: `POC_REPORT.md` с версиями, configs, measured outcomes и решениями.
+Record the result in `POC_REPORT.md`, including versions, configuration, measured outcomes, and decisions.
 
-# 46. План coding-агентов
+This consolidated checklist retains the original acceptance intent while avoiding provider-specific deployment assumptions.
+
+# 46. Historical coding-agent work plan
 
 ## A0 — Architecture/PoC Agent
 
-**Стартует первым и блокирует production implementation.**
+**Starts first and gates production implementation.**
 
-Задачи:
+Tasks:
 
-- выполнить Phase 0;
-- проверить pinned/current Mihomo docs/version;
-- проверить provider/protocol formats;
-- доказать per-client selectors/default isolation;
-- доказать concurrency-safe route-addressable one-shot;
-- проверить реальный масштаб client×route mappings;
-- проверить GEO assets/domain probe;
-- проверить host/container client configs;
-- доказать local-execution semantics `egress-run`;
+- complete Phase 0;
+- verify the pinned/current Mihomo docs/version;
+- check provider/protocol formats;
+- demonstrate per-client selector/default isolation;
+- demonstrate concurrency-safe, route-addressable one-shot sessions;
+- measure client×route mapping scale;
+- check GEO assets/domain probes;
+- check host/container client configurations;
+- demonstrate local-execution semantics for `egress-run`;
 - verify client-local nested user/network namespace support on host and ordinary Docker containers.
 
-Skills/компетенции:
+Skills/competencies:
 
 - Linux/Docker/container runtime networking;
 - Mihomo/Clash Meta;
@@ -1949,45 +1947,45 @@ Skills/компетенции:
 - HTTP/TLS diagnostics;
 - process/network namespace semantics.
 
-A0 работает преимущественно из container; host-only assertions выполняются через administrator/harness.
+A0 works primarily from a container; host-only assertions use an administrator/harness.
 
-Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, если PoC опровергнет предположения.
+Deliverable: `POC_REPORT.md` and proposed corrections to this specification if the PoC disproves assumptions.
 
 ---
 
 ## A1 — Deployment/Bootstrap Agent
 
-После A0.
+After A0.
 
-Задачи:
+Tasks:
 
 - Compose backend stack;
 - persistent dirs/secrets/firewall;
 - host backend installer;
 - client provisioning;
-- install одного и того же client package на host/container;
-- генерация разных `client.yaml`/tokens;
+- install the same client package on hosts/containers;
+- generate different `client.yaml` files/tokens;
 - uninstall/rollback;
 - Docker CIDR sync;
 - narrow dev/test bridge;
 - host acceptance harness.
 
-Обязательные проверки:
+Required checks:
 
-- никаких public binds;
-- Docker socket не смонтирован;
-- client tokens раздельны;
-- backend secrets отсутствуют в clients;
-- container не получает arbitrary host command;
-- recreate container не теряет production client installation/Skill.
+- no public binds;
+- no Docker socket mount;
+- separate client tokens;
+- backend secrets absent from clients;
+- containers cannot issue arbitrary host commands;
+- container recreation preserves the production client installation/skill.
 
 ---
 
 ## A2 — Mihomo/Providers/GEO Agent
 
-После A0, параллельно A1.
+After A0, in parallel with A1.
 
-Задачи:
+Tasks:
 
 - config template;
 - native providers/adapters;
@@ -1999,7 +1997,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - GeoIP/GeoSite/ASN;
 - GEO auto-update.
 
-Проверить:
+Verify:
 
 - config validation;
 - node collisions;
@@ -2014,9 +2012,9 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 ## A3 — egressd Agent
 
-После A0; contracts согласуются с A1/A2.
+After A0; coordinate contracts with A1/A2.
 
-Задачи:
+Tasks:
 
 - public narrow API;
 - token -> client profile auth;
@@ -2030,7 +2028,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - domain probe/benchmark metadata;
 - metrics DB/audit/GEO enrichment.
 
-Обязательные tests:
+Required tests:
 
 - client impersonation denied;
 - one client cannot change another default;
@@ -2046,13 +2044,13 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 ## A4 — Local Client Package Agent
 
-После A3 API stabilization.
+After A3 API stabilization.
 
-Задачи:
+Tasks:
 
-- единый package с `egressctl` и `egress-run`;
+- one package with `egressctl` and `egress-run`;
 - config discovery/validation;
-- host/container endpoint differences только через config;
+- host/container endpoint differences only through configuration;
 - `/self` identity verification;
 - human output + JSON;
 - stable exit codes;
@@ -2061,24 +2059,24 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - doctor;
 - public API parity tests.
 
-Проверить и на host, и изнутри container:
+Verify on both hosts and from inside containers:
 
-- один и тот же release/package;
-- разные configs;
+- the same release/package;
+- different configurations;
 - correct `whoami`;
 - independent defaults;
-- local child process remains in expected execution environment;
-- `direct`/VPN one-shot;
+- child processes remain in their expected execution environment;
+- `direct`/VPN one-shot sessions;
 - concurrent invocations;
-- LiteLLM/internal connectivity.
+- operator control-plane/internal connectivity.
 
 ---
 
 ## A5 — Probe / Benchmark / Ranking Agent
 
-После A2/A3, может идти параллельно A4 после freeze contracts.
+After A2/A3; may run in parallel with A4 after contracts are frozen.
 
-Задачи:
+Tasks:
 
 - domain probe engine;
 - bounded benchmark;
@@ -2086,7 +2084,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - route update-via health workflows;
 - GEO explanation metadata.
 
-Обязательные checks:
+Required checks:
 
 - direct baseline;
 - parallel probes with cap;
@@ -2098,19 +2096,19 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 ## A6 — Strict/TUN Agent
 
-Выполнено в client-local per-invocation backend.
+Implemented in the client-local per-invocation backend.
 
-Задачи/контракт:
+Tasks/contract:
 
-- nested user/network namespace и новый TUN на каждый вызов;
-- отдельный packet engine получает TUN fd и route-specific SOCKS credentials;
-- `direct + tun` и разные route в параллельных запусках;
-- workload остаётся в host или исходном Docker-контейнере;
-- очистка engine, DNS forwarder и namespace после завершения/timeout;
-- ordinary Docker profile разрешает только фиксированную пару namespace flags;
-- fail-closed без fallback в proxy.
+- nested user/network namespace and a new TUN for every invocation;
+- a separate packet engine receives the TUN fd and route-specific SOCKS credentials;
+- `direct + tun` and different routes in concurrent invocations;
+- workload remains on the host or in the original Docker container;
+- clean up the engine, DNS forwarder, and namespace after completion/timeout;
+- ordinary Docker profiles allow only a fixed pair of namespace flags;
+- fail closed without proxy fallback.
 
-Критические запреты:
+Critical prohibitions:
 
 - no container runtime disable/runc fallback;
 - no Docker socket to container;
@@ -2122,9 +2120,9 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 
 ## A7 — Agent Skill / Documentation Agent
 
-После A4/A5; Skill обязателен для v1.
+After A4/A5; the skill is required for v1.
 
-Задачи:
+Tasks:
 
 - `skills/egress/SKILL.md`;
 - README user + agent sections;
@@ -2132,7 +2130,7 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - usage examples/decision tree;
 - optional MCP only after CLI.
 
-Проверить на реальном container agent:
+Verify with a real container-based agent:
 
 - `whoami`/capabilities;
 - current/set own default;
@@ -2141,15 +2139,15 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - domain probe across routes;
 - provider update + `--via` recovery;
 - proxy/TUN choice;
-- agent не пытается использовать raw Mihomo API/host root.
+- the agent does not attempt to use the raw Mihomo API/host root.
 
 ---
 
 ## A8 — Independent Security/Integration Review Agent
 
-Последний mandatory gate. Не должен быть автором ключевых компонентов.
+This is the final mandatory gate. The reviewer MUST NOT have authored the key components.
 
-Задачи:
+Tasks:
 
 - adversarial API review;
 - direct API calls bypassing CLI;
@@ -2162,20 +2160,20 @@ Deliverable: `POC_REPORT.md` + предложенные corrections TECH_SPEC, �
 - bootstrap/helper privilege review;
 - host acceptance report review.
 
-Особенно проверить:
+Pay particular attention to:
 
-- public API не мощнее documented egressctl control surface;
-- container может обойти CLI, но от этого не получает дополнительных privileges;
-- container не получает host shell/Docker socket/provider/Mihomo secrets;
-- host/container defaults независимы;
-- internal Docker/HARD DIRECT остаются DIRECT;
-- parallel one-shot не влияют друг на друга;
-- `egress-run` исполняет command локально;
-- LiteLLM остаётся доступен;
-- public NIC ports закрыты;
-- real secrets отсутствуют в Git/artifacts/logs.
+- the public API does not expose more power than the documented `egressctl` surface;
+- bypassing the CLI does not give a container additional privileges;
+- containers receive no host shell, Docker socket, provider secrets, or Mihomo secrets;
+- host/container defaults remain independent;
+- internal Docker/HARD DIRECT traffic remains direct;
+- concurrent one-shot sessions do not affect one another;
+- `egress-run` executes commands locally;
+- the operator control plane remains reachable;
+- public network ports remain closed;
+- real secrets are absent from Git/artifacts/logs.
 
-# 47. Порядок работ
+# 47. Work sequence
 
 ```text
 A0 Architecture/PoC
@@ -2199,30 +2197,30 @@ Proxy-mode acceptance (host + container)
  +--> A8 independent security/integration gate
 ```
 
-A1/A2 могут идти параллельно после A0.
-A4/A5 могут частично идти параллельно после freeze public API/session contracts.
-A7 Skill является частью v1 release, не optional documentation.
-A8 проверяет proxy и client-local TUN boundaries.
+A1/A2 may run in parallel after A0.
+A4/A5 may partially run in parallel after public API/session contracts are frozen.
+The A7 skill is part of the v1 release, not optional documentation.
+A8 reviews proxy and client-local TUN boundaries.
 
-# 48. Testing strategy изнутри container
+# 48. Testing strategy from a container
 
-Поскольку основной coding/test agent находится внутри container, обязательны реальные integration tests из этой environment.
+If the coding/test agent runs inside a container, run real integration tests from that environment.
 
-Минимальный набор:
+Minimum set:
 
 1. local client package installed and version reported;
 2. `egressctl config validate`;
 3. `egressctl whoami` -> `container-main`;
 4. direct API `/v1/self` returns same identity/capabilities;
-5. попытка spoof другого `client_id` не меняет identity;
+5. spoofing another `client_id` does not change identity;
 6. `egressctl route current`;
 7. `egressctl route set direct`;
 8. `egressctl route set <VPN>`;
-9. host client default остаётся неизменным (через host harness assertion);
-10. default proxy exit IP соответствует container default;
-11. `egress-run direct -- ...` выполняет child внутри Docker container;
-12. `egress-run <VPN> -- ...` выполняет child внутри Docker container;
-13. 3+ concurrent one-shot routes, один `direct`;
+9. the host client's default remains unchanged (asserted by the host harness);
+10. the default proxy exit IP matches the container default;
+11. `egress-run direct -- ...` runs its child inside the Docker container;
+12. `egress-run <VPN> -- ...` runs its child inside the Docker container;
+13. three or more concurrent one-shot routes, including `direct`;
 14. provider update;
 15. update blocked provider via working `--via ROUTE` where fixture/environment permits;
 16. route list/reconciliation;
@@ -2230,7 +2228,7 @@ A8 проверяет proxy и client-local TUN boundaries.
 18. `probe-domain` direct + multiple routes;
 19. bounded benchmark shortlist;
 20. Docker internal endpoint remains reachable DIRECT;
-21. LiteLLM continues to work during default switch/provider update/concurrent one-shot;
+21. the operator control-plane service remains reachable during default changes, provider updates, and concurrent one-shot sessions;
 22. raw Mihomo API fails from container;
 23. direct public API gives no capability beyond egressctl;
 24. container cannot operate on host-main default;
@@ -2239,7 +2237,7 @@ A8 проверяет proxy и client-local TUN boundaries.
 
 # 49. Acceptance criteria — v1 proxy mode
 
-Release принимается только если:
+Accept a release only if:
 
 1. Mihomo version/image pinned.
 2. BlancVPN loads natively or via documented adapter.
@@ -2247,8 +2245,8 @@ Release принимается только если:
 4. Custom VLESS works end-to-end.
 5. At least one WireGuard route works through Mihomo.
 6. `direct` exists in route catalog and works as default/one-shot.
-7. Host и container используют один и тот же client package release.
-8. Host и container имеют разные configs/tokens/endpoints where needed.
+7. Hosts and containers use the same client package release.
+8. Hosts and containers have separate configurations/tokens/endpoints where needed.
 9. `egressctl whoami` returns authenticated profile, not blindly local `client_id`.
 10. Defaults are per-client; changing container default does not change host default.
 11. Each client can query actual current route/mode.
@@ -2269,7 +2267,7 @@ Release принимается только если:
 26. Exit status/signals are preserved adequately.
 27. Docker-internal destination is DIRECT via default and one-shot proxy for container client.
 28. Operator-defined HARD DIRECT destination remains direct.
-29. LiteLLM remains reachable during route changes/provider updates/concurrency.
+29. the operator control-plane service remains reachable during route changes, provider updates, and concurrent sessions.
 30. Raw Mihomo API unavailable from container/ordinary clients.
 31. Agent API and proxy endpoints authenticated.
 32. Public NIC cannot reach client-facing ports.
@@ -2286,7 +2284,7 @@ Release принимается только если:
 
 # 50. Acceptance criteria — Phase 2 TUN
 
-Дополнительно:
+Additional criteria:
 
 1. `egress-run --mode tun ROUTE -- command` works for proxy-unaware TCP client on host and generic Docker container.
 2. Command remains in the calling environment with caller filesystem/environment and mapped caller identity.
@@ -2304,9 +2302,9 @@ Release принимается только если:
 12. No silent fallback from `tun` to `proxy`.
 13. `egressctl whoami/capabilities` accurately reports mode availability.
 
-# 51. Upstream references to use during implementation
+# 51. Upstream references
 
-Coding agents должны сверяться с актуальной upstream документацией перед реализацией:
+Before implementation, coding agents MUST check the current upstream documentation:
 
 - Mihomo docs: `https://wiki.metacubex.one/`
 - Mihomo API: `https://wiki.metacubex.one/en/api/`
@@ -2319,13 +2317,13 @@ Coding agents должны сверяться с актуальной upstream �
 - Rule providers: `https://wiki.metacubex.one/en/config/rule-providers/`
 - GEO data source: `https://github.com/MetaCubeX/meta-rules-dat`
 
-ТЗ фиксирует requirements и invariants; точная syntax Mihomo должна проверяться по pinned version и integration tests.
+This specification defines requirements and invariants. Verify exact Mihomo syntax against the pinned version and integration tests.
 
-# 52. Личные профили и источники
+# 52. Personal profiles and sources
 
-1. На host каждый локальный пользователь, включая системный аккаунт без домашнего каталога, получает профиль `host-<username>` при первом вызове клиента; container setup по умолчанию использует `container-<username>`. Имя пользователя допускает только `[A-Za-z0-9._-]`; если имя недоступно, небезопасно или ID превышает 64 символа, применяется fallback `host-uid-<uid>` / `container-uid-<uid>`. `setup-egress-client.sh` без `--client` использует тот же ID из `SUDO_UID` (или текущего UID при прямом запуске от root). Явный `--client` выбирает дополнительный профиль. При backend update UID-профили и личные provider IDs мигрируются с предварительной проверкой конфликтов, запретом активных one-shot сессий и резервной копией; installer останавливает оба Compose-сервиса перед миграцией. Backup можно восстановить `scripts/migrate-egress-identities.py --restore <backup>`. Доступ к локальному enrollment socket разрешён всем UID; служба определяет UID через `SO_PEERCRED` и не принимает UID или client ID из запроса. Клиент получает учётные данные в памяти, без записи в home пользователя. Все вызовы `egressctl` и `egress-run` работают от исходного UID без sudo.
-2. Глобальные providers и установка остаются под управлением администратора. Обычный профиль может создать личный provider из URL подписки, локального файла или одной proxy URI через `egressctl source add` (`--url`, `--file`, `--uri`). Он видит и использует глобальные и свои маршруты, не видит маршруты и источники других профилей. Server-side ACL применяется к спискам, выбору default, тестам, probes, benchmark, обновлению providers и one-shot сеансам. Группа Mihomo для постоянного default содержит только глобальные и собственные providers.
-3. Для host-профиля исходная подписка хранится в backend, под правами служебного пользователя, и обновляется там. Для container-профиля исходный URL или файл хранится **внутри контейнера** в личном каталоге пользователя с режимом 0700/0600. Контейнер сам получает и нормализует подписку и передаёт backend только YAML-снимок узлов. Backend не читает, не обновляет и не удаляет исходные файлы/URL контейнера; `egressctl source refresh` выполняется внутри контейнера. Нормализация в контейнере использует optional adapter и PyYAML; базовый клиент остаётся stdlib-only.
-4. API личных providers: `GET/POST /v1/personal/providers`, `PUT /v1/personal/providers/{alias}/snapshot`, `POST /v1/personal/providers/{alias}/refresh`, `DELETE /v1/personal/providers/{alias}`. Host вызывает POST/refresh; контейнер вызывает snapshot. Повторный `source add` с теми же alias, типом и исходным URL, URI или содержимым файла возвращает успех с `skipped: true`, без повторной загрузки и регенерации. Host `source refresh` пересоздаёт provider из сохранённого URL или URI. Alias и owner выводятся из аутентифицированного профиля. Секреты исходника не выдаются через API.
-5. Личный proxy endpoint и URL подписки должны разрешаться только в публичные адреса. При импорте узлы с непубличным или неразрешимым адресом сервера пропускаются; API и CLI сообщают их число. Если пригодных узлов не осталось, импорт отклоняется. Для DNS-имён проверенный публичный IP закрепляется в конфигурации узла, чтобы Mihomo не разрешал имя повторно при соединении. Размер исходника и нормализованного снимка ограничен 4 MiB; отдельного верхнего предела числа узлов нет. Число личных providers — 32 на профиль. Удаление и изменение выполняются с регенерацией конфигурации и откатом при ошибке reload.
-6. Canonical ID личного provider — `p-<client_id>-<alias>` (например, `p-host-<username>-blanc`). Для удобства CLI принимает `@<alias>:<node>`; разрешение alias выполняется по personal-provider list, доступному текущему bearer token. API продолжает принимать/возвращать canonical route IDs. Миграция записывает предыдущие provider IDs в `legacy_provider_ids` с версией совместимости 1; backend этой версии временно принимает старые route IDs, но проверяет ownership уже для нового provider.
+1. On a host, each local user, including a service account without a home directory, receives a `host-<username>` profile on first client use. Container setup defaults to `container-<username>`. Usernames are limited to `[A-Za-z0-9._-]`; if the name is unavailable/unsafe or the ID exceeds 64 characters, use `host-uid-<uid>` / `container-uid-<uid>`. Without `--client`, `setup-egress-client.sh` derives the same ID from `SUDO_UID` (or the current UID when run directly as root). An explicit `--client` selects an additional profile. Backend updates migrate UID profiles and personal provider IDs after checking for collisions and active one-shot sessions, and create a backup; the installer stops both Compose services before migration. Restore a backup with `scripts/migrate-egress-identities.py --restore <backup>`. All UIDs may access the local enrollment socket; the service derives UID from `SO_PEERCRED` and does not accept a UID/client ID from the request. The client receives credentials in memory without writing them to the user's home. `egressctl` and `egress-run` run as the original UID without sudo.
+2. Global providers and installation remain administrator-managed. An ordinary profile can add a personal provider from a subscription URL, local file, or single proxy URI using `egressctl source add` (`--url`, `--file`, `--uri`). It can see/use global and owned routes, but cannot see other profiles' routes or sources. Server-side ACL applies to listing, default selection, tests, probes, benchmarks, provider updates, and one-shot sessions. Mihomo's persistent default group contains only global and client-owned providers.
+3. For host profiles, the source subscription is stored and refreshed on the backend under the service account. For container profiles, the source URL or file is stored **inside the container** in a private user directory with modes `0700/0600`. The container fetches and normalizes the subscription itself and sends only a YAML snapshot of nodes to the backend. The backend does not read, refresh, or delete the container's source URL/files; `egressctl source refresh` runs inside the container. Container-side normalization uses an optional adapter and PyYAML; the base client remains standard-library-only.
+4. Personal-provider API: `GET/POST /v1/personal/providers`, `PUT /v1/personal/providers/{alias}/snapshot`, `POST /v1/personal/providers/{alias}/refresh`, and `DELETE /v1/personal/providers/{alias}`. Hosts use POST/refresh; containers use snapshot. Repeating `source add` with the same alias, type, and URL/URI/file contents returns success with `skipped: true`, without refetch or regeneration. Host `source refresh` recreates the provider from the stored URL or URI. Alias and owner are derived from the authenticated profile. Source secrets are never returned by the API.
+5. Personal proxy endpoints and subscription URLs MUST resolve only to public addresses. During import, nodes with a non-public or unresolvable server address are skipped; the API/CLI report the count. Reject the import if no usable nodes remain. For DNS names, pin the validated public IP in the node configuration so Mihomo does not resolve the name again when connecting. Source and normalized snapshot sizes are limited to 4 MiB; there is no separate maximum node count. Limit personal providers to 32 per profile. Changes/deletions regenerate configuration and roll back on reload failure.
+6. A personal provider's canonical ID is `p-<client_id>-<alias>` (for example, `p-host-<username>-blanc`). The CLI also accepts `@<alias>:<node>` and resolves the alias against the personal-provider list visible to the current bearer token. The API continues to accept/return canonical route IDs. Migration records previous provider IDs in `legacy_provider_ids` with compatibility version 1; the backend temporarily accepts old route IDs while checking ownership against the new provider.

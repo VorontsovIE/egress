@@ -1,6 +1,6 @@
 """A2 — Mihomo / Providers / GEO tests (offline, no mihomo binary).
 
-Covers the spec's A2 "Проверить" list that can be exercised without a live
+Covers the spec's A2 checks that can be exercised without a live
 Mihomo or network:
 
 * provider adapters: format detection, normalization, stable route IDs,

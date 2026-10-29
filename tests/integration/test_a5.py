@@ -1,6 +1,6 @@
 """A5 — probe / benchmark / ranking tests (spec sections 25, 26).
 
-Covers the spec's A5 "Обязательные checks" list:
+Covers the spec's A5 required checks:
 
   1. direct baseline (benchmark shortlist appends ``direct``)
   2. parallel probes with cap (probe engine bounded by slots/parallel)

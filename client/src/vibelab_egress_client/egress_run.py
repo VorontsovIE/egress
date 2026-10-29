@@ -54,6 +54,29 @@ def parse_args(argv: list[str]) -> tuple[dict, list[str]]:
     i = 0
     while i < len(argv):
         a = argv[i]
+        if a in ("-h", "--help"):
+            print("""Usage:
+  egress-run [--config PATH] [--timeout SECONDS] [--mode proxy|tun] [--default | ROUTE] -- COMMAND [ARG ...]
+  egress-run direct -- COMMAND [ARG ...]
+
+Run COMMAND locally through a route. An explicit ROUTE uses a temporary
+session; --default uses the configured default route. 'direct' runs without
+a proxy. With --default, the saved mode is used unless --mode overrides it.
+An explicit route does not change the saved default.
+
+Options:
+  --config PATH       client configuration file
+  --timeout SECONDS  timeout for local TUN bootstrap operations
+  --mode MODE        override mode: proxy or tun
+  --default           use the configured default route
+  -h, --help          show this help and exit
+
+Examples:
+  egress-run provider:route -- curl https://example.com/
+  egress-run --default -- command arg
+  egress-run direct -- command arg
+  egress-run --mode tun provider:route -- command arg""")
+            raise SystemExit(0)
         if a == "--":
             if not opts["default"] and opts["route"] is None:
                 _die(EXIT_USAGE,
@@ -203,7 +226,17 @@ def main(argv: list[str] | None = None) -> None:
     except ConfigError as e:
         _die(EXIT_CONFIG, f"config error: {e}")
 
-    mode = opts["mode"] or "proxy"
+    api = None
+    mode = opts["mode"]
+    if mode is None and opts["default"]:
+        api = EgressApi(cfg)
+        try:
+            mode = api.get_default_mode().get("mode", "proxy")
+        except ApiError as e:
+            if e.status in (401, 403):
+                _die(EXIT_AUTH, f"authentication error: {e.detail}")
+            _die(EXIT_RUNTIME, f"cannot read default mode: {e}")
+    mode = mode or "proxy"
     route = opts["route"]
     if route is not None and route.startswith("@"):
         try:
@@ -218,7 +251,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---- local per-run TUN mode; failures never fall back to proxy. ----
     if mode == "tun":
         # resolve an explicit route (or --default) to a concrete route id
-        api = EgressApi(cfg)
+        api = api or EgressApi(cfg)
         if route is None:
             try:
                 route = api.get_default().get("route") or "direct"
@@ -233,7 +266,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_run_local({}, command))
 
     # ---- proxy mode ----
-    api = EgressApi(cfg)
+    api = api or EgressApi(cfg)
     session_id = None
     try:
         if opts["default"] or route is None:

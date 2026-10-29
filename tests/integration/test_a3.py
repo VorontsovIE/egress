@@ -1,6 +1,6 @@
 """A3 — egressd full public API tests (offline, no mihomo binary / no network).
 
-Covers the spec's A3 "Обязательные tests" list, exercised against a real
+Covers the spec's A3 required tests, exercised against a real
 FastAPI ``TestClient`` (the control plane works offline; only the data plane
 and mihomo reads degrade gracefully):
 
