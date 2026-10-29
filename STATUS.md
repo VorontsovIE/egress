@@ -12,7 +12,8 @@ backup в `<root>/identity-migrations/`, при ошибке восстанав�
 Migration переносит defaults, credentials, bundles и относящиеся к client/route
 истории SQLite. Старые route IDs личных providers принимаются как input aliases
 версии совместимости 1. Canonical provider ID — `p-<client-id>-<alias>`;
-CLI принимает и показывает личный route как `@alias:node`.
+CLI принимает и показывает личный route как `@alias:node`. Примеры в
+установочной документации используют общий placeholder `<username>`.
 
 Оффлайн-свит `tests/ client/tests/`: **351 passed** (Python 3.13 через uv;
 system Python в текущем checkout не содержит pytest). Install harness:

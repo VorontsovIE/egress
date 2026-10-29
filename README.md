@@ -59,11 +59,12 @@ sudo scripts/setup-egress-client.sh --environment host
 egressctl config validate && egressctl whoami && egressctl doctor
 ```
 
-Одноразовый тест из обычного Docker-контейнера (после установки backend):
+Одноразовый тест из обычного Docker-контейнера (после установки backend).
+Замените `<username>` в route на имя владельца host-маршрута:
 
 ```sh
 sudo scripts/setup-egress-client.sh --environment container --docker-test \
-  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
+  --route 'p-host-<username>-blanc:vless-49' --copy-personal-source
 ```
 
 `--copy-personal-source` нужен только для host-owned personal route (`p-…`).

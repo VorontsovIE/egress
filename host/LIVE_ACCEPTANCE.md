@@ -19,12 +19,12 @@ not use host networking, `--privileged`, or `CAP_NET_ADMIN`.
 3. Host client is installed and `egressctl status` succeeds.
 4. Для generic container test нужен Docker и маршрут, видимый тестовому
    профилю. Персональный маршрут host-профиля сначала копируется в snapshot
-   тестового клиента:
+   тестового клиента. Замените `<username>` на имя владельца host-маршрута:
 
 ```bash
 sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test \
-  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
+  --route 'p-host-<username>-blanc:vless-49' --copy-personal-source
 ```
 
 The harness builds and runs an ordinary Docker image, installs the bundled

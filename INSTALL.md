@@ -142,9 +142,9 @@ scripts/uninstall-backend-host.sh          # down stack, remove units/secrets
                                            #  --remove-data — удалить)
 ```
 
-Host client, установленный через `sudo` от имени `vibelab`, получает
+Host client, установленный через `sudo` от имени `<username>`, получает
 доступ к своим `client.token` и `default-proxy.auth`: файлы остаются 0600,
-владельцем становится `vibelab`; каталог `/etc/vibelab-egress` остаётся
+владельцем становится `<username>`; каталог `/etc/vibelab-egress` остаётся
 root-owned (0755), чтобы enrollment-служба могла пройти к своему подкаталогу.
 Backend secrets в подкаталоге `secrets/` сохраняют
 собственные ограничения доступа.
@@ -202,7 +202,8 @@ sudo python3 scripts/migrate-egress-identities.py \
 версией кода, на которую выполняется rollback.
 
 Personal provider IDs use `p-<client-id>-<alias>` (for example,
-`p-host-vibelab-blanc`). In `egress-run` and route-selection commands, use
+`p-host-<username>-blanc`). Replace `<username>` in examples with the host
+account name. In `egress-run` and route-selection commands, use
 `@blanc:vless-49`; the client resolves this shorthand against personal
 providers owned by its token. API responses continue to use canonical IDs.
 
@@ -256,7 +257,7 @@ and its route IDs are mapped to the test-owned snapshot.
 ```bash
 sudo scripts/setup-egress-client.sh --client egress-test-client \
   --environment container --docker-test \
-  --route 'p-host-vibelab-blanc:vless-49' --copy-personal-source
+  --route 'p-host-<username>-blanc:vless-49' --copy-personal-source
 ```
 
 The same test harness can be run directly with an existing bundle:
