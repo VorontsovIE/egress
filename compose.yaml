@@ -18,6 +18,7 @@
 #   DOCKER_GATEWAY        IP of the Docker bridge gateway for container
 #                         clients (default 172.17.0.1)
 #   MIHOMO_IMAGE          pinned mihomo image (default metacubex/mihomo:v1.19.32)
+#   EGRESSD_IMAGE         egressd image (default GHCR latest; set a version tag to pin)
 
 name: vibelab-egress
 
@@ -87,10 +88,7 @@ services:
 
   vibelab-egress-egressd:
     user: "${EGRESSD_UID:-1000}:${EGRESSD_GID:-1000}"
-    build:
-      context: .
-      dockerfile: egressd/Dockerfile
-    image: vibelab-egress-egressd:local
+    image: ${EGRESSD_IMAGE:-ghcr.io/vorontsovie/egress:latest}
     container_name: vibelab-egress-egressd
     restart: unless-stopped
     environment:

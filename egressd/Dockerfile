@@ -4,6 +4,8 @@
 # extends the same package.
 FROM python:3.11-slim
 
+ARG EGRESSD_VERSION=0.1.0
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -19,7 +21,8 @@ COPY adapters /app/adapters
 # console script lives in site-packages, not /app).
 ENV PYTHONPATH=/app
 
-RUN pip install --no-cache-dir /app
+RUN sed -i "s/^version = .*/version = \"${EGRESSD_VERSION}\"/" /app/pyproject.toml \
+    && pip install --no-cache-dir /app
 
 # Non-root: egressd needs no privileges (no TUN, no raw sockets).
 USER 1000:1000

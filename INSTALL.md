@@ -20,6 +20,8 @@ sudo bash scripts/install-backend-host.sh
 sudo bash scripts/verify-backend-host.sh
 ```
 
+For a tagged GitHub release, the installer pulls the corresponding `egressd` image from `ghcr.io/vorontsovie/egress`. A checkout not at a release tag uses `latest`; set `EGRESSD_IMAGE` to pin a different published version. To install client code from a release archive, extract it and use it with a separately provisioned client bundle. Release archives never contain client credentials.
+
 The installer creates backend state under `/var/lib/vibelab-egress` and protected secrets under `/etc/vibelab-egress/secrets`. Override the persistent root with `--root` and the secrets directory with `--secrets-dir`. Use the supported scripts' `--help` options for syntax. The installer deploys Mihomo and `egressd`, provisions and installs a host client by default, configures Docker network CIDRs and firewall rules where supported, and runs the host acceptance harness. Inspect `<root>/install-backend-host.log` if installation reports an error.
 
 For proxy-only operation, provision the host profile without TUN before the backend install. The installer still runs its acceptance harness, so the expected `host-main` client must already be installed when using `--skip-client`:

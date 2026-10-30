@@ -56,6 +56,12 @@ cd poc/mihomo-src && CGO_ENABLED=0 go build -tags with_gvisor -o ../mihomo-gviso
 cd poc/wgserver && go mod download && go build -o wgserver .
 ```
 
+## GitHub releases
+
+GitHub Actions runs the offline, security, and install suites on pull requests and pushes to `main`. Push a semantic version tag such as `v1.2.3` to publish a multi-architecture `ghcr.io/vorontsovie/egress` image and a source archive containing the client TUN engines for Linux amd64 and arm64. The archive includes `SHA256SUMS`; verify it with `sha256sum -c SHA256SUMS`.
+
+The backend installer selects the exact GHCR version when run from a checkout at a release tag. Other checkouts use `latest`; set `EGRESSD_IMAGE` to pin another image explicitly. Client credential bundles remain provisioned separately on the backend and are never part of a release artifact.
+
 Build the client TUN packet engine separately with `scripts/build-tun-engine.sh`; it requires Go 1.26.3 or later.
 
 ## Repository map

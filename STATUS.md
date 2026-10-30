@@ -4,6 +4,8 @@ This file summarizes the current implementation state. Historical acceptance evi
 
 ## Current state — 2026-10-29
 
+GitHub Actions CI/CD was added for pull request/main validation and `vX.Y.Z` releases. Releases publish a multi-architecture GHCR backend image and client source archive with Linux amd64/arm64 TUN engines and checksums. The backend installer selects the matching GHCR tag when invoked from a tagged checkout. Workflow execution on GitHub remains to be confirmed after pushing the changes.
+
 The backend, client CLI, provider management, route catalog, probes, ranking, client-local TUN path, installation, and security gate are implemented. Phases A0–A8 are complete for work that can be exercised in the development environment. Deployment-specific live acceptance still depends on a configured Linux host, Docker backend, valid client profiles, and real provider routes.
 
 Recent implementation includes:

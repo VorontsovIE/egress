@@ -13,7 +13,7 @@
 #      ufw; nftables fallback documented)
 #   7. host client provisioning + install (unless --skip-client)
 #   8. bootstrap config generation (incl. 8b: secrets readable by uid 1000)
-#   9. compose deploy (pinned mihomo image, egressd built from repo)
+#   9. compose deploy (pinned mihomo image, versioned egressd image from GHCR)
 #   10. host acceptance harness (egress-host-test)
 #
 # Structured logging:
@@ -21,7 +21,7 @@
 #   stdout AND appended to <root>/install-backend-host.log, which starts
 #   with a run header (hostname, kernel, user, docker/compose/python
 #   versions, git rev, full argv). Subprocess output that used to be lost
-#   (compose build/up/ps, CIDR sync, bootstrap config, acceptance harness)
+#   (compose pull/up/ps, CIDR sync, bootstrap config, acceptance harness)
 #   is teed into the same file. On any unhandled failure an ERR trap logs
 #   the failing step, the failing command and the exit code, and points to
 #   "full log: <log file>".
@@ -217,8 +217,10 @@ chmod 700 "$ROOT/providers"
 log "persistent dirs ready (0700; egressd+generated -> service uid $EGRESSD_UID)"
 if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
   install -d -o root -g root -m 0755 /etc/vibelab-egress
-  printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nVIBELAB_EGRESS_ROOT=%s\nVIBELAB_EGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\n' \
-    "$EGRESSD_UID" "$EGRESSD_GID" "$ROOT" "$SECRETS_DIR" "$DOCKER_GATEWAY" \
+  EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  EGRESSD_VERSION="${EGRESSD_VERSION:-latest}"
+  printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nVIBELAB_EGRESS_ROOT=%s\nVIBELAB_EGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\nEGRESSD_IMAGE=ghcr.io/vorontsovie/egress:%s\n' \
+    "$EGRESSD_UID" "$EGRESSD_GID" "$ROOT" "$SECRETS_DIR" "$DOCKER_GATEWAY" "$EGRESSD_VERSION" \
     > /etc/vibelab-egress/compose.env
   chmod 0644 /etc/vibelab-egress/compose.env
 fi
@@ -396,15 +398,17 @@ fi
 # 9. compose deploy
 # ---------------------------------------------------------------------------
 STEP=9; STEP_NAME="compose deploy"
-log "deploying compose stack (mihomo pinned, egressd built from repo)"
+log "deploying compose stack (mihomo pinned, egressd from GHCR)"
 export VIBELAB_EGRESS_SECRETS="$SECRETS_DIR"
 export DOCKER_GATEWAY
+EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+export EGRESSD_IMAGE="ghcr.io/vorontsovie/egress:${EGRESSD_VERSION:-latest}"
 cd "$REPO_ROOT"
 # Service key in compose.yaml is the full name (vibelab-egress-egressd);
 # the short name is not a valid compose service reference.
-run_logged "docker compose build vibelab-egress-egressd" \
-  docker compose build vibelab-egress-egressd \
-  || die_env "docker compose build failed (full log: $LOG_FILE)"
+run_logged "docker compose pull vibelab-egress-egressd" \
+  docker compose pull vibelab-egress-egressd \
+  || die_env "docker compose pull failed (full log: $LOG_FILE)"
 # The generated config and client credentials are bind-mounted files. Compose
 # does not recreate a container when their contents change, so an existing
 # mihomo could keep its old controller bind and SOCKS credentials indefinitely.
