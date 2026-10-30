@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Bootstrap for installing the full egress stack or the current user's client.
+set -euo pipefail
+
+REPOSITORY="VorontsovIE/egress"
+CLIENT_ONLY=0
+REQUESTED_VERSION=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --client-only) CLIENT_ONLY=1; shift ;;
+    --version) REQUESTED_VERSION="${2:?--version requires a value}"; shift 2 ;;
+    -h|--help) echo "Usage: egress-install [--client-only] [--version vX.Y.Z]"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+if [ -n "$REQUESTED_VERSION" ] && ! [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "--version must look like v1.2.3" >&2
+  exit 2
+fi
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/egress-install.XXXXXXXX")"
+ROOT_WORK=""
+cleanup() {
+  rm -rf -- "$WORK"
+  if [ -n "$ROOT_WORK" ]; then sudo rm -rf -- "$ROOT_WORK"; fi
+}
+trap cleanup EXIT
+
+command -v curl >/dev/null 2>&1 || { echo "egress installer requires curl" >&2; exit 3; }
+command -v gh >/dev/null 2>&1 || {
+  echo "egress installer requires GitHub CLI (gh) to verify the signed release before requesting administrator access" >&2
+  exit 3
+}
+command -v python3 >/dev/null 2>&1 || { echo "egress installer requires Python 3" >&2; exit 3; }
+
+if [ -n "$REQUESTED_VERSION" ]; then
+  API="https://api.github.com/repos/$REPOSITORY/releases/tags/$REQUESTED_VERSION"
+else
+  API="https://api.github.com/repos/$REPOSITORY/releases/latest"
+fi
+RELEASE_JSON="$WORK/release.json"
+curl --fail --silent --show-error --location "$API" -o "$RELEASE_JSON"
+TAG="$(python3 - "$RELEASE_JSON" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["tag_name"])
+PY
+)"
+ASSET_URL="$(python3 - "$RELEASE_JSON" <<'PY'
+import json, sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("draft") or data.get("prerelease"):
+    raise SystemExit("latest GitHub release is not stable")
+tag=data.get("tag_name", "")
+if not tag.startswith("v"):
+    raise SystemExit("release has no version tag")
+name=f"egress-{tag[1:]}.tar.gz"
+for asset in data.get("assets", []):
+    if asset.get("name") == name:
+        print(asset["browser_download_url"])
+        break
+else:
+    raise SystemExit(f"release asset missing: {name}")
+PY
+)"
+if [ "$CLIENT_ONLY" = 1 ]; then
+  ARCH="$(uname -m)"
+  case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported Linux architecture: $ARCH" >&2; exit 3 ;; esac
+  WHEEL_NAME="egress_client-${TAG#v}-py3-none-any.whl"
+  ENGINE_NAME="egress-tun-engine-linux-$ARCH"
+  for NAME in SHA256SUMS "$WHEEL_NAME" "$ENGINE_NAME"; do
+    URL="$(python3 - "$RELEASE_JSON" "$NAME" <<'PY'
+import json, sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+for asset in data.get("assets", []):
+    if asset.get("name") == sys.argv[2]:
+        print(asset["browser_download_url"])
+        break
+else:
+    raise SystemExit(f"release asset missing: {sys.argv[2]}")
+PY
+)"
+    curl --fail --silent --show-error --location "$URL" -o "$WORK/$NAME"
+  done
+  (cd "$WORK" && sha256sum --check SHA256SUMS --ignore-missing)
+  for NAME in SHA256SUMS "$WHEEL_NAME" "$ENGINE_NAME"; do
+    gh attestation verify "$WORK/$NAME" --repo "$REPOSITORY"
+  done
+  BASE="$HOME/.local/share/egress"
+  VERSION_DIR="$BASE/versions/${TAG#v}"
+  mkdir -p "$BASE/versions" "$HOME/.local/bin"
+  chmod 700 "$BASE" "$BASE/versions" "$VERSION_DIR" 2>/dev/null || true
+  if [ -d "$VERSION_DIR/venv" ] && [ -x "$VERSION_DIR/venv/bin/python" ] && [ -f "$VERSION_DIR/egress-tun-engine" ]; then
+    "$VERSION_DIR/venv/bin/python" -c 'import egress_client'
+  else
+    if [ -e "$VERSION_DIR" ]; then rm -rf -- "$VERSION_DIR"; fi
+    mkdir -m 700 "$VERSION_DIR"
+    python3 -m venv "$VERSION_DIR/venv"
+    "$VERSION_DIR/venv/bin/python" -m pip install --no-deps --no-index "$WORK/$WHEEL_NAME"
+    install -m 0755 "$WORK/$ENGINE_NAME" "$VERSION_DIR/egress-tun-engine"
+  fi
+  ln -sfn "versions/${TAG#v}" "$BASE/.current-new"
+  mv -Tf "$BASE/.current-new" "$BASE/current"
+  for COMMAND in egressctl egress-run; do
+    MODULE="$COMMAND"
+    [ "$COMMAND" = egress-run ] && MODULE=egress_run
+    cat > "$HOME/.local/bin/$COMMAND" <<EOF
+#!/bin/sh
+EGRESS_HOME="\${HOME}/.local/share/egress/current"
+export EGRESS_TUN_ENGINE="\$EGRESS_HOME/egress-tun-engine"
+exec "\$EGRESS_HOME/venv/bin/python" -m egress_client.$MODULE "\$@"
+EOF
+    chmod 0755 "$HOME/.local/bin/$COMMAND"
+  done
+  echo "egress client $TAG installed for $USER under ~/.local/share/egress"
+  exit 0
+fi
+ARCHIVE="$WORK/egress-release.tar.gz"
+curl --fail --silent --show-error --location "$ASSET_URL" -o "$ARCHIVE"
+gh attestation verify "$ARCHIVE" --repo "$REPOSITORY"
+tar -xzf "$ARCHIVE" -C "$WORK"
+INSTALLER="$(find "$WORK" -mindepth 2 -maxdepth 3 -type f -path '*/scripts/install-backend-host.sh' -print -quit)"
+[ -n "$INSTALLER" ] || { echo "verified release bundle has no backend installer" >&2; exit 4; }
+
+cat <<'EOF'
+This installs the egress backend and system client. Administrator access is
+needed to write system configuration and secrets, create the service account
+and systemd units, configure firewall rules, and deploy the Docker Compose
+services. Provider subscription inputs and generated credentials are not part
+of the downloaded release bundle.
+EOF
+if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+  echo "interactive terminal required to request sudo credentials" >&2
+  exit 3
+fi
+command -v sudo >/dev/null 2>&1 || { echo "sudo is required for the full installation" >&2; exit 3; }
+sudo -v <&3
+ROOT_WORK="$(sudo mktemp -d /var/tmp/egress-install.XXXXXXXX)"
+sudo install -o root -g root -m 0600 "$ARCHIVE" "$ROOT_WORK/release.tar.gz"
+sudo gh attestation verify "$ROOT_WORK/release.tar.gz" --repo "$REPOSITORY"
+sudo tar -xzf "$ROOT_WORK/release.tar.gz" -C "$ROOT_WORK"
+ROOT_INSTALLER="$ROOT_WORK/egress-${TAG#v}/scripts/install-backend-host.sh"
+sudo test -f "$ROOT_INSTALLER"
+sudo env EGRESS_RELEASE_VERSION="$TAG" bash "$ROOT_INSTALLER" --yes

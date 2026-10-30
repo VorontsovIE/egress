@@ -4,7 +4,7 @@
 
 ## Quick start
 
-1. Build the TUN packet engine once with Go 1.26.3+, then deploy the backend on a Linux machine with Docker Engine and Compose v2. See [INSTALL.md](INSTALL.md) for exact commands and proxy-only alternatives.
+1. Install from the latest signed release with the [one-command installer](INSTALL.md#backend), or build the TUN packet engine from a checkout with Go 1.26.3+ and deploy the backend on a Linux machine with Docker Engine and Compose v2. See [INSTALL.md](INSTALL.md) for exact commands and proxy-only alternatives.
 2. Provision and install a client profile for each host or container.
 3. Check the connection and available routes:
 

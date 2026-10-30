@@ -1,6 +1,6 @@
 # Installation and configuration
 
-The backend and clients are installed separately. Deploy one backend on a Linux Docker host, then provision a client profile for each Linux host or container that will run workloads. Backend installation requires root. Client setup scripts also require root because they install files and provision credentials.
+The backend and clients are installed separately. Deploy one backend on a Linux Docker host, then provision a client profile for each Linux host or container that will run workloads. Backend installation requires root. System client setup installs a release wheel and provisions credentials; users can update their personal client without administrator access.
 
 ## Backend
 
@@ -16,11 +16,27 @@ From a checkout of this repository, build the engine and deploy the backend:
 
 ```sh
 scripts/build-tun-engine.sh
-sudo bash scripts/install-backend-host.sh
+sudo env EGRESS_CLIENT_SOURCE_INSTALL=1 bash scripts/install-backend-host.sh
 sudo bash scripts/verify-backend-host.sh
 ```
 
-For a tagged GitHub release, the installer pulls the corresponding `egressd` image from `ghcr.io/vorontsovie/egress`. A checkout not at a release tag uses `latest`; set `EGRESSD_IMAGE` to pin a different published version. To install client code from a release archive, extract it and use it with a separately provisioned client bundle. Release archives never contain client credentials.
+The release archive contains the client wheel and supported TUN engines, but no client credentials. The tagged installer uses that wheel in a managed system virtual environment. A checkout without release assets requires the explicit `EGRESS_CLIENT_SOURCE_INSTALL=1` development fallback.
+
+For a one-command full installation from the latest stable release, install GitHub CLI (`gh`) first, then run:
+
+```sh
+curl -fsSL https://github.com/VorontsovIE/egress/releases/latest/download/egress-install | bash
+```
+
+The bootstrap downloads the release bundle and verifies its GitHub build provenance with `gh attestation verify` before explaining and requesting administrator access through `sudo`. The GitHub CLI is required for this provenance check. Without an interactive terminal it exits before making system changes.
+
+To install or roll back only the current user's Python client and TUN engine without administrator access, pass `--client-only` to the same bootstrap:
+
+```sh
+curl -fsSL https://github.com/VorontsovIE/egress/releases/latest/download/egress-install | bash -s -- --client-only
+```
+
+Add `--version vX.Y.Z` to either installer invocation to select a published release. The user client is installed under `~/.local/share/egress`; ensure `~/.local/bin` is on `PATH`.
 
 The installer creates backend state under `/var/lib/egress` and protected secrets under `/etc/egress/secrets`. Override the persistent root with `--root` and the secrets directory with `--secrets-dir`. Use the supported scripts' `--help` options for syntax. The installer deploys Mihomo and `egressd`, provisions and installs a host client by default, configures Docker network CIDRs and firewall rules where supported, and runs the host acceptance harness. Inspect `<root>/install-backend-host.log` if installation reports an error.
 
@@ -58,10 +74,10 @@ Supported formats include Clash/Mihomo YAML, base64-encoded Clash subscriptions,
 
 ```sh
 sudo bash scripts/verify-backend-host.sh
-sudo bash scripts/uninstall-backend-host.sh --help
+sudo egressctl uninstall
 ```
 
-Uninstall retains persistent data by default; `--remove-data` removes it. Review the script help and confirm the selected paths before removing data.
+Uninstall retains subscriptions and persistent backend state by default. Use `sudo egressctl uninstall --purge` to remove them; it requires typing `PURGE` in an interactive terminal. `egressctl uninstall --client-only` removes only the current user's personal client installation.
 
 ## Install a client
 
