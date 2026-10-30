@@ -86,10 +86,10 @@ services:
     # No cap_add / privileged: TUN (if ever enabled) comes via host TUN systemd unit
     # with an explicit, reviewed privilege grant (spec section 21, phase A6).
 
-  egress-egressd:
+  egressd:
     user: "${EGRESSD_UID:-1000}:${EGRESSD_GID:-1000}"
     image: ${EGRESSD_IMAGE:-ghcr.io/vorontsovie/egress:latest}
-    container_name: egress-egressd
+    container_name: egressd
     restart: unless-stopped
     environment:
       # Non-secret configuration only. Secrets are read from mounted files.

@@ -42,7 +42,7 @@ ALLOWED_OPS = {
     "deploy", "redeploy", "status", "logs",
     "run-acceptance", "sync-docker-cidrs", "install-client",
 }
-ALLOWED_SERVICES = ("egress-mihomo", "egress-egressd")
+ALLOWED_SERVICES = ("egress-mihomo", "egressd")
 ALLOWED_TARGETS = ("host", "container")
 # fields allowed per op, beyond "op" itself
 ALLOWED_FIELDS = {

@@ -48,7 +48,7 @@ except OSError:
     pass
 
 PROJ = "egress"
-SERVICES = ("egress-mihomo", "egress-egressd")
+SERVICES = ("egress-mihomo", "egressd")
 DEFAULT_ROOT = "/var/lib/egress"
 DEFAULT_REPO = "/srv/workspace/egress"
 HOST_INSTALL_DIR = "/etc/egress"

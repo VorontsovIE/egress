@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import zipfile
+import zipfile
 from pathlib import Path
 
 
@@ -55,7 +56,11 @@ def test_installed_wheel_imports_without_checkout(tmp_path):
     wheels = list(wheelhouse.glob("*.whl"))
     assert len(wheels) == 1
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(wheels[0])
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    with zipfile.ZipFile(wheels[0]) as package:
+        package.extractall(installed)
+    env["PYTHONPATH"] = str(installed)
     env.pop("PYTHONHOME", None)
     result = subprocess.run(
         [sys.executable, "-c",

@@ -64,15 +64,70 @@ install_package() { # prefix
   local libdir="$prefix/lib/egress"
   local bindir="$prefix/bin"
   mkdir -p "$libdir" "$bindir"
-  # Copy the package DIRECTORY (not its contents) so that
-  # $libdir/egress_client/ exists and the wrapper's
-  #   sys.path.insert(0, '$libdir'); from egress_client.egressctl import main
-  # resolves. (Copying `$PKG_SRC/.` flattens the module one level up and
-  # breaks the import.)
-  cp -r "$PKG_SRC" "$libdir/"
-  # Optional container-owned subscription normalization. The adapter imports
-  # PyYAML only when `egressctl source` is used in a container.
-  cp -r "$REPO_ROOT/adapters" "$libdir/"
+  local wheel_dir="$REPO_ROOT/release-assets"
+  local wheel=""
+  if [ -d "$wheel_dir" ]; then
+    set -- "$wheel_dir"/egress_client-*-py3-none-any.whl
+    [ -f "$1" ] && [ "$#" -eq 1 ] && wheel="$1"
+  fi
+  if [ -z "$wheel" ] && [ -d "$REPO_ROOT/client/dist" ]; then
+    set -- "$REPO_ROOT"/client/dist/egress_client-*-py3-none-any.whl
+    [ -f "$1" ] && [ "$#" -eq 1 ] && wheel="$1"
+  fi
+
+  if [ -n "$wheel" ]; then
+    local version target current_tmp
+    version="${wheel##*/egress_client-}"
+    version="${version%-py3-none-any.whl}"
+    target="$libdir/versions/$version"
+    mkdir -p "$libdir/versions"
+    if [ ! -d "$target/venv" ]; then
+      mkdir -p "$target"
+      python3 -m venv "$target/venv"
+      "$target/venv/bin/python" -m pip install --no-index --no-deps "$wheel"
+    fi
+    local engine=""
+    if [ "$(sed -n 's/^tun_backend:[[:space:]]*//p' "$BUNDLE/client.yaml" | head -1)" = local-userns ]; then
+      case "$(uname -m)" in
+        x86_64|amd64) engine="$BUNDLE/tun-engine/egress-tun-engine-linux-amd64" ;;
+        aarch64|arm64) engine="$BUNDLE/tun-engine/egress-tun-engine-linux-arm64" ;;
+        *) die_env "local-userns TUN has no engine build for $(uname -m)" ;;
+      esac
+      [ -f "$engine" ] || die_env "bundle has no matching TUN engine"
+      (cd "$BUNDLE/tun-engine" && sha256sum -c SHA256SUMS >/dev/null) || die_env "TUN engine checksum verification failed"
+      install -m 0755 "$engine" "$target/egress-tun-engine"
+    fi
+    current_tmp="$libdir/.current-new"
+    rm -f "$current_tmp"
+    ln -s "versions/$version" "$current_tmp"
+    mv -Tf "$current_tmp" "$libdir/current"
+    cat > "$bindir/egressctl" <<EOF
+#!/usr/bin/env bash
+exec "$libdir/current/venv/bin/egressctl" "\$@"
+EOF
+    cat > "$bindir/egress-run" <<EOF
+#!/usr/bin/env bash
+export EGRESS_TUN_ENGINE="$libdir/current/egress-tun-engine"
+exec "$libdir/current/venv/bin/egress-run" "\$@"
+EOF
+  elif [ "${EGRESS_CLIENT_SOURCE_INSTALL:-0}" = 1 ] || [ "${EGRESS_TEST_MODE:-0}" = 1 ]; then
+    # Explicit dev/test fallback for a checkout without release wheel assets.
+    cp -r "$PKG_SRC" "$libdir/"
+    cp -r "$REPO_ROOT/adapters" "$libdir/"
+    chmod -R a+rX "$libdir/egress_client" "$libdir/adapters"
+    cat > "$bindir/egressctl" <<EOF
+#!/usr/bin/env bash
+exec python3 -c "import sys; sys.path.insert(0, '$libdir'); from egress_client.egressctl import main; main()" "\$@"
+EOF
+    cat > "$bindir/egress-run" <<EOF
+#!/usr/bin/env bash
+export EGRESS_TUN_ENGINE="$prefix/libexec/egress/egress-tun-engine"
+exec python3 -c "import sys; sys.path.insert(0, '$libdir'); from egress_client.egress_run import main; main()" "\$@"
+EOF
+  else
+    die_env "release wheel missing; build a wheel or set EGRESS_CLIENT_SOURCE_INSTALL=1 for an explicit source install"
+  fi
+
   local engine=""
   if [ "$(sed -n 's/^tun_backend:[[:space:]]*//p' "$BUNDLE/client.yaml" | head -1)" = local-userns ]; then
     case "$(uname -m)" in
@@ -85,28 +140,7 @@ install_package() { # prefix
     mkdir -p "$prefix/libexec/egress"
     install -m 755 "$engine" "$prefix/libexec/egress/egress-tun-engine"
   fi
-  # cp -r propagates the SOURCE directory's mode (the repo source tree is
-  # 750 root:group), which would leave the installed package dir unreadable
-  # by the user running egressctl -> "No module named ...egressctl". The
-  # package is plain stdlib Python source (no secrets), so normalize the
-  # installed tree to be world-readable + traversable.
-  chmod 755 "$libdir/egress_client"
-  chmod -R a+rX "$libdir/egress_client"
-  chmod -R a+rX "$libdir/adapters"
-  # wrappers: fixed python3 invocation, no build step needed (stdlib-only)
-  cat > "$bindir/egressctl" <<EOF
-#!/usr/bin/env bash
-exec python3 -c "import sys; sys.path.insert(0, '$libdir'); \
-from egress_client.egressctl import main; main()" "\$@"
-EOF
-  cat > "$bindir/egress-run" <<EOF
-#!/usr/bin/env bash
-export EGRESS_TUN_ENGINE="$prefix/libexec/egress/egress-tun-engine"
-exec python3 -c "import sys; sys.path.insert(0, '$libdir'); \
-from egress_client.egress_run import main; main()" "\$@"
-EOF
   chmod 755 "$bindir/egressctl" "$bindir/egress-run"
-  chmod 755 "$libdir"
 }
 
 install_config() { # etc_dir
@@ -139,6 +173,24 @@ case "$TARGET" in
         /etc/egress/default-proxy.auth
       chmod 600 /etc/egress/client.token \
         /etc/egress/default-proxy.auth
+      HOST_HOME="$(getent passwd "$HOST_USER" | cut -d: -f6)"
+      if [ -n "$HOST_HOME" ] && [ -d "$HOST_HOME" ]; then
+        USER_LIBEXEC="$HOST_HOME/.local/libexec/egress"
+        install -d -o "$HOST_USER" -g "$HOST_GROUP" -m 0755 "$USER_LIBEXEC"
+        cat > "$USER_LIBEXEC/upgrade-client" <<'EOF'
+#!/bin/sh
+exec /usr/local/lib/egress/current/venv/bin/python -m egress_client.updater "$@"
+EOF
+        cat > "$USER_LIBEXEC/uninstall-client" <<'EOF'
+#!/bin/sh
+set -eu
+rm -rf "$HOME/.local/share/egress"
+rm -f "$HOME/.local/bin/egressctl" "$HOME/.local/bin/egress-run"
+echo "user egress client removed"
+EOF
+        chown "$HOST_USER:$HOST_GROUP" "$USER_LIBEXEC/upgrade-client" "$USER_LIBEXEC/uninstall-client"
+        chmod 0755 "$USER_LIBEXEC/upgrade-client" "$USER_LIBEXEC/uninstall-client"
+      fi
     fi
     chmod 755 /etc/egress
     echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/egress"
@@ -166,17 +218,17 @@ case "$TARGET" in
       run_secrets_ok=1
     else
       echo "note: /run/secrets not writable here; if this container uses the"
-      echo "      documented /run/secrets/egress_egress_* mounts, the image"
+      echo "      documented /run/secrets/egress_* mounts, the image"
       echo "      build must provide them (see INSTALL.md, step B)."
     fi
     if [ "$run_secrets_ok" = "1" ]; then
       install_config /run/secrets/egress
-      # the example config references /run/secrets/egress_egress_* files;
+      # the example config references /run/secrets/egress_* files;
       # provide them as symlinks to the installed copies.
       ln -sf /run/secrets/egress/client.token \
              /run/secrets/egress_client_token
       ln -sf /run/secrets/egress/default-proxy.auth \
-             /run/secrets/egress_egress_default_proxy_auth
+             /run/secrets/egress_default_proxy_auth
     fi
     echo "installed client $CLIENT (container) under $INSTALL_ROOT and /etc/egress"
     ;;

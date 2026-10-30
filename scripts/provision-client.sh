@@ -71,7 +71,7 @@ case "$ENVIRONMENT" in
     [ -n "$PROXY_HOST" ] || PROXY_HOST="host.docker.internal"
     [ -n "$TUN_BACKEND" ] || TUN_BACKEND="local-userns"
     TOKEN_FILE="/run/secrets/egress_client_token"
-    AUTH_FILE="/run/secrets/egress_egress_default_proxy_auth"
+    AUTH_FILE="/run/secrets/egress_default_proxy_auth"
     ;;
   *) die_usage "--environment must be host or container" ;;
 esac

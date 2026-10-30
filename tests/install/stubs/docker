@@ -43,7 +43,7 @@ case "${1:-}" in
           exit "${STUB_DOCKER_UP_RC}"
         fi
         echo "Container egress-mihomo  Started"
-        echo "Container egress-egressd  Started"
+        echo "Container egressd  Started"
         ;;
       ps)
         for a in "$@"; do
@@ -52,13 +52,13 @@ case "${1:-}" in
         if [ "${JSON:-0}" = "1" ]; then
           case "$HEALTH" in
             healthy)
-              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"running","Health":"healthy"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egressd","State":"running","Health":"healthy"}]\n'
               ;;
             restarting)
-              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"restarting","Health":"healthy"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egressd","State":"restarting","Health":"healthy"}]\n'
               ;;
             *)
-              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"running","Health":"starting"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egressd","State":"running","Health":"starting"}]\n'
               ;;
           esac
         else
@@ -66,15 +66,15 @@ case "${1:-}" in
           case "$HEALTH" in
             healthy)
               echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "egress-egressd   stub    stub      egressd    stub      stub       stub"
+              echo "egressd   stub    stub      egressd    stub      stub       stub"
               ;;
             restarting)
               echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "egress-egressd   stub    stub      egressd    stub      restarting stub"
+              echo "egressd   stub    stub      egressd    stub      restarting stub"
               ;;
             *)
               echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "egress-egressd   stub    stub      egressd    stub      starting   stub"
+              echo "egressd   stub    stub      egressd    stub      starting   stub"
               ;;
           esac
         fi

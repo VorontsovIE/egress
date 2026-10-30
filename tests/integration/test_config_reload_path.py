@@ -27,7 +27,7 @@ class MihomoStub:
 
 def test_hot_reload_uses_mihomo_visible_config_path():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
-    egressd = compose["services"]["egress-egressd"]
+    egressd = compose["services"]["egressd"]
     mihomo = compose["services"]["egress-mihomo"]
     env = egressd["environment"]
 
@@ -47,7 +47,7 @@ def test_hot_reload_uses_mihomo_visible_config_path():
 
 def test_runtime_config_binds_inside_mihomo(monkeypatch, tmp_path):
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
-    env = compose["services"]["egress-egressd"]["environment"]
+    env = compose["services"]["egressd"]["environment"]
     clients = tmp_path / "clients"
     clients.mkdir()
     (clients / "host-main.token").write_text("fake-token\n")

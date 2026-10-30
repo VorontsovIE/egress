@@ -197,7 +197,7 @@ def _run_tun(cfg, api: EgressApi, route: str, command: list[str],
             }
         child_env = {key: value for key, value in os.environ.items()
                      if key.lower() not in {"http_proxy", "https_proxy", "all_proxy",
-                                            "no_proxy", "egress_egress_tun_engine"}}
+                                            "no_proxy", "egress_tun_engine"}}
         try:
             return tun_runtime.run(
                 command, env=child_env, cwd=os.getcwd(),

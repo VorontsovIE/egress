@@ -217,7 +217,7 @@ chmod 700 "$ROOT/providers"
 log "persistent dirs ready (0700; egressd+generated -> service uid $EGRESSD_UID)"
 if [ "${EGRESS_TEST_MODE:-0}" != 1 ]; then
   install -d -o root -g root -m 0755 /etc/egress
-  EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  EGRESSD_VERSION="${EGRESS_RELEASE_VERSION:-$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)}"
   EGRESSD_VERSION="${EGRESSD_VERSION:-latest}"
   printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nEGRESS_ROOT=%s\nEGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\nEGRESSD_IMAGE=ghcr.io/vorontsovie/egress:%s\n' \
     "$EGRESSD_UID" "$EGRESSD_GID" "$ROOT" "$SECRETS_DIR" "$DOCKER_GATEWAY" "$EGRESSD_VERSION" \
@@ -362,8 +362,8 @@ STEP=8; STEP_NAME="bootstrap config"
 log "generating initial mihomo config (bootstrap)"
 # A running egressd writes the same shared config. Stop it before bootstrap
 # so it cannot replace the startup config while Mihomo is being recreated.
-run_logged "docker compose stop egress-egressd egress-mihomo" \
-  docker compose stop egress-egressd egress-mihomo \
+run_logged "docker compose stop egressd egress-mihomo" \
+  docker compose stop egressd egress-mihomo \
   || die_env "docker compose stop failed (full log: $LOG_FILE)"
 touch "$ROOT/providers/.gitkeep"
 run_logged "python3 -m egressd.bootstrap_config" \
@@ -397,13 +397,13 @@ STEP=9; STEP_NAME="compose deploy"
 log "deploying compose stack (mihomo pinned, egressd from GHCR)"
 export EGRESS_SECRETS="$SECRETS_DIR"
 export DOCKER_GATEWAY
-EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+EGRESSD_VERSION="${EGRESS_RELEASE_VERSION:-$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)}"
 export EGRESSD_IMAGE="ghcr.io/vorontsovie/egress:${EGRESSD_VERSION:-latest}"
 cd "$REPO_ROOT"
-# Service key in compose.yaml is the full name (egress-egressd);
+# Service key in compose.yaml is the full name (egressd);
 # the short name is not a valid compose service reference.
-run_logged "docker compose pull egress-egressd" \
-  docker compose pull egress-egressd \
+run_logged "docker compose pull egressd" \
+  docker compose pull egressd \
   || die_env "docker compose pull failed (full log: $LOG_FILE)"
 # The generated config and client credentials are bind-mounted files. Compose
 # does not recreate a container when their contents change, so an existing
@@ -434,7 +434,7 @@ log "waiting for services to become healthy (3 consecutive polls, 2s interval, 9
 # 3 CONSECUTIVE all-healthy polls before proceeding; the counter resets on
 # any failure. On timeout we dump the failing containers' logs (redacted)
 # and inspect fields so the crash is visible instead of masked.
-SERVICES=(egress-mihomo egress-egressd)
+SERVICES=(egress-mihomo egressd)
 
 # svc_field <service> <format> — one docker inspect field; empty on error.
 svc_field() {

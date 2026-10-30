@@ -97,7 +97,7 @@ Prefer running Mihomo and `egressd` as two services in one Compose project:
 
 ```text
 egress-mihomo
-egress-egressd
+egressd
 ```
 
 Combining them in one container requires a separate justification and MUST NOT automatically grant `egressd` the privileges required by Mihomo or TUN.
@@ -178,7 +178,7 @@ proxy_host: host.docker.internal
 default_proxy_port: 1080
 oneshot_proxy_port: 1081
 api_token_file: /run/secrets/egress_client_token
-default_proxy_auth_file: /run/secrets/egress_egress_default_proxy_auth
+default_proxy_auth_file: /run/secrets/egress_default_proxy_auth
 environment: container
 tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1
@@ -1672,7 +1672,7 @@ host:
 container:
   /etc/egress/client.yaml
   /run/secrets/egress_client_token
-  /run/secrets/egress_egress_default_proxy_auth
+  /run/secrets/egress_default_proxy_auth
 ```
 
 Use permissions `0700/0600` or equivalent read-only secret mounts.

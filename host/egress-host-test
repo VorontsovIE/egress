@@ -55,7 +55,7 @@ HOST_CLIENT_DIR = os.environ.get("EGRESS_HOST_CLIENT_DIR", "/etc/egress")
 MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e"
 MIHOMO_ADMIN_PORT = 9090
 CLIENT_LIB_DIR = "/usr/local/lib/egress"
-STACK_SERVICES = ("egress-mihomo", "egress-egressd")
+STACK_SERVICES = ("egress-mihomo", "egressd")
 def _service_uid() -> int:
     if os.environ.get("EGRESSD_UID"):
         return int(os.environ["EGRESSD_UID"])
@@ -86,17 +86,17 @@ LIVE_CHECK_IDS = frozenset([
 LIVE_NEXT_HINTS = {
     "compose_health": "docker compose ps",
     "restart_recreate": "docker compose ps",
-    "host_whoami_identity": "docker logs egress-egressd",
-    "host_default_route_mode": "docker logs egress-egressd",
+    "host_whoami_identity": "docker logs egressd",
+    "host_default_route_mode": "docker logs egressd",
     "per_client_isolation": "provision a second client and run tests/integration",
-    "egressd_container_healthy": "docker logs egress-egressd",
+    "egressd_container_healthy": "docker logs egressd",
     "client_package_importable":
         "bash scripts/install-client.sh --client host-main --target host "
         "--bundle <root>/client-bundles/host-main",
     "egressctl_on_path":
         "bash scripts/install-client.sh --client host-main --target host "
         "--bundle <root>/client-bundles/host-main",
-    "generated_config_present": "docker logs egress-egressd",
+    "generated_config_present": "docker logs egressd",
     "secrets_readable_by_container_user":
         "chown -R 1000:1000 /etc/egress/secrets (re-run install step 8b)",
 }

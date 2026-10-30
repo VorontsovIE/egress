@@ -83,7 +83,7 @@ else
 fi
 # Per-service health (a single grep '"healthy"' over compose ps used to pass
 # as soon as ANY service was healthy, masking a crash-looping sibling).
-for c in egress-mihomo egress-egressd; do
+for c in egress-mihomo egressd; do
   st="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null)"
   h="$(docker inspect --format '{{.State.Health.Status}}' "$c" 2>/dev/null)"
   rcnt="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null)"
@@ -104,7 +104,7 @@ PUB="$(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{e
       egress-mihomo 2>/dev/null || true)"
 PUB="$PUB
 $(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
-      egress-egressd 2>/dev/null || true)"
+      egressd 2>/dev/null || true)"
 BAD_BINDS=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -129,7 +129,7 @@ else
 fi
 
 # 3. docker socket not mounted
-if docker inspect egress-mihomo egress-egressd 2>/dev/null \
+if docker inspect egress-mihomo egressd 2>/dev/null \
    | grep -q "docker.sock"; then
   fail "docker socket mounted into a service"
 else
@@ -164,7 +164,7 @@ fi
 
 # 5. secrets not in container environment
 ENV_LEAK=0
-for c in egress-mihomo egress-egressd; do
+for c in egress-mihomo egressd; do
   ENVV="$(docker inspect --format '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' "$c" 2>/dev/null || true)"
   if [ -f "$SECRETS_DIR/mihomo_api_secret" ]; then
     S="$(cat "$SECRETS_DIR/mihomo_api_secret")"

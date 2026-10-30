@@ -161,7 +161,7 @@ grep -q '"summary"' "$logf" 2>/dev/null
 check "success: harness JSON report teed into install log" $?
 grep -q "docker compose up -d --force-recreate" "$logf" 2>/dev/null
 check "success: regenerated config forces container recreate" $?
-stop_line="$(grep -n -m1 'run: docker compose stop egress-egressd egress-mihomo' "$logf" | cut -d: -f1)"
+stop_line="$(grep -n -m1 'run: docker compose stop egressd egress-mihomo' "$logf" | cut -d: -f1)"
 bootstrap_line="$(grep -n -m1 'run: python3 -m egressd.bootstrap_config' "$logf" | cut -d: -f1)"
 [ -n "$stop_line" ] && [ -n "$bootstrap_line" ] && [ "$stop_line" -lt "$bootstrap_line" ]
 check "success: old egressd stopped before bootstrap regeneration" $?
@@ -218,7 +218,7 @@ rc=$?
 [ "$rc" -eq 3 ]
 check "fail-never: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
 logf="$(log_of "$d")"
-grep -q "last 100 lines of egress-egressd logs" "$logf" 2>/dev/null
+grep -q "last 100 lines of egressd logs" "$logf" 2>/dev/null
 check "fail-never: log has egressd docker-logs dump" $?
 grep -q "RestartCount=" "$logf" 2>/dev/null
 check "fail-never: log has RestartCount" $?
@@ -286,7 +286,7 @@ services:
     image: metacubex/mihomo:v1.19.32
     ports:
       - "0.0.0.0:1080"
-  egress-egressd:
+  egressd:
     build: ./egressd
     ports:
       - "127.0.0.1:9091"
@@ -311,7 +311,7 @@ d="$TMP/neg-socket"
 mkdir -p "$d/repo" "$d/root" "$d/secrets"
 cat > "$d/repo/compose.yaml" <<'YAML'
 services:
-  egress-egressd:
+  egressd:
     build: ./egressd
     ports:
       - "127.0.0.1:9091"

@@ -1108,7 +1108,7 @@ def check_a8_secrets():
                             leaks.append(f"artifact:{p} (secret: {label})")
                             break
         # 3. docker logs of the egress stack
-        for svc in ("egress-mihomo", "egress-egressd"):
+        for svc in ("egress-mihomo", "egressd"):
             lg = _run(["docker", "logs", "--tail", "2000", svc], 30, redact)
             for sv, label in secrets:
                 if sv in (lg["stdout"] + lg["stderr"]):
@@ -1152,8 +1152,8 @@ def check_a8_docker_socket():
     def fn():
         redact = CTX["redact"]
         mounts = []
-        for svc in ("egress-mihomo", "egress-egressd",
-                    "egress-egressd"):
+        for svc in ("egress-mihomo", "egressd",
+                    "egressd"):
             r = _run(["docker", "inspect", "--format", "{{json .Mounts}}", svc],
                      15, redact)
             if r["rc"] != 0:
