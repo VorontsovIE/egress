@@ -27,7 +27,7 @@ Update both this table and `STATUS.md` after each stage. Statuses: Pending, In p
 | 4 | Upgrade command with staging, permissions, health checks and rollback | Implement | Mock release/Docker tests | Review root execution | Complete | `257d044` |
 | 5 | Personal/managed provider removal and scoped uninstall/purge | Implement | Data-retention/destructive tests | Review deletion boundaries | Complete | `2f6598e` |
 | 6 | `curl | sh` full/client-only installer and sudo explanation | Implement | Bootstrap/no-TTY/signature tests | Review before escalation | Complete | `2c3b333` |
-| 7 | End-to-end acceptance and docs/status closure | Integrate | Run offline acceptance; live host pending | Final review | Review | recorded by follow-up |
+| 7 | End-to-end acceptance and docs/status closure | Integrate | Run offline acceptance; live host pending | Final review | Review | `780abbd` |
 
 ## Acceptance gates
 
