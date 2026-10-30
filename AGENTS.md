@@ -1,10 +1,10 @@
-# AGENTS.md — vibelab-egress
+# AGENTS.md — egress
 
 Repository guidance for coding agents and contributors.
 
 ## Project overview
 
-vibelab-egress is a Mihomo-based egress service. One Docker Compose backend (`mihomo` + `egressd`) serves multiple Linux hosts and containers. Install the `egressctl` and `egress-run` client in each execution environment.
+egress is a Mihomo-based egress service. One Docker Compose backend (`mihomo` + `egressd`) serves multiple Linux hosts and containers. Install the `egressctl` and `egress-run` client in each execution environment.
 
 - Requirements and architecture: `TECH_SPEC.md`.
 - Current progress and decision log: `STATUS.md`; update it after each completed work item.
@@ -33,7 +33,7 @@ GEO datasets are not tracked. Fetch them on demand with `scripts/fetch-geo-data.
 
 ## Required conventions
 
-1. **Secrets:** Commit only fake credentials and TEST-NET addresses. Real tokens, keys, subscriptions, and backend secrets belong under the protected secrets directory (default `/etc/vibelab-egress/secrets`, mode 0600); never place them in environment variables, logs, or reports.
+1. **Secrets:** Commit only fake credentials and TEST-NET addresses. Real tokens, keys, subscriptions, and backend secrets belong under the protected secrets directory (default `/etc/egress/secrets`, mode 0600); never place them in environment variables, logs, or reports.
 2. **Client dependencies:** `client/src/` must remain Python standard-library-only. The pinned static TUN engine is built separately and included in client bundles.
 3. **Host command execution:** Host tools must use fixed argument vectors and allowlisted operations. Do not add `shell=True`, `os.system`, arbitrary shell input, or free-form command execution. Security tests enforce these constraints.
 4. **Generated config:** Never hand-edit generated Mihomo configuration. Change its source inputs and regenerate through `egressd/configgen.py`.
@@ -50,7 +50,7 @@ GEO datasets are not tracked. Fetch them on demand with `scripts/fetch-geo-data.
 | Architecture and requirements | `TECH_SPEC.md` |
 | Current status | `STATUS.md` |
 | Public API | `egressd/src/egressd/main.py` |
-| Client CLI | `client/src/vibelab_egress_client/` |
+| Client CLI | `client/src/egress_client/` |
 | Provider adapters | `adapters/` |
 | Backend installation | `INSTALL.md`, `scripts/install-backend-host.sh` |
 | Acceptance | `host/LIVE_ACCEPTANCE.md`, `host/live-acceptance.py` |

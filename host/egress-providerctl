@@ -15,9 +15,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress"))
-SECRETS = Path(os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets"))
-API = os.environ.get("VIBELAB_EGRESS_API", "http://127.0.0.1:9091")
+ROOT = Path(os.environ.get("EGRESS_ROOT", "/var/lib/egress"))
+SECRETS = Path(os.environ.get("EGRESS_SECRETS", "/etc/egress/secrets"))
+API = os.environ.get("EGRESS_API", "http://127.0.0.1:9091")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -46,7 +46,7 @@ def private_write(path: Path, data: bytes) -> None:
         os.chmod(tmp, 0o600)
         if os.geteuid() == 0:
             try:
-                account = pwd.getpwnam("vibelab-egressd")
+                account = pwd.getpwnam("egressd")
                 os.chown(tmp, account.pw_uid, account.pw_gid)
             except KeyError:
                 # Offline install tests have no service account.
@@ -132,7 +132,7 @@ def update(args: argparse.Namespace) -> None:
                       "updated": result.get("updated", False)}))
 
 
-def remove(args: argparse.Namespace) -> None:
+def delete_source(args: argparse.Namespace) -> None:
     provider_id = check_id(args.id)
     found = False
     for path in (source_dir() / f"{provider_id}.json",
@@ -157,7 +157,7 @@ def main() -> None:
     source = add_cmd.add_mutually_exclusive_group(required=True)
     source.add_argument("--subscription-url", action="store_true")
     source.add_argument("--source-file")
-    for name in ("update", "remove"):
+    for name in ("update", "delete-source"):
         command = commands.add_parser(name)
         command.add_argument("--id", required=True)
         if name == "update":
@@ -166,7 +166,8 @@ def main() -> None:
     args = parser.parse_args()
     if os.geteuid() != 0:
         fail("host root required")
-    {"add": add, "list": list_sources, "update": update, "remove": remove}[args.command](args)
+    {"add": add, "list": list_sources, "update": update,
+     "delete-source": delete_source}[args.command](args)
 
 
 if __name__ == "__main__":

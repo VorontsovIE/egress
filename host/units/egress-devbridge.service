@@ -1,25 +1,25 @@
-# Vibelab-egress: narrow dev/test bridge (spec section 33.2).
+# egress-egress: narrow dev/test bridge (spec section 33.2).
 # The container agent may request only the fixed operations implemented
 # in egress-devbridge; there is no arbitrary host command path.
 [Unit]
-Description=vibelab-egress narrow dev/test bridge
+Description=egress narrow dev/test bridge
 After=docker.service network-online.target
 Wants=docker.service
 
 [Service]
 Type=simple
-Environment=VIBELAB_EGRESS_REPO=/srv/workspace/vibelab-egress
+Environment=EGRESS_REPO=/srv/workspace/egress
 # Bind to the Docker bridge gateway so container clients (container) can
 # reach it; the unit refuses public binds by default in the tool itself.
-ExecStart=/usr/bin/env python3 /srv/workspace/vibelab-egress/host/egress-devbridge \
+ExecStart=/usr/bin/env python3 /srv/workspace/egress/host/egress-devbridge \
     --bind 172.17.0.1 --port 9099 \
-    --token-file /etc/vibelab-egress/secrets/devbridge.token
+    --token-file /etc/egress/secrets/devbridge.token
 Restart=on-failure
 RestartSec=5
 User=root
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/vibelab-egress
+ReadWritePaths=/var/lib/egress
 
 [Install]
 WantedBy=multi-user.target

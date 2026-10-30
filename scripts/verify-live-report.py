@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 def _secrets_dir():
-    return os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
+    return os.environ.get("EGRESS_SECRETS", "/etc/egress/secrets")
 
 REQUIRED_TOP = ("report", "generated_at", "host", "checks", "summary", "checks_hash")
 VALID_STATUS = ("pass", "fail", "skip")
@@ -323,8 +323,8 @@ def collect_secret_values():
         except OSError:
             pass
 
-    for p in (os.path.join("/etc/vibelab-egress", "client.token"),
-              os.path.join("/etc/vibelab-egress", "default-proxy.auth")):
+    for p in (os.path.join("/etc/egress", "client.token"),
+              os.path.join("/etc/egress", "default-proxy.auth")):
         add(p)
     sdir = _secrets_dir()
     if os.path.isdir(sdir):

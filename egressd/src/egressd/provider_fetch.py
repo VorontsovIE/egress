@@ -88,7 +88,7 @@ def socks_fetch(url: str, proxy_host: str, proxy_port: int,
             path = target.path or "/"
             if target.query:
                 path += "?" + target.query
-            request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: vibelab-egress/1\r\n\r\n"
+            request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: egress/1\r\n\r\n"
             sock.sendall(request.encode("ascii"))
             response = http.client.HTTPResponse(sock)
             response.begin()

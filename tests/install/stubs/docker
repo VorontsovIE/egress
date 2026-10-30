@@ -29,6 +29,10 @@ case "${1:-}" in
         echo "stub: compose build $*"
         exit "${STUB_DOCKER_BUILD_RC:-0}"
         ;;
+      pull)
+        echo "stub: compose pull $*"
+        exit "${STUB_DOCKER_PULL_RC:-0}"
+        ;;
       stop)
         echo "stub: compose stop $*"
         ;;
@@ -38,8 +42,8 @@ case "${1:-}" in
           echo "Error: stubbed compose up failure (injected by STUB_DOCKER_UP_RC)" >&2
           exit "${STUB_DOCKER_UP_RC}"
         fi
-        echo "Container vibelab-egress-mihomo  Started"
-        echo "Container vibelab-egress-egressd  Started"
+        echo "Container egress-mihomo  Started"
+        echo "Container egress-egressd  Started"
         ;;
       ps)
         for a in "$@"; do
@@ -48,29 +52,29 @@ case "${1:-}" in
         if [ "${JSON:-0}" = "1" ]; then
           case "$HEALTH" in
             healthy)
-              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"running","Health":"healthy"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"running","Health":"healthy"}]\n'
               ;;
             restarting)
-              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"restarting","Health":"healthy"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"restarting","Health":"healthy"}]\n'
               ;;
             *)
-              printf '[{"Name":"vibelab-egress-mihomo","State":"running","Health":"healthy"},{"Name":"vibelab-egress-egressd","State":"running","Health":"starting"}]\n'
+              printf '[{"Name":"egress-mihomo","State":"running","Health":"healthy"},{"Name":"egress-egressd","State":"running","Health":"starting"}]\n'
               ;;
           esac
         else
           echo "NAME                       IMAGE   COMMAND   SERVICE    CREATED   STATUS    PORTS"
           case "$HEALTH" in
             healthy)
-              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "vibelab-egress-egressd   stub    stub      egressd    stub      stub       stub"
+              echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "egress-egressd   stub    stub      egressd    stub      stub       stub"
               ;;
             restarting)
-              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "vibelab-egress-egressd   stub    stub      egressd    stub      restarting stub"
+              echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "egress-egressd   stub    stub      egressd    stub      restarting stub"
               ;;
             *)
-              echo "vibelab-egress-mihomo    stub    stub      mihomo     stub      stub       stub"
-              echo "vibelab-egress-egressd   stub    stub      egressd    stub      starting   stub"
+              echo "egress-mihomo    stub    stub      mihomo     stub      stub       stub"
+              echo "egress-egressd   stub    stub      egressd    stub      starting   stub"
               ;;
           esac
         fi
@@ -166,7 +170,7 @@ case "${1:-}" in
   network)
     case "${2:-}" in
       ls)
-        printf 'vibelab-egress_default\tstubid1\tbridge\nbridge\tstubid2\tbridge\n'
+        printf 'egress_default\tstubid1\tbridge\nbridge\tstubid2\tbridge\n'
         ;;
       inspect)
         printf '172.17.0.0/16\t172.17.0.1\n'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""egress-host-test -- fixed host acceptance harness for vibelab-egress (A1).
+"""egress-host-test -- fixed host acceptance harness for egress (A1).
 
 Runs ONLY the predefined checks (TECH_SPEC.md section 34 + the A1 mandatory
 checks) and prints a JSON report to stdout (and --out). No secrets ever
@@ -25,9 +25,9 @@ redacted log tails) and each failed live check's detail gets an
 actionable "next: <command>" line.
 
 Environment:
-  VIBELAB_EGRESS_ROOT   persistent data root (default /var/lib/vibelab-egress)
-  VIBELAB_EGRESS_REPO   repo root with compose.yaml (default /srv/workspace/vibelab-egress)
-  VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
+  EGRESS_ROOT   persistent data root (default /var/lib/egress)
+  EGRESS_REPO   repo root with compose.yaml (default /srv/workspace/egress)
+  EGRESS_SECRETS backend secrets dir (default /etc/egress/secrets)
 """
 
 import argparse
@@ -45,22 +45,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from client_identity import default_client_id
 
-ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress")
+ROOT = os.environ.get("EGRESS_ROOT", "/var/lib/egress")
 # Default repo root = parent of the host/ dir containing this script, so the
 # harness finds compose.yaml from any checkout location (no env var needed).
 _DEFAULT_REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-REPO = os.environ.get("VIBELAB_EGRESS_REPO", _DEFAULT_REPO)
-SECRETS = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
-HOST_CLIENT_DIR = os.environ.get("VIBELAB_EGRESS_HOST_CLIENT_DIR", "/etc/vibelab-egress")
+REPO = os.environ.get("EGRESS_REPO", _DEFAULT_REPO)
+SECRETS = os.environ.get("EGRESS_SECRETS", "/etc/egress/secrets")
+HOST_CLIENT_DIR = os.environ.get("EGRESS_HOST_CLIENT_DIR", "/etc/egress")
 MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e"
 MIHOMO_ADMIN_PORT = 9090
-CLIENT_LIB_DIR = "/usr/local/lib/vibelab-egress"
-STACK_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
+CLIENT_LIB_DIR = "/usr/local/lib/egress"
+STACK_SERVICES = ("egress-mihomo", "egress-egressd")
 def _service_uid() -> int:
     if os.environ.get("EGRESSD_UID"):
         return int(os.environ["EGRESSD_UID"])
     try:
-        for line in Path("/etc/vibelab-egress/compose.env").read_text().splitlines():
+        for line in Path("/etc/egress/compose.env").read_text().splitlines():
             if line.startswith("EGRESSD_UID="):
                 return int(line.partition("=")[2])
     except (OSError, ValueError):
@@ -86,19 +86,19 @@ LIVE_CHECK_IDS = frozenset([
 LIVE_NEXT_HINTS = {
     "compose_health": "docker compose ps",
     "restart_recreate": "docker compose ps",
-    "host_whoami_identity": "docker logs vibelab-egress-egressd",
-    "host_default_route_mode": "docker logs vibelab-egress-egressd",
+    "host_whoami_identity": "docker logs egress-egressd",
+    "host_default_route_mode": "docker logs egress-egressd",
     "per_client_isolation": "provision a second client and run tests/integration",
-    "egressd_container_healthy": "docker logs vibelab-egress-egressd",
+    "egressd_container_healthy": "docker logs egress-egressd",
     "client_package_importable":
         "bash scripts/install-client.sh --client host-main --target host "
         "--bundle <root>/client-bundles/host-main",
     "egressctl_on_path":
         "bash scripts/install-client.sh --client host-main --target host "
         "--bundle <root>/client-bundles/host-main",
-    "generated_config_present": "docker logs vibelab-egress-egressd",
+    "generated_config_present": "docker logs egress-egressd",
     "secrets_readable_by_container_user":
-        "chown -R 1000:1000 /etc/vibelab-egress/secrets (re-run install step 8b)",
+        "chown -R 1000:1000 /etc/egress/secrets (re-run install step 8b)",
 }
 
 RESULTS = []
@@ -362,7 +362,7 @@ def check_image_versions():
         add("image_versions", "skipped", "compose.yaml not found", path)
         return
     services = comp.get("services", {}) or {}
-    mihomo = services.get("vibelab-egress-mihomo") or {}
+    mihomo = services.get("egress-mihomo") or {}
     image = resolve_var(str(mihomo.get("image", "")))
     if image == MIHOMO_IMAGE_PIN:
         add("image_versions", "pass", f"mihomo pinned to {image}")
@@ -434,7 +434,7 @@ def check_no_backend_secrets_in_client_bundles():
             # The backend secrets dir is where backend secrets BELONG; it is
             # not a client artifact. Prune it so the check only scans client
             # bundle/install content (on the host, SECRETS lives under
-            # /etc/vibelab-egress/secrets, inside HOST_CLIENT_DIR).
+            # /etc/egress/secrets, inside HOST_CLIENT_DIR).
             dirs[:] = [d for d in dirs
                        if os.path.realpath(os.path.join(root, d))
                        != os.path.realpath(SECRETS)]
@@ -585,7 +585,7 @@ def check_host_client_config_token_permissions():
         return
     legacy_files = ("client.yaml", "client.token", "default-proxy.auth")
     if not any(os.path.isfile(os.path.join(HOST_CLIENT_DIR, fn)) for fn in legacy_files):
-        enroll_sock = "/run/vibelab-egress-enroll/enroll.sock"
+        enroll_sock = "/run/egress-enroll/enroll.sock"
         try:
             info = os.stat(enroll_sock)
         except OSError:
@@ -697,8 +697,8 @@ def check_per_client_isolation(live):
 
 def check_local_tun_runtime():
     root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-    runtime = os.path.join(root, "client/src/vibelab_egress_client/tun_runtime.py")
-    bootstrap = os.path.join(root, "client/src/vibelab_egress_client/tun_bootstrap.py")
+    runtime = os.path.join(root, "client/src/egress_client/tun_runtime.py")
+    bootstrap = os.path.join(root, "client/src/egress_client/tun_bootstrap.py")
     try:
         source = open(runtime, encoding="utf-8").read() + open(bootstrap, encoding="utf-8").read()
     except OSError as exc:
@@ -759,7 +759,7 @@ def check_client_package_importable(live):
     """The installed client package must import from its install prefix.
 
     Checks the 2026-10-12 bug where install-client.sh copied the package
-    CONTENTS (flattened), so `import vibelab_egress_client.egressctl`
+    CONTENTS (flattened), so `import egress_client.egressctl`
     failed even though the prefix existed. Skipped (not failed) when the
     install prefix itself is absent: the package was simply never
     installed, which the client provisioning flow (not this layout check)
@@ -775,7 +775,7 @@ def check_client_package_importable(live):
             "scripts/install-client.sh --target host)" % CLIENT_LIB_DIR)
         return
     code = ("import sys; sys.path.insert(0, %r); "
-            "import vibelab_egress_client.egressctl" % CLIENT_LIB_DIR)
+            "import egress_client.egressctl" % CLIENT_LIB_DIR)
     try:
         p = subprocess.run(["python3", "-c", code],
                            capture_output=True, text=True, timeout=30)
@@ -785,7 +785,7 @@ def check_client_package_importable(live):
         return
     if p.returncode == 0:
         add("client_package_importable", "pass",
-            "vibelab_egress_client imports from %s" % CLIENT_LIB_DIR)
+            "egress_client imports from %s" % CLIENT_LIB_DIR)
     else:
         add("client_package_importable", "fail",
             "installed package layout broken; re-run "

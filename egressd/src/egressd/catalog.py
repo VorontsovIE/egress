@@ -119,14 +119,12 @@ class RouteCatalog:
         protocols: dict[str, dict[str, str]] | None = None,
         owners: dict[str, str] | None = None,
         identities: dict[str, dict[str, str]] | None = None,
-        legacy_provider_ids: dict[str, str] | None = None,
     ) -> "RouteCatalog":
         """Rebuild the catalog. ``protocols`` maps provider -> {clean: type}."""
         prefixes = prefixes or {}
         protocols = protocols or {}
         owners = owners or {}
         identities = identities or {}
-        legacy_provider_ids = legacy_provider_ids or {}
         by_id: dict[str, RouteInfo] = {}
         mihomo_to_id: dict[str, str] = {}
         id_to_mihomo: dict[str, str] = {}
@@ -167,14 +165,7 @@ class RouteCatalog:
         self._by_id = by_id
         self._mihomo_to_id = mihomo_to_id
         self._id_to_mihomo = id_to_mihomo
-        aliases: dict[str, str] = {}
-        for old_provider, current_provider in legacy_provider_ids.items():
-            for clean in providers.get(current_provider, []):
-                old_route = f"{old_provider}:{clean}"
-                new_route = f"{current_provider}:{clean}"
-                if old_route != new_route and old_route not in by_id and new_route in by_id:
-                    aliases[old_route] = new_route
-        self._route_aliases = aliases
+        self._route_aliases = {}
         return self
 
     def same_identity(self, route_id: str, other: "RouteCatalog") -> bool:
@@ -201,7 +192,7 @@ class RouteCatalog:
         return f"{provider}:{clean}"
 
     def resolve(self, route_id: str) -> str:
-        """Return the current canonical ID for a temporary legacy alias."""
+        """Return the canonical route ID unchanged."""
         return self._route_aliases.get(route_id, route_id)
 
     def mihomo_name(self, route_id: str) -> str:

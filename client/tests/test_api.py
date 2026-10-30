@@ -6,15 +6,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "client" / "src"))
-from vibelab_egress_client.api import EgressApi
+from egress_client.api import EgressApi
 
 
 def test_personal_route_shorthand_resolves_for_current_token():
     api = EgressApi.__new__(EgressApi)
     api.list_personal = lambda: {"providers": [
-        {"alias": "blanc", "provider_id": "p-host-vibelab-blanc"}
+        {"alias": "blanc", "provider_id": "p-host-egress-blanc"}
     ]}
-    assert api.resolve_route("@blanc:vless-49") == "p-host-vibelab-blanc:vless-49"
+    assert api.resolve_route("@blanc:vless-49") == "p-host-egress-blanc:vless-49"
     assert api.resolve_route("direct") == "direct"
 
 

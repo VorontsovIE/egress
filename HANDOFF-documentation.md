@@ -34,7 +34,7 @@ This handoff tracks the documentation audit requested for standalone, internatio
 - Passed: local Markdown links in the seven primary user/technical docs resolve.
 - Passed: `git diff --check`.
 - Passed: no Cyrillic remains in the scanned Markdown, Python, shell, YAML, TOML, and Go files; no scanned Markdown contains employer names, fixed checkout paths, or application-specific requirements.
-- Passed: `EGRESSD_STATE_DIR=/tmp/vibelab-egress-test-state EGRESSD_METRICS_DB=/tmp/vibelab-egress-test-state/metrics.sqlite EGRESSD_GEO_DIR=/tmp/vibelab-egress-test-state/geo UV_CACHE_DIR=/tmp/uv-cache uv run --locked --project egressd python -m pytest tests/ client/tests/ -q` — 353 passed in 31.42 seconds.
+- Passed: `EGRESSD_STATE_DIR=/tmp/egress-test-state EGRESSD_METRICS_DB=/tmp/egress-test-state/metrics.sqlite EGRESSD_GEO_DIR=/tmp/egress-test-state/geo UV_CACHE_DIR=/tmp/uv-cache uv run --locked --project egressd python -m pytest tests/ client/tests/ -q` — 353 passed in 31.42 seconds.
 - Dependency setup: `egressd/pyproject.toml` declares runtime dependencies and the `dev` extra (`pytest`, `pytest-asyncio`, `httpx2`); `egressd/uv.lock` pins the resolved environment. `DEVELOPMENT.md` documents install and run commands.
 - The first attempts exposed two environment requirements: writable temporary paths for egressd state and `httpx2` for the current Starlette test client. Both are now documented or declared, and the final suite passed.
 

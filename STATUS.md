@@ -4,6 +4,10 @@ This file summarizes the current implementation state. Historical acceptance evi
 
 ## Current state — 2026-10-29
 
+## Egress lifecycle work — 2026-10-30
+
+The lifecycle work is tracked in [HANDOFF-egress-lifecycle.md](HANDOFF-egress-lifecycle.md). Stage 1 is complete: removed historical identity-migration and retired-helper code, switched tracked product paths/module names to `egress`, and removed stale migration references. The offline suite passed (357 tests) with temporary egressd state paths. Stage 2 (wheel installation and isolated client/backend paths) is in progress; record each stage's checks and commit SHA here and in the handoff.
+
 GitHub Actions CI/CD was added for pull request/main validation and `vX.Y.Z` releases. Releases publish a multi-architecture GHCR backend image and client source archive with Linux amd64/arm64 TUN engines and checksums. The backend installer selects the matching GHCR tag when invoked from a tagged checkout. Workflow execution on GitHub remains to be confirmed after pushing the changes.
 
 The backend, client CLI, provider management, route catalog, probes, ranking, client-local TUN path, installation, and security gate are implemented. Phases A0–A8 are complete for work that can be exercised in the development environment. Deployment-specific live acceptance still depends on a configured Linux host, Docker backend, valid client profiles, and real provider routes.

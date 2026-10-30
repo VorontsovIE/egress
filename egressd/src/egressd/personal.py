@@ -140,7 +140,7 @@ def fetch_url(url: str) -> bytes:
             path = parsed.path or "/"
             if parsed.query:
                 path += "?" + parsed.query
-            conn.request("GET", path, headers={"User-Agent": "vibelab-egress/1"})
+            conn.request("GET", path, headers={"User-Agent": "egress/1"})
             response = conn.getresponse()
             if response.status in (301, 302, 303, 307, 308):
                 target = response.getheader("Location")

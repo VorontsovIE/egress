@@ -1,4 +1,4 @@
-module github.com/vibelab/egress-tun-engine
+module github.com/egress/egress-tun-engine
 
 go 1.26.3
 

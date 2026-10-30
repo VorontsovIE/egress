@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""live-acceptance.py -- host-side live acceptance harness for vibelab-egress.
+"""live-acceptance.py -- host-side live acceptance harness for egress.
 
 Runs the acceptance checks that REQUIRE host access (TECH_SPEC.md section 50
 "Phase 2 TUN" plus the host-only live items of section 49 "v1 proxy mode") and
@@ -26,15 +26,15 @@ Run on the host (see host/LIVE_ACCEPTANCE.md for the exact commands):
 Options:
     --out PATH            write the single JSON report here (default
                           host_acceptance_report.json)
-    --config PATH         host client config (default /etc/vibelab-egress/client.yaml)
+    --config PATH         host client config (default /etc/egress/client.yaml)
     --container-config PATH       container client config (default
-                          $VIBELAB_EGRESS_CONTAINER_CONFIG or
-                          /var/lib/vibelab-egress/client-bundles/container-main/client.yaml)
+                          $EGRESS_CONTAINER_CONFIG or
+                          /var/lib/egress/client-bundles/container-main/client.yaml)
     --litellm-url URL     LiteLLM endpoint to probe (default
-                          $VIBELAB_EGRESS_LITELLM_URL or
+                          $EGRESS_LITELLM_URL or
                           http://127.0.0.1:4000/health/liveliness)
     --container NAME   Docker container name (default
-                          $VIBELAB_EGRESS_CONTAINER or container)
+                          $EGRESS_CONTAINER or container)
     --recreate            enable the container restart observation;
                           full container recreation is not automated
     --no-tun              skip the TUN (section 50) checks
@@ -64,17 +64,17 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 # fixed configuration
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG = "/etc/vibelab-egress/client.yaml"
-DEFAULT_CONTAINER_CONFIG = "/var/lib/vibelab-egress/client-bundles/container-main/client.yaml"
+DEFAULT_CONFIG = "/etc/egress/client.yaml"
+DEFAULT_CONTAINER_CONFIG = "/var/lib/egress/client-bundles/container-main/client.yaml"
 # /health/liveliness: 200 while the process is up. /health also reports
 # provider health and answers 503 when no provider is configured, which
 # is not a LiteLLM reachability failure (2026-10-15 live run: skip with
 # "not reachable" although the container was up and healthy).
 DEFAULT_LITELLM = "http://127.0.0.1:4000/health/liveliness"
 DEFAULT_CONTAINER = "container"
-SECRETS_DIR = os.environ.get("VIBELAB_EGRESS_SECRETS", "/etc/vibelab-egress/secrets")
-ROOT = os.environ.get("VIBELAB_EGRESS_ROOT", "/var/lib/vibelab-egress")
-REPO = os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress")
+SECRETS_DIR = os.environ.get("EGRESS_SECRETS", "/etc/egress/secrets")
+ROOT = os.environ.get("EGRESS_ROOT", "/var/lib/egress")
+REPO = os.environ.get("EGRESS_REPO", "/srv/workspace/egress")
 HOST_TEST = os.path.join(REPO, "host", "egress-host-test")
 PROBE_DOMAIN = "www.cloudflare.com"
 IP_SERVICES = ("https://api.ipify.org", "https://ifconfig.co/ip")
@@ -125,8 +125,8 @@ def _collect_secret_values():
             pass
 
     for p in (
-        os.path.join("/etc/vibelab-egress", "client.token"),
-        os.path.join("/etc/vibelab-egress", "default-proxy.auth"),
+        os.path.join("/etc/egress", "client.token"),
+        os.path.join("/etc/egress", "default-proxy.auth"),
     ):
         add(p, os.path.basename(p))
     # client config token/auth file paths (host + container)
@@ -145,7 +145,7 @@ def _collect_secret_values():
                 full = os.path.join(root_, fn)
                 add(full, os.path.relpath(full, SECRETS_DIR))
     # environment-provided secrets
-    for env in ("VIBELAB_EGRESS_CONTAINER_TOKEN", "VIBELAB_EGRESS_CONTAINER_AUTH"):
+    for env in ("EGRESS_CONTAINER_TOKEN", "EGRESS_CONTAINER_AUTH"):
         v = os.environ.get(env, "").strip()
         if v:
             vals.append((v, env))
@@ -222,7 +222,7 @@ def is_local_bind(ip):
 
 
 def http_get(url, timeout=10):
-    req = urllib.request.Request(url, headers={"User-Agent": "vibelab-egress-acceptance"})
+    req = urllib.request.Request(url, headers={"User-Agent": "egress-acceptance"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, r.read().decode("utf-8", "replace")
 
@@ -326,7 +326,7 @@ def _client_cmd(base, module, config, args):
     if binpath:
         return [binpath, "--config", config, "--json"] + args if base == "egressctl" \
             else [binpath, "--config", config] + args
-    mod = "vibelab_egress_client." + module
+    mod = "egress_client." + module
     return [sys.executable, "-m", mod, "--config", config, "--json"] + args \
         if module == "egressctl" else [sys.executable, "-m", mod, "--config", config] + args
 
@@ -364,7 +364,7 @@ def _client_version(host):
         m = re.search(r"sys\.path\.insert\(0,\s*'([^']+)'", txt)
         if not m:
             return None
-        init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
+        init = os.path.join(m.group(1), "egress_client", "__init__.py")
         data = read_file(init)
     else:
         r = container_exec(["cat", wrapper], timeout, redact)
@@ -373,7 +373,7 @@ def _client_version(host):
         m = re.search(r"sys\.path\.insert\(0,\s*'([^']+)'", r["stdout"])
         if not m:
             return None
-        init = os.path.join(m.group(1), "vibelab_egress_client", "__init__.py")
+        init = os.path.join(m.group(1), "egress_client", "__init__.py")
         r = container_exec(["cat", init], timeout, redact)
         data = r["stdout"] if r["rc"] == 0 else None
     if not data:
@@ -826,8 +826,8 @@ def _yaml_lines(path):
 
 def check_tun_static():
     def fn():
-        runtime = os.path.join(REPO, "client/src/vibelab_egress_client/tun_runtime.py")
-        bootstrap = os.path.join(REPO, "client/src/vibelab_egress_client/tun_bootstrap.py")
+        runtime = os.path.join(REPO, "client/src/egress_client/tun_runtime.py")
+        bootstrap = os.path.join(REPO, "client/src/egress_client/tun_bootstrap.py")
         try:
             text = open(runtime, encoding="utf-8").read() + open(bootstrap, encoding="utf-8").read()
         except OSError as exc:
@@ -910,7 +910,7 @@ def check_a8_recreate():
             # installed config was not the container's bundle).
             diag = {}
             diag["installed_client_yaml"] = container_exec(
-                ["cat", "/etc/vibelab-egress/client.yaml"],
+                ["cat", "/etc/egress/client.yaml"],
                 timeout, redact)["stdout"][:800]
             diag["installed_egressctl_config_show"] = container_exec(
                 ["egressctl", "config", "show"], timeout, redact)["stdout"][:800]
@@ -1108,7 +1108,7 @@ def check_a8_secrets():
                             leaks.append(f"artifact:{p} (secret: {label})")
                             break
         # 3. docker logs of the egress stack
-        for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd"):
+        for svc in ("egress-mihomo", "egress-egressd"):
             lg = _run(["docker", "logs", "--tail", "2000", svc], 30, redact)
             for sv, label in secrets:
                 if sv in (lg["stdout"] + lg["stderr"]):
@@ -1152,8 +1152,8 @@ def check_a8_docker_socket():
     def fn():
         redact = CTX["redact"]
         mounts = []
-        for svc in ("vibelab-egress-mihomo", "vibelab-egress-egressd",
-                    "vibelab-egress-egressd"):
+        for svc in ("egress-mihomo", "egress-egressd",
+                    "egress-egressd"):
             r = _run(["docker", "inspect", "--format", "{{json .Mounts}}", svc],
                      15, redact)
             if r["rc"] != 0:
@@ -1368,11 +1368,11 @@ def main(argv=None):
     ap.add_argument("--out", default="host_acceptance_report.json")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--container-config",
-                    default=os.environ.get("VIBELAB_EGRESS_CONTAINER_CONFIG", DEFAULT_CONTAINER_CONFIG))
+                    default=os.environ.get("EGRESS_CONTAINER_CONFIG", DEFAULT_CONTAINER_CONFIG))
     ap.add_argument("--litellm-url",
-                    default=os.environ.get("VIBELAB_EGRESS_LITELLM_URL", DEFAULT_LITELLM))
+                    default=os.environ.get("EGRESS_LITELLM_URL", DEFAULT_LITELLM))
     ap.add_argument("--container",
-                    default=os.environ.get("VIBELAB_EGRESS_CONTAINER",
+                    default=os.environ.get("EGRESS_CONTAINER",
                                            DEFAULT_CONTAINER))
     ap.add_argument("--recreate", action="store_true",
                     help="restart the Docker container to observe client "
@@ -1408,7 +1408,7 @@ def main(argv=None):
         "total": len(RESULTS),
     }
     report = {
-        "report": "vibelab-egress live acceptance",
+        "report": "egress live acceptance",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "host": socket.gethostname(),
         "user": os.environ.get("USER", ""),

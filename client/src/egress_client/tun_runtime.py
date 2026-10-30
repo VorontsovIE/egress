@@ -18,13 +18,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ENGINE_ENV = "VIBELAB_EGRESS_TUN_ENGINE"
-DEFAULT_ENGINE = "/usr/local/libexec/vibelab-egress/egress-tun-engine"
-BOOTSTRAP_MODULE = "vibelab_egress_client.tun_bootstrap"
+ENGINE_ENV = "EGRESS_TUN_ENGINE"
+DEFAULT_ENGINE = "/usr/local/libexec/egress/egress-tun-engine"
+BOOTSTRAP_MODULE = "egress_client.tun_bootstrap"
 
 
 def engine_path() -> str | None:
+    user_engine = Path.home() / ".local" / "share" / "egress" / "current" / "egress-tun-engine"
     candidate = os.environ.get(ENGINE_ENV, DEFAULT_ENGINE)
+    if candidate == DEFAULT_ENGINE and user_engine.is_file():
+        candidate = str(user_engine)
     return candidate if os.path.isfile(candidate) and os.access(candidate, os.X_OK) else None
 
 
@@ -151,9 +154,9 @@ def run(command: list[str], *, env: dict[str, str], cwd: str,
     existing_pythonpath = child_env.get("PYTHONPATH", "")
     child_env["PYTHONPATH"] = os.pathsep.join(
         item for item in (module_root, existing_pythonpath) if item)
-    child_env["VIBELAB_EGRESS_TUN_MODULE_ROOT"] = module_root
-    child_env["VIBELAB_EGRESS_TUN_CONTROL_FD"] = str(child_sock.fileno())
-    child_env["VIBELAB_EGRESS_TUN_DNS"] = ",".join(dns_servers)
+    child_env["EGRESS_TUN_MODULE_ROOT"] = module_root
+    child_env["EGRESS_TUN_CONTROL_FD"] = str(child_sock.fileno())
+    child_env["EGRESS_TUN_DNS"] = ",".join(dns_servers)
     bootstrap = [sys.executable, "-m", BOOTSTRAP_MODULE, "--", *command]
     proc = None
     engine_proc = None

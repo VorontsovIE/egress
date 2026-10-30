@@ -37,7 +37,7 @@ The term “client container” means any Docker container using the egress serv
 
 # 1. Solution summary
 
-Deploy a dedicated Docker Compose stack, `vibelab-egress`, based on Mihomo.
+Deploy a dedicated Docker Compose stack, `egress`, based on Mihomo.
 
 The backend is deployed separately from clients and their execution environments:
 
@@ -78,7 +78,7 @@ Custom code SHOULD remain minimal and consist of:
 
 The deployment topology is normative for the architecture.
 
-### Backend Docker Compose stack `vibelab-egress`
+### Backend Docker Compose stack `egress`
 
 The main egress stack MUST run in Docker and MUST be deployed separately from client containers.
 
@@ -88,7 +88,7 @@ Docker host
 +-- container stack
 |   `-- container
 |
-`-- vibelab-egress stack
+`-- egress stack
     |-- mihomo
     `-- egressd
 ```
@@ -96,8 +96,8 @@ Docker host
 Prefer running Mihomo and `egressd` as two services in one Compose project:
 
 ```text
-vibelab-egress-mihomo
-vibelab-egress-egressd
+egress-mihomo
+egress-egressd
 ```
 
 Combining them in one container requires a separate justification and MUST NOT automatically grant `egressd` the privileges required by Mihomo or TUN.
@@ -160,13 +160,13 @@ The same client binary MUST work with an environment-specific configuration.
 Recommended canonical path:
 
 ```text
-/etc/vibelab-egress/client.yaml
+/etc/egress/client.yaml
 ```
 
 and the override:
 
 ```text
-VIBELAB_EGRESS_CONFIG=/path/to/client.yaml
+EGRESS_CONFIG=/path/to/client.yaml
 ```
 
 Minimum configuration:
@@ -177,8 +177,8 @@ control_url: http://host.docker.internal:9091
 proxy_host: host.docker.internal
 default_proxy_port: 1080
 oneshot_proxy_port: 1081
-api_token_file: /run/secrets/vibelab_egress_client_token
-default_proxy_auth_file: /run/secrets/vibelab_egress_default_proxy_auth
+api_token_file: /run/secrets/egress_client_token
+default_proxy_auth_file: /run/secrets/egress_egress_default_proxy_auth
 environment: container
 tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1
@@ -192,8 +192,8 @@ control_url: http://127.0.0.1:9091
 proxy_host: 127.0.0.1
 default_proxy_port: 1080
 oneshot_proxy_port: 1081
-api_token_file: /etc/vibelab-egress/client.token
-default_proxy_auth_file: /etc/vibelab-egress/default-proxy.auth
+api_token_file: /etc/egress/client.token
+default_proxy_auth_file: /etc/egress/default-proxy.auth
 environment: host
 tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1
@@ -260,7 +260,7 @@ HOST workload
     v
 +----------------------------+
 |                            |
-|      vibelab-egress        |----> Internet / VPN
+|      egress        |----> Internet / VPN
 |      egressd + Mihomo      |
 |                            |
 +----------------------------+
@@ -524,7 +524,7 @@ If a directly accessed service is on another machine, the operator MUST be able 
                                |
                                v
                   +-----------------------------+
-                  | vibelab-egress Docker stack |
+                  | egress Docker stack |
                   |                             |
                   | +---------+      private    |
                   | | egressd |-----------------+----+
@@ -1317,8 +1317,8 @@ The client token is considered accessible to all code in its execution environme
 The client package supports configuration discovery in this order:
 
 1. explicit `--config PATH` (if supported by the command);
-2. `VIBELAB_EGRESS_CONFIG`;
-3. `/etc/vibelab-egress/client.yaml`;
+2. `EGRESS_CONFIG`;
+3. `/etc/egress/client.yaml`;
 4. optional user config path, only if explicitly documented.
 
 The CLI provides:
@@ -1496,7 +1496,7 @@ scripts/bootstrap-dev-access.sh   # when using a narrow dev/test bridge
 For each client profile:
 
 1. install the same `egressctl` + `egress-run` binaries/package;
-2. install an environment-specific `/etc/vibelab-egress/client.yaml`;
+2. install an environment-specific `/etc/egress/client.yaml`;
 3. provide a separate API token and default-proxy credentials as read-only secrets;
 4. install the skill if the environment runs an agent;
 5. run `egressctl config validate`;
@@ -1540,7 +1540,7 @@ After initial bootstrap/provisioning, a contributor should be able to:
 
 ## 33.2. Host-side operations
 
-The primary egress runtime runs in the `vibelab-egress` Docker Compose stack.
+The primary egress runtime runs in the `egress` Docker Compose stack.
 
 Host privileges are required for:
 
@@ -1648,7 +1648,7 @@ Network reachability does not replace application authentication: control API an
 Recommended backend layout:
 
 ```text
-/etc/vibelab-egress/secrets/
+/etc/egress/secrets/
   mihomo_api_secret
   providers/
     blanc_subscription
@@ -1665,14 +1665,14 @@ Client-side examples:
 
 ```text
 host:
-  /etc/vibelab-egress/client.yaml
-  /etc/vibelab-egress/client.token
-  /etc/vibelab-egress/default-proxy.auth
+  /etc/egress/client.yaml
+  /etc/egress/client.token
+  /etc/egress/default-proxy.auth
 
 container:
-  /etc/vibelab-egress/client.yaml
-  /run/secrets/vibelab_egress_client_token
-  /run/secrets/vibelab_egress_default_proxy_auth
+  /etc/egress/client.yaml
+  /run/secrets/egress_client_token
+  /run/secrets/egress_egress_default_proxy_auth
 ```
 
 Use permissions `0700/0600` or equivalent read-only secret mounts.
@@ -1695,7 +1695,7 @@ The persistent root is configurable and MUST be located on a filesystem with suf
 Example:
 
 ```text
-/var/lib/vibelab-egress/
+/var/lib/egress/
   mihomo/
   providers/
   generated/
@@ -1821,13 +1821,12 @@ If the agent has a local shell and the skill, the preferred path remains `egress
 # 44. Repository layout
 
 ```text
-vibelab-egress/
+egress/
   TECH_SPEC.md
   README.md
   INSTALL.md
   compose.yaml
   scripts/build-tun-engine.sh
-  scripts/remove-legacy-tun-helper.sh
 
   mihomo/
     config.template.yaml
@@ -1841,7 +1840,7 @@ vibelab-egress/
 
   client/
     pyproject.toml
-    src/vibelab_egress_client/
+    src/egress_client/
       egressctl.py
       egress_run.py
       config.py
@@ -2321,9 +2320,9 @@ This specification defines requirements and invariants. Verify exact Mihomo synt
 
 # 52. Personal profiles and sources
 
-1. On a host, each local user, including a service account without a home directory, receives a `host-<username>` profile on first client use. Container setup defaults to `container-<username>`. Usernames are limited to `[A-Za-z0-9._-]`; if the name is unavailable/unsafe or the ID exceeds 64 characters, use `host-uid-<uid>` / `container-uid-<uid>`. Without `--client`, `setup-egress-client.sh` derives the same ID from `SUDO_UID` (or the current UID when run directly as root). An explicit `--client` selects an additional profile. Backend updates migrate UID profiles and personal provider IDs after checking for collisions and active one-shot sessions, and create a backup; the installer stops both Compose services before migration. Restore a backup with `scripts/migrate-egress-identities.py --restore <backup>`. All UIDs may access the local enrollment socket; the service derives UID from `SO_PEERCRED` and does not accept a UID/client ID from the request. The client receives credentials in memory without writing them to the user's home. `egressctl` and `egress-run` run as the original UID without sudo.
+1. On a host, each local user, including a service account without a home directory, receives a `host-<username>` profile on first client use. Container setup defaults to `container-<username>`. Usernames are limited to `[A-Za-z0-9._-]`; if the name is unavailable/unsafe or the ID exceeds 64 characters, use `host-uid-<uid>` / `container-uid-<uid>`. Without `--client`, `setup-egress-client.sh` derives the same ID from `SUDO_UID` (or the current UID when run directly as root). An explicit `--client` selects an additional profile. All UIDs may access the local enrollment socket; the service derives UID from `SO_PEERCRED` and does not accept a UID/client ID from the request. The client receives credentials in memory without writing them to the user's home. `egressctl` and `egress-run` run as the original UID without sudo.
 2. Global providers and installation remain administrator-managed. An ordinary profile can add a personal provider from a subscription URL, local file, or single proxy URI using `egressctl source add` (`--url`, `--file`, `--uri`). It can see/use global and owned routes, but cannot see other profiles' routes or sources. Server-side ACL applies to listing, default selection, tests, probes, benchmarks, provider updates, and one-shot sessions. Mihomo's persistent default group contains only global and client-owned providers.
 3. For host profiles, the source subscription is stored and refreshed on the backend under the service account. For container profiles, the source URL or file is stored **inside the container** in a private user directory with modes `0700/0600`. The container fetches and normalizes the subscription itself and sends only a YAML snapshot of nodes to the backend. The backend does not read, refresh, or delete the container's source URL/files; `egressctl source refresh` runs inside the container. Container-side normalization uses an optional adapter and PyYAML; the base client remains standard-library-only.
 4. Personal-provider API: `GET/POST /v1/personal/providers`, `PUT /v1/personal/providers/{alias}/snapshot`, `POST /v1/personal/providers/{alias}/refresh`, and `DELETE /v1/personal/providers/{alias}`. Hosts use POST/refresh; containers use snapshot. Repeating `source add` with the same alias, type, and URL/URI/file contents returns success with `skipped: true`, without refetch or regeneration. Host `source refresh` recreates the provider from the stored URL or URI. Alias and owner are derived from the authenticated profile. Source secrets are never returned by the API.
 5. Personal proxy endpoints and subscription URLs MUST resolve only to public addresses. During import, nodes with a non-public or unresolvable server address are skipped; the API/CLI report the count. Reject the import if no usable nodes remain. For DNS names, pin the validated public IP in the node configuration so Mihomo does not resolve the name again when connecting. Source and normalized snapshot sizes are limited to 4 MiB; there is no separate maximum node count. Limit personal providers to 32 per profile. Changes/deletions regenerate configuration and roll back on reload failure.
-6. A personal provider's canonical ID is `p-<client_id>-<alias>` (for example, `p-host-<username>-blanc`). The CLI also accepts `@<alias>:<node>` and resolves the alias against the personal-provider list visible to the current bearer token. The API continues to accept/return canonical route IDs. Migration records previous provider IDs in `legacy_provider_ids` with compatibility version 1; the backend temporarily accepts old route IDs while checking ownership against the new provider.
+6. A personal provider's canonical ID is `p-<client_id>-<alias>` (for example, `p-host-<username>-blanc`). The CLI also accepts `@<alias>:<node>` and resolves the alias against the personal-provider list visible to the current bearer token. The API continues to accept/return canonical route IDs.

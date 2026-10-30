@@ -63,7 +63,7 @@ def test_container_snapshot_private_and_no_raw_source(tmp_path, monkeypatch):
 
 def test_personal_provider_id_contains_client_and_alias():
     from egressd.personal import provider_id
-    assert provider_id("host-vibelab", "blanc") == "p-host-vibelab-blanc"
+    assert provider_id("host-egress", "blanc") == "p-host-egress-blanc"
 
 
 def test_host_add_same_source_skips_without_regeneration(tmp_path, monkeypatch):

@@ -15,6 +15,7 @@ Use `egressctl --help` or `egressctl COMMAND --help` for live syntax. Global opt
 | `benchmark [ROUTE]` | Measure a route or benchmark a latency shortlist |
 | `best` | Rank routes, optionally filtering by country, provider, domain, or latency |
 | `update` | Trigger provider updates; supports `--provider`, `--via`, `--if-older-than` |
+| `upgrade` | Update client/backend from a release; supports version and component selection |
 | `source list|add|refresh|remove` | Manage client-owned private sources |
 | `oneshot active` | List active one-shot sessions |
 | `geo status|update` | Inspect or update GEO datasets |
@@ -50,8 +51,10 @@ egressctl probe-domain DOMAIN [--all] [--country CODE] [--provider ID]
 
 `benchmark` without a route first selects up to `--top-latency` routes (default 5) and benchmarks that shortlist. `--bytes` defaults to `8M`. `best --speed-aware` includes recent throughput in ranking; `--limit` changes how many candidates are printed (default 10). Probe defaults and backend limits are configurable server-side; `--all` requests catalog routes up to the per-request backend limit. Provider updates without `--provider` request an update of all providers. Durations accepted by `--if-older-than` use values such as `6h`.
 
-`source add NAME` requires exactly one of `--url URL`, `--file PATH`, or `--uri URI`; for URL/URI, `-` reads one line from standard input. `source refresh NAME`, `source remove NAME`, and `source list` manage client-owned sources. Container-side `source add` and `source refresh` require PyYAML for local normalization; the core CLI remains standard-library-only.
+`egressctl upgrade [--version vX.Y.Z] [--client-only | --backend-only]` selects the release and components. `--client-only` works without administrator rights; full/backend upgrades require explicit `sudo`. Without the required rights, the command prints the supported alternatives and exits without changing files. Privileged updates require a root-owned updater and reject user-writable Python installations.
 
-`--config` overrides `VIBELAB_EGRESS_CONFIG`; otherwise the client uses `/etc/vibelab-egress/client.yaml`. Secret values are read from separate files referenced by the config. `egressctl config show` masks secrets by default; `--secrets` displays them and should be used with care.
+`source add NAME` requires exactly one of `--url URL`, `--file PATH`, or `--uri URI`; for URL/URI, `-` reads one line from standard input. `source refresh NAME` and `source list` manage client-owned sources. Remove a provider profile with `provider remove --personal ALIAS`; managed profiles require `sudo egressctl provider remove --managed ID`. Container-side `source add` and `source refresh` require PyYAML for local normalization; the core CLI remains standard-library-only.
+
+`--config` overrides `EGRESS_CONFIG`; otherwise the client uses `/etc/egress/client.yaml`. Secret values are read from separate files referenced by the config. `egressctl config show` masks secrets by default; `--secrets` displays them and should be used with care.
 
 `egressctl` exit codes: 0 success, 1 runtime/API error, 2 usage error, 3 configuration error, 4 authentication error, 5 identity mismatch. `egress-run` also uses 6 for unsupported local capability. For the precise syntax and accepted option values, prefer each command's `--help` output.

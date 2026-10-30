@@ -56,8 +56,8 @@ def test_capabilities_advertise_same_local_tun_backend(egress, client_id):
 
 
 def test_client_runtime_has_no_privileged_helper_or_shared_socket():
-    files = [ROOT / "client/src/vibelab_egress_client/tun_runtime.py",
-             ROOT / "client/src/vibelab_egress_client/tun_bootstrap.py"]
+    files = [ROOT / "client/src/egress_client/tun_runtime.py",
+             ROOT / "client/src/egress_client/tun_bootstrap.py"]
     source = "\n".join(p.read_text() for p in files)
     assert "SCM_RIGHTS" in source
     assert "--user" in source and "--net" in source

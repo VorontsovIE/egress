@@ -158,7 +158,7 @@ def _client_env(base: Path, cid: str, port: int) -> tuple[Path, dict]:
 
 def _ctl(cfg: Path, env: dict, *args, timeout: float = 30.0) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-m", "vibelab_egress_client.egressctl",
+        [sys.executable, "-m", "egress_client.egressctl",
          "--config", str(cfg), *args],
         capture_output=True, text=True, env=env, timeout=timeout,
     )
@@ -166,7 +166,7 @@ def _ctl(cfg: Path, env: dict, *args, timeout: float = 30.0) -> subprocess.Compl
 
 def _run(cfg: Path, env: dict, *args, timeout: float = 60.0) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-m", "vibelab_egress_client.egress_run",
+        [sys.executable, "-m", "egress_client.egress_run",
          "--config", str(cfg), *args],
         capture_output=True, text=True, env=env, timeout=timeout,
     )
@@ -191,7 +191,7 @@ def _api(url: str, token: str, method: str, path: str, body=None) -> tuple[int, 
 # ---------------------------------------------------------------------------
 class TestIdentity:
     def test_version_reported(self, backend):
-        from vibelab_egress_client import __version__
+        from egress_client import __version__
         assert __version__
 
     def test_config_validate(self, backend):
@@ -448,7 +448,7 @@ class TestEgressRun:
         ready = tmp_path / "ready"
         marker = tmp_path / "sigterm-marker"
         proc = subprocess.Popen(
-            [sys.executable, "-m", "vibelab_egress_client.egress_run",
+            [sys.executable, "-m", "egress_client.egress_run",
              "--config", str(cfg), "direct", "--", "sh", "-c",
              f"trap 'touch {marker}; exit 143' TERM; touch {ready};"
              f" while :; do sleep 0.1; done"],
@@ -479,7 +479,7 @@ class TestEgressRun:
                                    "direct")):
             marker = tmp_path / f"conc-{i}"
             procs.append((route, marker, subprocess.Popen(
-                [sys.executable, "-m", "vibelab_egress_client.egress_run",
+                [sys.executable, "-m", "egress_client.egress_run",
                  "--config", str(cfg), route, "--", sys.executable, "-c",
                  f"import time; time.sleep(0.5); open({str(marker)!r}, 'w').write('ok')"],
                 env=env, stdout=subprocess.DEVNULL,

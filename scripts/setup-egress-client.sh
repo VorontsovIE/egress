@@ -7,20 +7,20 @@ CLIENT=""
 SOURCE_CLIENT=""
 CLIENT_EXPLICIT=0
 ENVIRONMENT=""
-EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-}"
-if [ -r /etc/vibelab-egress/compose.env ]; then
+EGRESS_ROOT="${EGRESS_ROOT:-}"
+SECRETS_DIR="${EGRESS_SECRETS:-}"
+if [ -r /etc/egress/compose.env ]; then
   # Read only these data values; do not source/evaluate the Compose env file.
   while IFS='=' read -r key value; do
     case "$key" in
-      VIBELAB_EGRESS_ROOT) [ -n "$EGRESS_ROOT" ] || EGRESS_ROOT="$value" ;;
-      VIBELAB_EGRESS_SECRETS) [ -n "$SECRETS_DIR" ] || SECRETS_DIR="$value" ;;
+      EGRESS_ROOT) [ -n "$EGRESS_ROOT" ] || EGRESS_ROOT="$value" ;;
+      EGRESS_SECRETS) [ -n "$SECRETS_DIR" ] || SECRETS_DIR="$value" ;;
     esac
-  done < /etc/vibelab-egress/compose.env
+  done < /etc/egress/compose.env
 fi
-EGRESS_ROOT="${EGRESS_ROOT:-/var/lib/vibelab-egress}"
-SECRETS_DIR="${SECRETS_DIR:-/etc/vibelab-egress/secrets}"
-OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-$EGRESS_ROOT/client-bundles}"
+EGRESS_ROOT="${EGRESS_ROOT:-/var/lib/egress}"
+SECRETS_DIR="${SECRETS_DIR:-/etc/egress/secrets}"
+OUT="${EGRESS_BUNDLE_ROOT:-$EGRESS_ROOT/client-bundles}"
 OUT_EXPLICIT=0
 DOCKER_TEST=0
 COPY_PERSONAL_SOURCE=0
@@ -42,7 +42,7 @@ host-<username> for host setup and container-<username> for container setup.
 If the account name is unavailable or unsafe, the ID falls back to *-uid-<uid>.
 Pass --client to use a different profile.
 On host, select an explicitly installed --client profile for commands with
---config /etc/vibelab-egress/client.yaml or VIBELAB_EGRESS_CONFIG; automatic
+--config /etc/egress/client.yaml or EGRESS_CONFIG; automatic
 host enrollment otherwise selects the invoking user's default profile.
 Options: --out <bundle-root>, --secrets-dir <path>, --root <backend-root>.
 --copy-personal-source snapshots a personal provider under the test client's
@@ -134,9 +134,9 @@ if [ "$ENVIRONMENT" = host ]; then
     --client "$CLIENT" --target host --bundle "$BUNDLE"
   if [ "${CLIENT_EXPLICIT:-0}" = 1 ]; then
     echo "Host client profile installed. Select this explicit override with:"
-    echo "  egressctl --config /etc/vibelab-egress/client.yaml whoami"
-    echo "  egressctl --config /etc/vibelab-egress/client.yaml capabilities"
-    echo "  egress-run --config /etc/vibelab-egress/client.yaml ROUTE -- command"
+    echo "  egressctl --config /etc/egress/client.yaml whoami"
+    echo "  egressctl --config /etc/egress/client.yaml capabilities"
+    echo "  egress-run --config /etc/egress/client.yaml ROUTE -- command"
   else
     echo "Host client is ready. Check TUN support with: egressctl capabilities"
   fi
@@ -156,8 +156,8 @@ elif [ "$DOCKER_TEST" = 1 ]; then
         fi
       done
       if [ -z "$target_provider" ]; then
-        result="$(VIBELAB_EGRESS_ROOT="$EGRESS_ROOT" \
-          VIBELAB_EGRESS_SECRETS="$SECRETS_DIR" \
+        result="$(EGRESS_ROOT="$EGRESS_ROOT" \
+          EGRESS_SECRETS="$SECRETS_DIR" \
           python3 "$ROOT/host/egress-hostctl" copy-personal-source \
             --source-route "$route" --source-client "$SOURCE_CLIENT" --target-client "$CLIENT")"
         copied_route="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["target_route"])' <<< "$result")"

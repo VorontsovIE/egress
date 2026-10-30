@@ -60,7 +60,7 @@ class CapData(ctypes.Structure):
 
 
 def _control() -> socket.socket:
-    fd = int(os.environ["VIBELAB_EGRESS_TUN_CONTROL_FD"])
+    fd = int(os.environ["EGRESS_TUN_CONTROL_FD"])
     return socket.socket(fileno=fd)
 
 
@@ -229,7 +229,7 @@ def _start_local_dns_proxy(configured: tuple[str, ...] | None = None) -> int | N
     listeners = _outer_dns_servers()
     if configured is None:
         configured = tuple(x.strip() for x in
-                           os.environ.get("VIBELAB_EGRESS_TUN_DNS", "").split(",")
+                           os.environ.get("EGRESS_TUN_DNS", "").split(",")
                            if x.strip())
     if not listeners:
         return None
@@ -377,12 +377,12 @@ def main(argv: list[str] | None = None) -> int:
         os.close(tun_fd)
         tun_fd = None
         dns_upstreams = tuple(x.strip() for x in
-                              os.environ.get("VIBELAB_EGRESS_TUN_DNS", "").split(",")
+                              os.environ.get("EGRESS_TUN_DNS", "").split(",")
                               if x.strip())
-        os.environ.pop("VIBELAB_EGRESS_TUN_CONTROL_FD", None)
-        os.environ.pop("VIBELAB_EGRESS_TUN_DNS", None)
-        os.environ.pop("VIBELAB_EGRESS_TUN_ENGINE", None)
-        module_root = os.environ.pop("VIBELAB_EGRESS_TUN_MODULE_ROOT", None)
+        os.environ.pop("EGRESS_TUN_CONTROL_FD", None)
+        os.environ.pop("EGRESS_TUN_DNS", None)
+        os.environ.pop("EGRESS_TUN_ENGINE", None)
+        module_root = os.environ.pop("EGRESS_TUN_MODULE_ROOT", None)
         if module_root:
             os.environ["PYTHONPATH"] = os.pathsep.join(
                 item for item in os.environ.get("PYTHONPATH", "").split(os.pathsep)

@@ -74,4 +74,4 @@ Build the client TUN packet engine separately with `scripts/build-tun-engine.sh`
 - `poc/`: PoC sources, generated binaries, and run artifacts.
 - `reports/`: acceptance reports.
 
-Persistent host data defaults to `/var/lib/vibelab-egress`; protected secrets default to `/etc/vibelab-egress/secrets`. Override supported paths with the documented script options or environment variables.
+Persistent host data defaults to `/var/lib/egress`; protected secrets default to `/etc/egress/secrets`. Override supported paths with the documented script options or environment variables.

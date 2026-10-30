@@ -1,4 +1,4 @@
-"""Mihomo configuration generator for vibelab-egress.
+"""Mihomo configuration generator for egress.
 
 Produces the complete Mihomo config from declarative inputs:
 provider definitions, client definitions, one-shot slot allocation and

@@ -1,4 +1,4 @@
-# vibelab-egress backend stack (spec sections 1.1, 36, 37, 38).
+# egress backend stack (spec sections 1.1, 36, 37, 38).
 #
 # Security invariants enforced by this file:
 #   * NO public binds: every published port is bound to 127.0.0.1 (host
@@ -13,22 +13,22 @@
 #   * Mihomo image is pinned by tag AND digest.
 #
 # Variables (set by install-backend-host.sh, sane defaults for dev):
-#   VIBELAB_EGRESS_ROOT   persistent data root (default /var/lib/vibelab-egress)
-#   VIBELAB_EGRESS_SECRETS backend secrets dir (default /etc/vibelab-egress/secrets)
+#   EGRESS_ROOT   persistent data root (default /var/lib/egress)
+#   EGRESS_SECRETS backend secrets dir (default /etc/egress/secrets)
 #   DOCKER_GATEWAY        IP of the Docker bridge gateway for container
 #                         clients (default 172.17.0.1)
 #   MIHOMO_IMAGE          pinned mihomo image (default metacubex/mihomo:v1.19.32)
 #   EGRESSD_IMAGE         egressd image (default GHCR latest; set a version tag to pin)
 
-name: vibelab-egress
+name: egress
 
 x-secrets: &secrets
-  - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
+  - ${EGRESS_SECRETS:-/etc/egress/secrets}:/etc/egress/secrets:ro
 
 services:
-  vibelab-egress-mihomo:
+  egress-mihomo:
     image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e}
-    container_name: vibelab-egress-mihomo
+    container_name: egress-mihomo
     restart: unless-stopped
     command:
       - -d
@@ -48,11 +48,11 @@ services:
       - "${DOCKER_GATEWAY:-172.17.0.1}:1081:18081/udp"
     volumes:
       # persistent mihomo state (bbolt cache with stored selections, logs)
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/mihomo:/root/.config/mihomo
+      - ${EGRESS_ROOT:-/var/lib/egress}/mihomo:/root/.config/mihomo
       # generated config (written by egressd, read by mihomo)
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/generated:/root/.config/mihomo/generated:ro
+      - ${EGRESS_ROOT:-/var/lib/egress}/generated:/root/.config/mihomo/generated:ro
       # provider subscriptions (read-only; updates go through egressd)
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/providers:/root/.config/mihomo/providers:ro
+      - ${EGRESS_ROOT:-/var/lib/egress}/providers:/root/.config/mihomo/providers:ro
       # GEO data is OPTIONAL and mihomo-managed: the generated config sets
       # geox-url + geo-auto-update (spec 14.1), so mihomo downloads/refreshes
       # GeoIP/GeoSite/ASN into its own persistent home dir (the `mihomo`
@@ -64,7 +64,7 @@ services:
       # auto-update succeeds.
       # the mihomo API secret is needed by the healthcheck; it is already
       # present in the generated config, so this adds no new exposure.
-      - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}/mihomo_api_secret:/etc/vibelab-egress/secrets/mihomo_api_secret:ro
+      - ${EGRESS_SECRETS:-/etc/egress/secrets}/mihomo_api_secret:/etc/egress/secrets/mihomo_api_secret:ro
     networks:
       - egress-net
     healthcheck:
@@ -75,7 +75,7 @@ services:
         - CMD-SHELL
         - |
           wget -q -O /dev/null \
-            --header="Authorization: Bearer $(tr -d '\n' < /etc/vibelab-egress/secrets/mihomo_api_secret)" \
+            --header="Authorization: Bearer $(tr -d '\n' < /etc/egress/secrets/mihomo_api_secret)" \
             http://127.0.0.1:9090/version
       interval: 30s
       timeout: 5s
@@ -86,22 +86,22 @@ services:
     # No cap_add / privileged: TUN (if ever enabled) comes via host TUN systemd unit
     # with an explicit, reviewed privilege grant (spec section 21, phase A6).
 
-  vibelab-egress-egressd:
+  egress-egressd:
     user: "${EGRESSD_UID:-1000}:${EGRESSD_GID:-1000}"
     image: ${EGRESSD_IMAGE:-ghcr.io/vorontsovie/egress:latest}
-    container_name: vibelab-egress-egressd
+    container_name: egress-egressd
     restart: unless-stopped
     environment:
       # Non-secret configuration only. Secrets are read from mounted files.
-      MIHOMO_API_URL: http://vibelab-egress-mihomo:9090
-      MIHOMO_SECRET_FILE: /etc/vibelab-egress/secrets/mihomo_api_secret
-      EGRESSD_CLIENTS_DIR: /etc/vibelab-egress/secrets/clients
+      MIHOMO_API_URL: http://egress-mihomo:9090
+      MIHOMO_SECRET_FILE: /etc/egress/secrets/mihomo_api_secret
+      EGRESSD_CLIENTS_DIR: /etc/egress/secrets/clients
       # The allocator, probe engine, and config generator must use the SAME
       # persisted one-shot passwords created by bootstrap_config. Without this
       # path they choose different fallback passwords and SOCKS auth fails.
-      EGRESSD_ONESHOT_SLOTS_FILE: /etc/vibelab-egress/secrets/clients/oneshot-slots.json
+      EGRESSD_ONESHOT_SLOTS_FILE: /etc/egress/secrets/clients/oneshot-slots.json
       EGRESSD_PROVIDERS_DIR: /var/lib/egressd/providers
-      EGRESSD_PROVIDER_SOURCES_DIR: /etc/vibelab-egress/secrets/providers
+      EGRESSD_PROVIDER_SOURCES_DIR: /etc/egress/secrets/providers
       EGRESSD_MIHO_PROVIDER_DIR: /root/.config/mihomo/providers
       EGRESSD_DATA_DIR: /var/lib/egressd
       EGRESSD_GENERATED_DIR: /var/lib/egressd/generated
@@ -123,20 +123,20 @@ services:
       # (127.0.0.1 would point at nothing there — 2026-10-15 live run:
       # every probe was proxy_failure). Client-facing capability endpoints
       # keep reporting the client's own vantage (EGRESSD_PROXY_HOST).
-      EGRESSD_PROBE_HOST: vibelab-egress-mihomo
+      EGRESSD_PROBE_HOST: egress-mihomo
     # egressd public narrow API: host loopback + container gateway only.
     ports:
       - "127.0.0.1:9091:9091"
       - "${DOCKER_GATEWAY:-172.17.0.1}:9091:9091"
     volumes:
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/egressd:/var/lib/egressd
+      - ${EGRESS_ROOT:-/var/lib/egress}/egressd:/var/lib/egressd
       # generated config output (egressd writes, mihomo reads via its mount)
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/generated:/var/lib/egressd/generated
-      - ${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}/providers:/var/lib/egressd/providers
+      - ${EGRESS_ROOT:-/var/lib/egress}/generated:/var/lib/egressd/generated
+      - ${EGRESS_ROOT:-/var/lib/egress}/providers:/var/lib/egressd/providers
       # backend secrets (client tokens for auth, mihomo secret, provider subs)
-      - ${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}:/etc/vibelab-egress/secrets:ro
+      - ${EGRESS_SECRETS:-/etc/egress/secrets}:/etc/egress/secrets:ro
     depends_on:
-      vibelab-egress-mihomo:
+      egress-mihomo:
         condition: service_healthy
     networks:
       - egress-net
@@ -153,7 +153,7 @@ services:
 
 networks:
   egress-net:
-    name: vibelab-egress-net
+    name: egress-net
     driver: bridge
     # Not `internal`: mihomo needs outbound internet. Ingress is restricted
     # by the absence of public port bindings + host firewall.

@@ -6,14 +6,14 @@
 # everywhere; only the config/secret layout differs per environment.
 #
 # Targets:
-#   host           -> /etc/vibelab-egress/ (client.yaml + secret files)
-#                     and the package under /usr/local/lib/vibelab-egress
+#   host           -> /etc/egress/ (client.yaml + secret files)
+#                     and the package under /usr/local/lib/egress
 #                     with wrappers in /usr/local/bin
 #   container -> a reproducible bundle dir (baked into the image or
 #                     mounted read-only per spec section 32); this script
 #                     stages the bundle and, when run INSIDE the container,
 #                     installs from the bundle into the container's
-#                     /etc/vibelab-egress + /run/secrets (if writable).
+#                     /etc/egress + /run/secrets (if writable).
 #
 # Usage:
 #   install-client.sh --client <id> --target <host|container> \
@@ -25,7 +25,7 @@ set -euo pipefail
 CLIENT=""
 TARGET=""
 BUNDLE=""
-INSTALL_ROOT="${VIBELAB_EGRESS_INSTALL_ROOT:-/usr/local}"
+INSTALL_ROOT="${EGRESS_INSTALL_ROOT:-/usr/local}"
 
 die_usage() { echo "install-client: $*" >&2; exit 2; }
 die_env()   { echo "install-client: $*" >&2; exit 3; }
@@ -56,17 +56,17 @@ if [ -n "$BUNDLE_ID" ] && [ "$BUNDLE_ID" != "$CLIENT" ]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PKG_SRC="$REPO_ROOT/client/src/vibelab_egress_client"
+PKG_SRC="$REPO_ROOT/client/src/egress_client"
 [ -d "$PKG_SRC" ] || die_env "client package source not found: $PKG_SRC"
 
 install_package() { # prefix
   local prefix="$1"
-  local libdir="$prefix/lib/vibelab-egress"
+  local libdir="$prefix/lib/egress"
   local bindir="$prefix/bin"
   mkdir -p "$libdir" "$bindir"
   # Copy the package DIRECTORY (not its contents) so that
-  # $libdir/vibelab_egress_client/ exists and the wrapper's
-  #   sys.path.insert(0, '$libdir'); from vibelab_egress_client.egressctl import main
+  # $libdir/egress_client/ exists and the wrapper's
+  #   sys.path.insert(0, '$libdir'); from egress_client.egressctl import main
   # resolves. (Copying `$PKG_SRC/.` flattens the module one level up and
   # breaks the import.)
   cp -r "$PKG_SRC" "$libdir/"
@@ -82,28 +82,28 @@ install_package() { # prefix
     esac
     [ -f "$engine" ] || die_env "bundle has no matching TUN engine; rebuild bundle with scripts/build-tun-engine.sh"
     (cd "$BUNDLE/tun-engine" && sha256sum -c SHA256SUMS >/dev/null) || die_env "TUN engine checksum verification failed"
-    mkdir -p "$prefix/libexec/vibelab-egress"
-    install -m 755 "$engine" "$prefix/libexec/vibelab-egress/egress-tun-engine"
+    mkdir -p "$prefix/libexec/egress"
+    install -m 755 "$engine" "$prefix/libexec/egress/egress-tun-engine"
   fi
   # cp -r propagates the SOURCE directory's mode (the repo source tree is
   # 750 root:group), which would leave the installed package dir unreadable
   # by the user running egressctl -> "No module named ...egressctl". The
   # package is plain stdlib Python source (no secrets), so normalize the
   # installed tree to be world-readable + traversable.
-  chmod 755 "$libdir/vibelab_egress_client"
-  chmod -R a+rX "$libdir/vibelab_egress_client"
+  chmod 755 "$libdir/egress_client"
+  chmod -R a+rX "$libdir/egress_client"
   chmod -R a+rX "$libdir/adapters"
   # wrappers: fixed python3 invocation, no build step needed (stdlib-only)
   cat > "$bindir/egressctl" <<EOF
 #!/usr/bin/env bash
 exec python3 -c "import sys; sys.path.insert(0, '$libdir'); \
-from vibelab_egress_client.egressctl import main; main()" "\$@"
+from egress_client.egressctl import main; main()" "\$@"
 EOF
   cat > "$bindir/egress-run" <<EOF
 #!/usr/bin/env bash
-export VIBELAB_EGRESS_TUN_ENGINE="$prefix/libexec/vibelab-egress/egress-tun-engine"
+export EGRESS_TUN_ENGINE="$prefix/libexec/egress/egress-tun-engine"
 exec python3 -c "import sys; sys.path.insert(0, '$libdir'); \
-from vibelab_egress_client.egress_run import main; main()" "\$@"
+from egress_client.egress_run import main; main()" "\$@"
 EOF
   chmod 755 "$bindir/egressctl" "$bindir/egress-run"
   chmod 755 "$libdir"
@@ -124,24 +124,24 @@ install_config() { # etc_dir
 case "$TARGET" in
   host)
     install_package "$INSTALL_ROOT"
-    install_config /etc/vibelab-egress
+    install_config /etc/egress
     # The host CLI is invoked by the human who ran sudo, not by root. Give
     # only that account access to its two 0600 client credentials. Keep the
     # directory root-owned so the user cannot replace backend secrets below
-    # /etc/vibelab-egress/secrets or redirect other config paths. Enrollment
-    # runs as vibelab-egressd and needs traverse access to its own secrets.
-    HOST_USER="${VIBELAB_EGRESS_HOST_USER:-${SUDO_USER:-}}"
+    # /etc/egress/secrets or redirect other config paths. Enrollment
+    # runs as egressd and needs traverse access to its own secrets.
+    HOST_USER="${EGRESS_HOST_USER:-${SUDO_USER:-}}"
     if [ -n "$HOST_USER" ] && [ "$HOST_USER" != root ]; then
       id -u -- "$HOST_USER" >/dev/null 2>&1 || die_env "unknown host user: $HOST_USER"
       HOST_GROUP="$(id -gn -- "$HOST_USER")"
-      chgrp -- "$HOST_GROUP" /etc/vibelab-egress
-      chown -- "$HOST_USER" /etc/vibelab-egress/client.token \
-        /etc/vibelab-egress/default-proxy.auth
-      chmod 600 /etc/vibelab-egress/client.token \
-        /etc/vibelab-egress/default-proxy.auth
+      chgrp -- "$HOST_GROUP" /etc/egress
+      chown -- "$HOST_USER" /etc/egress/client.token \
+        /etc/egress/default-proxy.auth
+      chmod 600 /etc/egress/client.token \
+        /etc/egress/default-proxy.auth
     fi
-    chmod 755 /etc/vibelab-egress
-    echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/vibelab-egress"
+    chmod 755 /etc/egress
+    echo "installed client $CLIENT (host) under $INSTALL_ROOT and /etc/egress"
     ;;
   container)
     # Inside the container: install into the container's own /etc and
@@ -149,7 +149,7 @@ case "$TARGET" in
     # bundle's target prefix; the image build (or a deterministic mount)
     # makes this survive container recreate (spec section 32).
     install_package "$INSTALL_ROOT"
-    install_config /etc/vibelab-egress
+    install_config /etc/egress
     # /run/secrets is the documented in-container secret location. In
     # production images it is provided as a read-only mount; in a plain
     # root container it does not exist at all — create it in the writable
@@ -166,19 +166,19 @@ case "$TARGET" in
       run_secrets_ok=1
     else
       echo "note: /run/secrets not writable here; if this container uses the"
-      echo "      documented /run/secrets/vibelab_egress_* mounts, the image"
+      echo "      documented /run/secrets/egress_egress_* mounts, the image"
       echo "      build must provide them (see INSTALL.md, step B)."
     fi
     if [ "$run_secrets_ok" = "1" ]; then
-      install_config /run/secrets/vibelab-egress
-      # the example config references /run/secrets/vibelab_egress_* files;
+      install_config /run/secrets/egress
+      # the example config references /run/secrets/egress_egress_* files;
       # provide them as symlinks to the installed copies.
-      ln -sf /run/secrets/vibelab-egress/client.token \
-             /run/secrets/vibelab_egress_client_token
-      ln -sf /run/secrets/vibelab-egress/default-proxy.auth \
-             /run/secrets/vibelab_egress_default_proxy_auth
+      ln -sf /run/secrets/egress/client.token \
+             /run/secrets/egress_client_token
+      ln -sf /run/secrets/egress/default-proxy.auth \
+             /run/secrets/egress_egress_default_proxy_auth
     fi
-    echo "installed client $CLIENT (container) under $INSTALL_ROOT and /etc/vibelab-egress"
+    echo "installed client $CLIENT (container) under $INSTALL_ROOT and /etc/egress"
     ;;
   *) die_usage "--target must be host or container" ;;
 esac

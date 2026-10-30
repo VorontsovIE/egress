@@ -34,7 +34,7 @@ def _fixture(tmp_path, monkeypatch):
     owner = "host-owner"
     target = "egress-test-client"
     alias = "blanc"
-    source_provider = f"p-{hashlib.sha256(owner.encode()).hexdigest()[:24]}-{alias}"
+    source_provider = f"p-{owner}-{alias}"
     source_route = f"{source_provider}:vless-49"
     yaml_text = ("proxies:\n- name: vless-49\n  type: vless\n"
                  "  server: 203.0.113.10\n  port: 443\n"
@@ -52,7 +52,7 @@ def _fixture(tmp_path, monkeypatch):
         "client_id": target, "environment": "container", "modes": ["proxy", "tun"]
     }))
     monkeypatch.setattr(HOSTCTL, "root_dir", lambda: str(root))
-    monkeypatch.setenv("VIBELAB_EGRESS_SECRETS", str(tmp_path / "secrets"))
+    monkeypatch.setenv("EGRESS_SECRETS", str(tmp_path / "secrets"))
     return root, clients, owner, target, source_provider, source_route, yaml_text
 
 

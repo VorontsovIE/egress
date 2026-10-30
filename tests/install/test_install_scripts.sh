@@ -2,10 +2,10 @@
 # Offline install suite for scripts/install-backend-host.sh and the
 # host/egress-host-test harness.
 #
-# Runs WITHOUT a Docker daemon and WITHOUT root (VIBELAB_EGRESS_TEST_MODE=1
+# Runs WITHOUT a Docker daemon and WITHOUT root (EGRESS_TEST_MODE=1
 # + stubs in tests/install/stubs shadow docker/id/sleep/... on PATH). As
 # root the success path additionally exercises the real client install
-# (scripts/install-client.sh -> /usr/local + /etc/vibelab-egress); without
+# (scripts/install-client.sh -> /usr/local + /etc/egress); without
 # root the client step is skipped (--skip-client) because /usr/local and
 # /etc are root-owned (see README.md, "Limitations").
 #
@@ -18,7 +18,7 @@
 #   3. fail B: STUB_DOCKER_HEALTH=never -> rc 3, redacted egressd log dump
 #      + RestartCount in the install log
 #   4. fail C: STUB_DOCKER_HEALTH=restarting (stale healthy read) -> rc 3
-#   5. root escape: --help rc 0; run without VIBELAB_EGRESS_TEST_MODE as
+#   5. root escape: --help rc 0; run without EGRESS_TEST_MODE as
 #      non-root -> rc 3 'must run as root'
 #   6. negative harness (ported from the lost /tmp/a1_test.sh): public
 #      bind, docker.sock mount, provider secret in a client bundle
@@ -46,7 +46,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # The host may already have a production client under /etc. Stubbed tests
 # must inspect only their temporary fixture, never the machine's live files.
-export VIBELAB_EGRESS_HOST_CLIENT_DIR="$TMP/absent-host-client"
+export EGRESS_HOST_CLIENT_DIR="$TMP/absent-host-client"
 
 IS_ROOT=0
 [ "$(id -u)" = "0" ] && IS_ROOT=1
@@ -59,7 +59,7 @@ make_env() { # <dir> — root + secrets dirs; provision client host-main
   local d="$1"
   mkdir -p "$d/root" "$d/secrets"
   chmod 700 "$d/root"
-  env PATH="$STUBS:$PATH" VIBELAB_EGRESS_TEST_MODE=1 \
+  env PATH="$STUBS:$PATH" EGRESS_TEST_MODE=1 \
     bash "$REPO/scripts/provision-client.sh" \
     --client host-main --environment host \
     --secrets-dir "$d/secrets" --out "$d/root/client-bundles" \
@@ -87,8 +87,8 @@ scenario_install() {
   [ "${SCENARIO_WITH_FIREWALL:-0}" = "1" ] && skip_fw=""
   ( cd "${SCENARIO_CWD:-$REPO}"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
-      VIBELAB_EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
-      VIBELAB_EGRESS_TEST_MODE=1 \
+      EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
+      EGRESS_TEST_MODE=1 \
       bash "$REPO/scripts/install-backend-host.sh" \
       --root "$d/root" --secrets-dir "$d/secrets" \
       --yes ${skip_fw} ${flags[@]+"${flags[@]}"} \
@@ -161,7 +161,7 @@ grep -q '"summary"' "$logf" 2>/dev/null
 check "success: harness JSON report teed into install log" $?
 grep -q "docker compose up -d --force-recreate" "$logf" 2>/dev/null
 check "success: regenerated config forces container recreate" $?
-stop_line="$(grep -n -m1 'run: docker compose stop vibelab-egress-egressd vibelab-egress-mihomo' "$logf" | cut -d: -f1)"
+stop_line="$(grep -n -m1 'run: docker compose stop egress-egressd egress-mihomo' "$logf" | cut -d: -f1)"
 bootstrap_line="$(grep -n -m1 'run: python3 -m egressd.bootstrap_config' "$logf" | cut -d: -f1)"
 [ -n "$stop_line" ] && [ -n "$bootstrap_line" ] && [ "$stop_line" -lt "$bootstrap_line" ]
 check "success: old egressd stopped before bootstrap regeneration" $?
@@ -218,7 +218,7 @@ rc=$?
 [ "$rc" -eq 3 ]
 check "fail-never: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
 logf="$(log_of "$d")"
-grep -q "last 100 lines of vibelab-egress-egressd logs" "$logf" 2>/dev/null
+grep -q "last 100 lines of egress-egressd logs" "$logf" 2>/dev/null
 check "fail-never: log has egressd docker-logs dump" $?
 grep -q "RestartCount=" "$logf" 2>/dev/null
 check "fail-never: log has RestartCount" $?
@@ -282,17 +282,17 @@ d="$TMP/neg-public"
 mkdir -p "$d/repo" "$d/root" "$d/secrets"
 cat > "$d/repo/compose.yaml" <<'YAML'
 services:
-  vibelab-egress-mihomo:
+  egress-mihomo:
     image: metacubex/mihomo:v1.19.32
     ports:
       - "0.0.0.0:1080"
-  vibelab-egress-egressd:
+  egress-egressd:
     build: ./egressd
     ports:
       - "127.0.0.1:9091"
 YAML
-env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
-    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+env EGRESS_REPO="$d/repo" EGRESS_ROOT="$d/root" \
+    EGRESS_SECRETS="$d/secrets" \
     python3 "$REPO/host/egress-host-test" --static \
     > "$d/report.json" 2> "$d/report.err"
 rc=$?
@@ -311,15 +311,15 @@ d="$TMP/neg-socket"
 mkdir -p "$d/repo" "$d/root" "$d/secrets"
 cat > "$d/repo/compose.yaml" <<'YAML'
 services:
-  vibelab-egress-egressd:
+  egress-egressd:
     build: ./egressd
     ports:
       - "127.0.0.1:9091"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 YAML
-env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
-    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+env EGRESS_REPO="$d/repo" EGRESS_ROOT="$d/root" \
+    EGRESS_SECRETS="$d/secrets" \
     python3 "$REPO/host/egress-host-test" --static \
     > "$d/report.json" 2> "$d/report.err"
 python3 - "$d/report.json" docker_socket_not_mounted <<'PY'
@@ -340,8 +340,8 @@ client_id: host-main
 control_url: http://127.0.0.1:9091
 subscription: fake-provider-subscription-value-0001
 YAML
-env VIBELAB_EGRESS_REPO="$d/repo" VIBELAB_EGRESS_ROOT="$d/root" \
-    VIBELAB_EGRESS_SECRETS="$d/secrets" \
+env EGRESS_REPO="$d/repo" EGRESS_ROOT="$d/root" \
+    EGRESS_SECRETS="$d/secrets" \
     python3 "$REPO/host/egress-host-test" --static \
     > "$d/report.json" 2> "$d/report.err"
 python3 - "$d/report.json" no_backend_secrets_in_client_bundles <<'PY'
@@ -364,9 +364,9 @@ scenario_verify() { # <dir> [KEY=VAL...]
   for a in "$@"; do envs+=("$a"); done
   ( cd "$REPO"
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
-      VIBELAB_EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
+      EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
       EGRESSD_UID=1000 EGRESSD_GID=1000 \
-      VIBELAB_EGRESS_ROOT="$d/root" VIBELAB_EGRESS_SECRETS="$d/secrets" \
+      EGRESS_ROOT="$d/root" EGRESS_SECRETS="$d/secrets" \
       bash scripts/verify-backend-host.sh \
       --root "$d/root" --secrets-dir "$d/secrets" \
       > "$d/verify.out" 2> "$d/verify.err" )

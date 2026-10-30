@@ -12,7 +12,7 @@ for route in "${ROUTES[@]}"; do
 done
 [ -d "$BUNDLE" ] || { echo "bundle not found: $BUNDLE" >&2; exit 2; }
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-IMAGE="vibelab-egress-test-client:local"
+IMAGE="egress-test-client:local"
 NAME="egress-test-client-$$"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
@@ -41,7 +41,7 @@ for route in "${ROUTES[@]}"; do
   # Keep both workloads alive while comparing netns inode IDs. Linux may
   # recycle an ID after a namespace exits, so sequential readlink calls can
   # report the same value even though each invocation got a new namespace.
-  NS_CHECK_DIR="/tmp/vibelab-egress-netns-${NAME}-${ROUTE_INDEX}"
+  NS_CHECK_DIR="/tmp/egress-netns-${NAME}-${ROUTE_INDEX}"
   NS_A="$NS_CHECK_DIR/a"
   NS_B="$NS_CHECK_DIR/b"
   NS_RELEASE="$NS_CHECK_DIR/release"
@@ -124,7 +124,7 @@ if [ "${#ROUTES[@]}" -ge 2 ]; then
     echo "concurrent TUN check needs two different route IDs" >&2
     exit 2
   }
-  CONCURRENT_DIR="/tmp/vibelab-egress-concurrent-${NAME}"
+  CONCURRENT_DIR="/tmp/egress-concurrent-${NAME}"
   NS_A="$CONCURRENT_DIR/a.netns"
   NS_B="$CONCURRENT_DIR/b.netns"
   RELEASE="$CONCURRENT_DIR/release"

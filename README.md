@@ -1,6 +1,6 @@
-# vibelab-egress
+# egress
 
-**vibelab-egress** routes locally running commands through selected proxy routes. A Docker Compose backend (`mihomo` + `egressd`) serves multiple Linux hosts and containers. Install the small Python client (`egressctl` and `egress-run`), whose core uses only the standard library, wherever your workload runs.
+**egress** routes locally running commands through selected proxy routes. A Docker Compose backend (`mihomo` + `egressd`) serves multiple Linux hosts and containers. Install the small Python client (`egressctl` and `egress-run`), whose core uses only the standard library, wherever your workload runs.
 
 ## Quick start
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""egress-hostctl -- narrow host-side control CLI for vibelab-egress (phase A1).
+"""egress-hostctl -- narrow host-side control CLI for egress (phase A1).
 
 Security invariants (TECH_SPEC.md sections 33-38):
   * Python 3 standard library only.
@@ -38,21 +38,21 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 # The installer records the dedicated service UID and non-default paths here.
 # These are non-secret Compose substitutions, never executable shell input.
 try:
-    with open("/etc/vibelab-egress/compose.env", encoding="utf-8") as _env_file:
+    with open("/etc/egress/compose.env", encoding="utf-8") as _env_file:
         for _line in _env_file:
             _key, _sep, _value = _line.strip().partition("=")
-            if _sep and _key in {"EGRESSD_UID", "EGRESSD_GID", "VIBELAB_EGRESS_ROOT",
-                                "VIBELAB_EGRESS_SECRETS", "DOCKER_GATEWAY"}:
+            if _sep and _key in {"EGRESSD_UID", "EGRESSD_GID", "EGRESS_ROOT",
+                                "EGRESS_SECRETS", "DOCKER_GATEWAY"}:
                 os.environ.setdefault(_key, _value)
 except OSError:
     pass
 
-PROJ = "vibelab-egress"
-SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
-DEFAULT_ROOT = "/var/lib/vibelab-egress"
-DEFAULT_REPO = "/srv/workspace/vibelab-egress"
-HOST_INSTALL_DIR = "/etc/vibelab-egress"
-DEFAULT_CLIENT_BUNDLE_DIR = "/var/lib/vibelab-egress/client-bundle"
+PROJ = "egress"
+SERVICES = ("egress-mihomo", "egress-egressd")
+DEFAULT_ROOT = "/var/lib/egress"
+DEFAULT_REPO = "/srv/workspace/egress"
+HOST_INSTALL_DIR = "/etc/egress"
+DEFAULT_CLIENT_BUNDLE_DIR = "/var/lib/egress/client-bundle"
 # Docker >= 28 removed .Subnet/.Gateway from the `network ls` template context
 # (a network may carry multiple IPAM configs, so they are no longer flattened).
 # We therefore list name/id/driver via `ls` and read the IPAM config per network
@@ -66,15 +66,15 @@ REDACT = [
 
 
 def root_dir():
-    return os.environ.get("VIBELAB_EGRESS_ROOT", DEFAULT_ROOT)
+    return os.environ.get("EGRESS_ROOT", DEFAULT_ROOT)
 
 
 def repo_dir():
-    return os.environ.get("VIBELAB_EGRESS_REPO", DEFAULT_REPO)
+    return os.environ.get("EGRESS_REPO", DEFAULT_REPO)
 
 
 def client_bundle_dir():
-    return os.environ.get("VIBELAB_EGRESS_CLIENT_BUNDLE_DIR", DEFAULT_CLIENT_BUNDLE_DIR)
+    return os.environ.get("EGRESS_CLIENT_BUNDLE_DIR", DEFAULT_CLIENT_BUNDLE_DIR)
 
 
 def now_iso():
@@ -440,8 +440,8 @@ def cmd_copy_personal_source(args):
         err("source route is not a personal provider route", 2)
 
     root = Path(root_dir()).resolve()
-    secrets = Path(os.environ.get("VIBELAB_EGRESS_SECRETS",
-                                  "/etc/vibelab-egress/secrets")).resolve()
+    secrets = Path(os.environ.get("EGRESS_SECRETS",
+                                  "/etc/egress/secrets")).resolve()
     if source_client:
         if not _CLIENT_ID_RE.fullmatch(source_client):
             err("invalid source client ID", 2)
@@ -474,12 +474,8 @@ def cmd_copy_personal_source(args):
         err("source provider does not belong to --source-client", 2)
     if len(source) > 4 * 1024 * 1024:
         err("personal provider snapshot exceeds the supported size", 3)
-    legacy_provider = "p-%s-%s" % (
-        hashlib.sha256(meta["client_id"].encode("utf-8")).hexdigest()[:24],
-        meta["alias"],
-    )
     current_provider = "p-%s-%s" % (meta["client_id"], meta["alias"])
-    if source_provider not in (legacy_provider, current_provider):
+    if source_provider != current_provider:
         err("personal provider ID does not match its metadata", 3)
     try:
         profile = json.loads(target_profile.read_text(encoding="utf-8"))

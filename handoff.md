@@ -9,7 +9,6 @@ Updated 2026-10-20. The earlier systemd TUN service design is obsolete and is no
 - A static packet engine receives the TUN file descriptor and selected one-shot SOCKS credentials; it does not receive workload arguments, working directory, environment, or stdio.
 - A local loopback DNS proxy sends DNS through TUN and the same selected route.
 - Docker receives `/dev/net/tun` and `client/seccomp-tun.json`. The outer container does not receive `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, privileged mode, host networking, or the Docker socket.
-- `scripts/remove-legacy-tun-helper.sh` migrates old host/container TUN services. It refuses to stop the environment if it cannot confirm there are no active jobs.
 
 ## Build and install
 

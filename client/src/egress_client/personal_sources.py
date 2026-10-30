@@ -18,16 +18,16 @@ MAX_SOURCE_BYTES = 4 * 1024 * 1024
 
 
 def source_dir() -> Path:
-    override = os.environ.get("VIBELAB_EGRESS_SOURCE_DIR")
+    override = os.environ.get("EGRESS_SOURCE_DIR")
     if override:
         return Path(override)
     state = os.environ.get("XDG_STATE_HOME")
     if state:
-        return Path(state) / "vibelab-egress" / "sources"
+        return Path(state) / "egress" / "sources"
     home = Path.home()
     if not str(home) or str(home) == "/":
-        raise ValueError("set VIBELAB_EGRESS_SOURCE_DIR for this container user")
-    return home / ".local" / "state" / "vibelab-egress" / "sources"
+        raise ValueError("set EGRESS_SOURCE_DIR for this container user")
+    return home / ".local" / "state" / "egress" / "sources"
 
 
 def path_for(name: str) -> Path:

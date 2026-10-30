@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""egress-devbridge -- narrow dev/test bridge for vibelab-egress (A1).
+"""egress-devbridge -- narrow dev/test bridge for egress (A1).
 
 A small stdlib HTTP server that lets the container agent request a FIXED
 set of host operations (spec section 33.2) without any arbitrary shell
 access. It is the "bootstrap-dev-access" mechanism: an administrator starts
-it once (or via host/units/vibelab-egress-devbridge.service), and the agent
+it once (or via host/units/egress-devbridge.service), and the agent
 can then:
 
     POST /  {"op":"deploy"}
     POST /  {"op":"redeploy"}
     POST /  {"op":"status"}
-    POST /  {"op":"logs","service":"vibelab-egress-mihomo","tail":100}
+    POST /  {"op":"logs","service":"egress-mihomo","tail":100}
     POST /  {"op":"run-acceptance"}
     POST /  {"op":"sync-docker-cidrs"}
     POST /  {"op":"install-client","target":"host"|"container","bundle":"<path>"}
@@ -42,7 +42,7 @@ ALLOWED_OPS = {
     "deploy", "redeploy", "status", "logs",
     "run-acceptance", "sync-docker-cidrs", "install-client",
 }
-ALLOWED_SERVICES = ("vibelab-egress-mihomo", "vibelab-egress-egressd")
+ALLOWED_SERVICES = ("egress-mihomo", "egress-egressd")
 ALLOWED_TARGETS = ("host", "container")
 # fields allowed per op, beyond "op" itself
 ALLOWED_FIELDS = {
@@ -196,7 +196,7 @@ def main(argv=None):
     ap.add_argument("--bind", default="172.17.0.1",
                     help="interface to bind (default: docker gateway 172.17.0.1)")
     ap.add_argument("--port", type=int, default=9099)
-    ap.add_argument("--token-file", default="/etc/vibelab-egress/secrets/devbridge.token")
+    ap.add_argument("--token-file", default="/etc/egress/secrets/devbridge.token")
     ap.add_argument("--allow-public", action="store_true",
                     help="explicitly allow binding a public IP (NOT recommended)")
     args = ap.parse_args(argv)
@@ -216,8 +216,8 @@ def main(argv=None):
         print("egress-devbridge: token file is empty", file=sys.stderr)
         return 3
 
-    os.environ.setdefault("VIBELAB_EGRESS_REPO",
-                          os.environ.get("VIBELAB_EGRESS_REPO", "/srv/workspace/vibelab-egress"))
+    os.environ.setdefault("EGRESS_REPO",
+                          os.environ.get("EGRESS_REPO", "/srv/workspace/egress"))
     server = ThreadingHTTPServer((args.bind, args.port), Handler)
     server.token = token
     print(json.dumps({"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

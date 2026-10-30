@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "egressd"
 version = "0.1.0"
-description = "vibelab-egress control plane (public narrow /v1 API)"
+description = "egress control plane (public narrow /v1 API)"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",

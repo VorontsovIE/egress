@@ -1,4 +1,4 @@
-# Skill: egress (vibelab-egress)
+# Skill: egress (egress)
 
 You have a local egress client (`egressctl` + `egress-run`) installed in this
 environment. It controls a shared egress backend (Mihomo) through a narrow,

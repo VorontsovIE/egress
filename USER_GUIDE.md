@@ -54,7 +54,7 @@ egressctl source add lab --file ./proxies.txt
 egressctl source add node --uri 'vless://…'
 egressctl source list
 egressctl source refresh work
-egressctl source remove lab
+egressctl provider remove --personal lab
 ```
 
 The source is private to the client identity. On a host, the backend receives and stores it in its protected source area. In a container, the source file stays in that container and the client uploads normalized nodes. Container-side `source add` and `source refresh` need PyYAML installed in the image; other client commands do not. Do not put credentials in shell history; use stdin (`--url -` or `--uri -`) when appropriate.

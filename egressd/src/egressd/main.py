@@ -1,4 +1,4 @@
-"""egressd — vibelab-egress control plane (phase A3: full public API).
+"""egressd — egress control plane (phase A3: full public API).
 
 Implements the public narrow ``/v1`` API (spec section 27) on top of the A1
 skeleton:
@@ -43,7 +43,7 @@ API_VERSION = "v1"
 COMPAT = {"api_version": "v1", "min_client": "0.1.0"}
 # egressd API version, reported by /v1/status for client version
 # negotiation (spec 49.42). Keep in sync with the client package
-# __version__ (client/src/vibelab_egress_client/__init__.py).
+# __version__ (client/src/egress_client/__init__.py).
 VERSION = "0.1.0"
 
 log = logging.getLogger("egressd")
@@ -227,7 +227,7 @@ class MihomoAdmin:
 
     def __init__(self) -> None:
         self.base_url = os.environ.get("MIHOMO_API_URL", "http://127.0.0.1:9090")
-        secret_file = os.environ.get("MIHOMO_SECRET_FILE", "/etc/vibelab-egress/secrets/mihomo_api_secret")
+        secret_file = os.environ.get("MIHOMO_SECRET_FILE", "/etc/egress/secrets/mihomo_api_secret")
         try:
             self.secret = Path(secret_file).read_text().strip()
         except OSError:
@@ -380,7 +380,6 @@ def rebuild_catalog(app: FastAPI) -> Any:
     protocols: dict[str, dict[str, str]] = {}
     identities: dict[str, dict[str, str]] = {}
     owners: dict[str, str] = {}
-    legacy_provider_ids: dict[str, str] = {}
     for prov, meta in manifest.items():
         try:
             names, types, _, node_identities = _read_provider_file(Path(meta["path"]))
@@ -393,14 +392,8 @@ def rebuild_catalog(app: FastAPI) -> Any:
         identities[prov] = node_identities
         if meta.get("owner"):
             owners[prov] = meta["owner"]
-        personal = meta.get("personal") or {}
-        if personal.get("legacy_provider_ids_version") == 1:
-            for old_provider in personal.get("legacy_provider_ids", []):
-                if isinstance(old_provider, str):
-                    legacy_provider_ids[old_provider] = prov
-
     catalog = RouteCatalog().build(providers, prefixes, protocols, owners,
-                                   identities, legacy_provider_ids)
+                                   identities)
     app.state.metrics.sync_route_identities(catalog._identities)
     if previous_catalog is not None:
         catalog.preserve_runtime_from(previous_catalog)
@@ -459,7 +452,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="egressd", version="0.1.0", docs_url=None,
                   redoc_url=None, openapi_url=None)
     app.state.registry = ClientRegistry(
-        os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/vibelab-egress/secrets/clients")
+        os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/egress/secrets/clients")
     )
     app.state.mihomo = MihomoAdmin()
     app.state.started_at = time.time()
@@ -960,13 +953,10 @@ def create_app() -> FastAPI:
             yaml_text, count, skipped = validate_yaml(body["yaml"])
         except (ValueError, yaml.YAMLError):
             raise HTTPException(status_code=400, detail="personal snapshot rejected") from None
-        legacy_meta = ({key: old[key] for key in
-                        ("legacy_provider_ids", "legacy_provider_ids_version")
-                        if key in old} if old else {})
         meta = {"provider_id": provider, "client_id": client_id(profile),
                 "alias": alias, "kind": "snapshot", "node_count": count,
                 "skipped_nodes": skipped,
-                "updated_at": int(time.time()), **legacy_meta}
+                "updated_at": int(time.time())}
         with app.state.provider_update_lock:
             return _commit_personal(meta, yaml_text)
 

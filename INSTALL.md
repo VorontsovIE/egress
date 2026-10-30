@@ -22,14 +22,14 @@ sudo bash scripts/verify-backend-host.sh
 
 For a tagged GitHub release, the installer pulls the corresponding `egressd` image from `ghcr.io/vorontsovie/egress`. A checkout not at a release tag uses `latest`; set `EGRESSD_IMAGE` to pin a different published version. To install client code from a release archive, extract it and use it with a separately provisioned client bundle. Release archives never contain client credentials.
 
-The installer creates backend state under `/var/lib/vibelab-egress` and protected secrets under `/etc/vibelab-egress/secrets`. Override the persistent root with `--root` and the secrets directory with `--secrets-dir`. Use the supported scripts' `--help` options for syntax. The installer deploys Mihomo and `egressd`, provisions and installs a host client by default, configures Docker network CIDRs and firewall rules where supported, and runs the host acceptance harness. Inspect `<root>/install-backend-host.log` if installation reports an error.
+The installer creates backend state under `/var/lib/egress` and protected secrets under `/etc/egress/secrets`. Override the persistent root with `--root` and the secrets directory with `--secrets-dir`. Use the supported scripts' `--help` options for syntax. The installer deploys Mihomo and `egressd`, provisions and installs a host client by default, configures Docker network CIDRs and firewall rules where supported, and runs the host acceptance harness. Inspect `<root>/install-backend-host.log` if installation reports an error.
 
 For proxy-only operation, provision the host profile without TUN before the backend install. The installer still runs its acceptance harness, so the expected `host-main` client must already be installed when using `--skip-client`:
 
 ```sh
 sudo bash scripts/provision-client.sh --client host-main --environment host --tun-backend none
 sudo bash scripts/install-client.sh --client host-main --target host \
-  --bundle /var/lib/vibelab-egress/client-bundles/host-main
+  --bundle /var/lib/egress/client-bundles/host-main
 sudo bash scripts/install-backend-host.sh --skip-client
 ```
 
@@ -49,7 +49,7 @@ sudo host/egress-providerctl list
 sudo host/egress-providerctl update --id PROVIDER_ID
 chmod 600 ./new-links.txt
 sudo host/egress-providerctl update --id custom --source-file ./new-links.txt
-sudo host/egress-providerctl remove --id custom
+sudo egressctl provider remove --managed custom
 ```
 
 Supported formats include Clash/Mihomo YAML, base64-encoded Clash subscriptions, VLESS/VMess/Trojan/Shadowsocks/Hysteria2/TUIC URIs, and WireGuard configuration. Normalized provider data is written into the backend persistent root. Failed fetches or parsing retain the previous known-good provider data.
@@ -78,7 +78,7 @@ egressctl whoami
 egressctl doctor
 ```
 
-When no explicit ID is given, setup derives a stable ID from the invoking account. An explicitly selected profile can be used with `egressctl --config /etc/vibelab-egress/client.yaml ...` or `egress-run --config /etc/vibelab-egress/client.yaml ...`.
+When no explicit ID is given, setup derives a stable ID from the invoking account. An explicitly selected profile can be used with `egressctl --config /etc/egress/client.yaml ...` or `egress-run --config /etc/egress/client.yaml ...`.
 
 ### Container client
 

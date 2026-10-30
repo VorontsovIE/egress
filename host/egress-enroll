@@ -50,10 +50,6 @@ def credentials(uid: int, clients: Path) -> dict:
     with LOCK:
         clients.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(clients, 0o700)
-        legacy_id = f"host-uid-{uid}"
-        if client_id != legacy_id and not token_path.exists() and \
-                (clients / f"{legacy_id}.token").exists():
-            raise RuntimeError("migration_required")
         token = token_path.read_text().strip() if token_path.exists() else ""
         auth = proxy_path.read_text().strip() if proxy_path.exists() else ""
         if not token:
@@ -124,10 +120,8 @@ def serve(socket_path: Path, clients: Path) -> None:
                     if not ready(result):
                         raise RuntimeError("backend not ready for this profile")
                     response = {"ok": True, **result}
-                except RuntimeError as exc:
-                    response = {"ok": False,
-                                "error": "migration_required" if str(exc) == "migration_required"
-                                else "enrollment unavailable"}
+                except RuntimeError:
+                    response = {"ok": False, "error": "enrollment unavailable"}
                 except (OSError, ValueError):
                     response = {"ok": False, "error": "enrollment unavailable"}
                 try:
@@ -151,8 +145,8 @@ def serve(socket_path: Path, clients: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--socket", default="/run/vibelab-egress-enroll/enroll.sock")
-    parser.add_argument("--clients-dir", default="/etc/vibelab-egress/secrets/clients")
+    parser.add_argument("--socket", default="/run/egress-enroll/enroll.sock")
+    parser.add_argument("--clients-dir", default="/etc/egress/secrets/clients")
     args = parser.parse_args()
     serve(Path(args.socket), Path(args.clients_dir))
 

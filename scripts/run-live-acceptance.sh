@@ -9,9 +9,9 @@
 #   * Docker daemon running and the egress stack up (compose.yaml; optional
 #     host TUN systemd unit for section 50 checks).
 #   * The host client installed (egressctl + egress-run on PATH) with
-#     /etc/vibelab-egress/client.yaml + token + auth.
+#     /etc/egress/client.yaml + token + auth.
 #   * The Docker container running (its name is auto-detected; override with
-#     VIBELAB_EGRESS_CONTAINER if detection fails).
+#     EGRESS_CONTAINER if detection fails).
 #   * TUN prerequisites available in the local host environment.
 #
 # Usage:
@@ -25,20 +25,20 @@
 # host/live-acceptance.py unchanged.
 #
 # Optional environment overrides:
-#   VIBELAB_EGRESS_CONTAINER   Docker container name (default: auto-detect)
-#   VIBELAB_EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health/liveliness)
-#   VIBELAB_EGRESS_CONTAINER_CONFIG      container bundle client.yaml (for static checks)
-#   VIBELAB_EGRESS_REPO           repo root (default: this script's repo)
+#   EGRESS_CONTAINER   Docker container name (default: auto-detect)
+#   EGRESS_LITELLM_URL    LiteLLM health URL (default http://127.0.0.1:4000/health/liveliness)
+#   EGRESS_CONTAINER_CONFIG      container bundle client.yaml (for static checks)
+#   EGRESS_REPO           repo root (default: this script's repo)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="${VIBELAB_EGRESS_REPO:-$(cd "$HERE/.." && pwd)}"
+REPO="${EGRESS_REPO:-$(cd "$HERE/.." && pwd)}"
 # The producer resolves the repo (for host/egress-host-test + host TUN unit)
 # and the persistent data/secrets roots from these env vars; export them so a
 # bare `bash scripts/run-live-acceptance.sh` works from any checkout location.
-export VIBELAB_EGRESS_REPO="$REPO"
-export VIBELAB_EGRESS_ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
-export VIBELAB_EGRESS_SECRETS="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+export EGRESS_REPO="$REPO"
+export EGRESS_ROOT="${EGRESS_ROOT:-/var/lib/egress}"
+export EGRESS_SECRETS="${EGRESS_SECRETS:-/etc/egress/secrets}"
 # Parse args: extract an optional `--out <path>` (or `--out=<path>`) for the
 # report location; everything else (e.g. --recreate, --no-tun, --check ...) is
 # forwarded to live-acceptance.py. The report path must NOT be read from $1,
@@ -66,8 +66,8 @@ done
 detect_client_container() {
   local name
   # 1. explicit override
-  if [ -n "${VIBELAB_EGRESS_CONTAINER:-}" ]; then
-    printf '%s' "$VIBELAB_EGRESS_CONTAINER"; return
+  if [ -n "${EGRESS_CONTAINER:-}" ]; then
+    printf '%s' "$EGRESS_CONTAINER"; return
   fi
   # 2. a running container whose name is egress-test-client
   name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i 'egress-test-client' | head -1)"
@@ -85,7 +85,7 @@ CLIENT_CONTAINER="$(detect_client_container)"
 echo "[run-live-acceptance] repo=$REPO"
 echo "[run-live-acceptance] out=$OUT"
 echo "[run-live-acceptance] Docker container=$CLIENT_CONTAINER"
-echo "[run-live-acceptance] litellm=${VIBELAB_EGRESS_LITELLM_URL:-http://127.0.0.1:4000/health/liveliness}"
+echo "[run-live-acceptance] litellm=${EGRESS_LITELLM_URL:-http://127.0.0.1:4000/health/liveliness}"
 
 mkdir -p "$(dirname "$OUT")"
 

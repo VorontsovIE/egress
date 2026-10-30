@@ -1,4 +1,4 @@
-"""vibelab-egress client package (egressctl + egress-run).
+"""egress client package (egressctl + egress-run).
 
 Stdlib-only: installs in a bare host and in a container runtime/Docker container
 without a package index. One package, environment-specific configs.

@@ -1,10 +1,10 @@
 # =============================================================================
-# vibelab-egress — Mihomo configuration REFERENCE TEMPLATE
+# egress — Mihomo configuration REFERENCE TEMPLATE
 #
 # This file is a human-readable reference of the structure produced by the
 # config generator (egressd/src/egressd/configgen.py). The LIVE config is
 # generated at <root>/generated/config.yaml by egressd from:
-#   * backend secrets (/etc/vibelab-egress/secrets/clients/*.token,
+#   * backend secrets (/etc/egress/secrets/clients/*.token,
 #     *.proxy-creds)
 #   * provider definitions (<root>/providers/*.yaml)
 #   * one-shot slot count (EGRESSD_ONESHOT_SLOTS)
@@ -30,7 +30,7 @@ log-level: info
 ipv6: false
 
 # Admin controller: private compose network only (NOT published in
-# compose.yaml). Secret comes from /etc/vibelab-egress/secrets/mihomo_api_secret.
+# compose.yaml). Secret comes from /etc/egress/secrets/mihomo_api_secret.
 external-controller: 127.0.0.1:9090
 secret: <MIHOMO_API_SECRET>
 

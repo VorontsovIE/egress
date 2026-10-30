@@ -15,6 +15,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -217,13 +220,27 @@ def cmd_source_refresh(args) -> None:
     _source_result(args, data, "refreshed", args.name)
 
 
-def cmd_source_remove(args) -> None:
+def cmd_provider_remove(args) -> None:
     from . import personal_sources as local
-    cfg = _load(args)
-    data = _call(args, lambda: EgressApi(cfg).delete_personal(args.name), None)
-    if cfg.environment != "host":
-        local.remove(args.name)
-    _emit(args, data, f"source removed: {args.name}")
+    if args.personal:
+        cfg = _load(args)
+        data = _call(args, lambda: EgressApi(cfg).delete_personal(args.personal), None)
+        if cfg.environment != "host":
+            local.remove(args.personal)
+        _emit(args, data, f"personal provider removed: {args.personal}")
+        return
+    if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or os.environ["SUDO_USER"] == "root":
+        raise SystemExit("managed provider removal requires explicit sudo: "
+                         "sudo egressctl provider remove --managed ID")
+    helper = "/usr/local/sbin/egress-providerctl"
+    try:
+        result = subprocess.run([helper, "delete-source", "--id", args.managed],
+                                check=False, capture_output=True, text=True)
+    except OSError:
+        raise SystemExit("managed provider helper is not installed") from None
+    if result.returncode:
+        raise SystemExit(result.stderr.strip() or "managed provider removal failed")
+    print(result.stdout.strip() or f"managed provider removed: {args.managed}")
 
 
 def cmd_update(args) -> None:
@@ -235,6 +252,80 @@ def cmd_update(args) -> None:
                                              if_older_than=args.if_older_than),
                  None)
     _emit(args, data, f"update done: {data.get('updated', data)}")
+
+
+def _root_owned_cli() -> bool:
+    """Reject sudo execution from a user-writable Python installation."""
+    module = Path(__file__).resolve()
+    for path in (module, *module.parents):
+        try:
+            info = path.stat()
+        except OSError:
+            return False
+        if info.st_uid != 0 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+    return True
+
+
+def cmd_upgrade(args) -> None:
+    if args.version and not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.version):
+        raise SystemExit("upgrade: --version must look like v1.2.3")
+    if args.client_only and os.geteuid() != 0:
+        command = [sys.executable, "-m", "egress_client.updater"]
+    else:
+        if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or \
+                os.environ.get("SUDO_USER") == "root":
+            print("This operation needs administrator rights. Choose one:", file=sys.stderr)
+            print("  sudo egressctl upgrade       # update client and backend", file=sys.stderr)
+            print("  egressctl upgrade --client-only  # update this user's client", file=sys.stderr)
+            raise SystemExit(3)
+        if not _root_owned_cli():
+            raise SystemExit("refusing privileged update from a user-writable egressctl install")
+        helper = Path("/usr/sbin/egress-upgrade")
+        if not helper.is_file() or helper.stat().st_uid != 0 or \
+                helper.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise SystemExit("trusted backend updater is not installed; reinstall egress first")
+        command = [str(helper)]
+    if args.version:
+        command.extend(("--version", args.version))
+    if args.client_only:
+        command.append("--client-only")
+    if args.backend_only:
+        command.append("--backend-only")
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as exc:
+        raise SystemExit(f"upgrade: could not start trusted updater: {exc}") from None
+    raise SystemExit(result.returncode)
+
+
+def cmd_uninstall(args) -> None:
+    if args.client_only and os.geteuid() != 0:
+        helper = Path.home() / ".local" / "libexec" / "egress" / "uninstall-client"
+        if not helper.is_file():
+            raise SystemExit("client-only uninstaller is not installed; remove the user egress install manually")
+        command = [str(helper)]
+    else:
+        if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or \
+                os.environ.get("SUDO_USER") == "root":
+            print("This operation needs administrator rights. Choose one:", file=sys.stderr)
+            print("  sudo egressctl uninstall       # remove system egress; retain subscriptions and state", file=sys.stderr)
+            print("  egressctl uninstall --client-only  # remove this user's client", file=sys.stderr)
+            raise SystemExit(3)
+        if not _root_owned_cli():
+            raise SystemExit("refusing privileged uninstall from a user-writable egressctl install")
+        helper = Path("/usr/sbin/egress-uninstall")
+        if not helper.is_file() or helper.stat().st_uid != 0 or \
+                helper.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise SystemExit("trusted uninstaller is not installed; run the egress installer first")
+        command = [str(helper)]
+    if args.purge:
+        command.append("--purge")
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as exc:
+        raise SystemExit(f"uninstall: could not start trusted uninstaller: {exc}") from None
+    raise SystemExit(result.returncode)
 
 
 def cmd_list(args) -> None:
@@ -489,7 +580,7 @@ def cmd_capabilities(args) -> None:
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="egressctl",
-                                description="Manage routes and run diagnostics for a vibelab-egress client.")
+                                description="Manage routes and run diagnostics for a egress client.")
     p.add_argument("--config", help="explicit client config path")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     sub = p.add_subparsers(dest="command", required=True)
@@ -540,14 +631,29 @@ def build_parser() -> argparse.ArgumentParser:
         description="Refresh a personal source. In containers, local normalization requires PyYAML.")
     sr.add_argument("name", help="personal source alias")
     sr.set_defaults(fn=cmd_source_refresh)
-    sd = ssub.add_parser("remove", help="remove a private source")
-    sd.add_argument("name", help="personal source alias")
-    sd.set_defaults(fn=cmd_source_remove)
+    provider = add("provider", lambda args: None, "provider profile operations")
+    psub = provider.add_subparsers(dest="provider_cmd", required=True)
+    remove = psub.add_parser("remove", help="remove a personal or managed provider profile")
+    scope = remove.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--personal", metavar="ALIAS", help="remove your personal profile")
+    scope.add_argument("--managed", metavar="ID", help="remove a backend-managed profile (requires sudo)")
+    remove.set_defaults(fn=cmd_provider_remove)
 
     up = add("update", cmd_update, "trigger provider update")
     up.add_argument("--provider", help="specific provider id")
     up.add_argument("--via", help="route to fetch the subscription through")
     up.add_argument("--if-older-than", help="skip if updated within this duration, e.g. 6h")
+
+    upgrade = add("upgrade", cmd_upgrade, "upgrade client and backend from a release")
+    scope = upgrade.add_mutually_exclusive_group()
+    scope.add_argument("--client-only", action="store_true", help="update this user's client only")
+    scope.add_argument("--backend-only", action="store_true", help="update backend only (requires sudo)")
+    upgrade.add_argument("--version", help="release tag to install, e.g. v1.2.3")
+
+    uninstall = add("uninstall", cmd_uninstall, "remove egress")
+    un_scope = uninstall.add_mutually_exclusive_group()
+    un_scope.add_argument("--client-only", action="store_true", help="remove this user's client only")
+    un_scope.add_argument("--purge", action="store_true", help="also remove subscriptions and persistent state")
 
     ls = add("list", cmd_list, "list routes")
     ls.add_argument("--country", help="filter by country code, e.g. FI")

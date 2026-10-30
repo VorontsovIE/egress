@@ -22,7 +22,7 @@ set -euo pipefail
 
 BIND="${DEVBRIDGE_BIND:-172.17.0.1}"
 PORT="${DEVBRIDGE_PORT:-9099}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ASSUME_YES=0
 
@@ -70,11 +70,11 @@ if command -v systemctl >/dev/null; then
   say "installing devbridge systemd unit"
   sed -e "s|--bind 172.17.0.1|--bind $BIND|" \
       -e "s|--port 9099|--port $PORT|" \
-      -e "s|/srv/workspace/vibelab-egress|$REPO_ROOT|g" \
-      "$REPO_ROOT/host/units/vibelab-egress-devbridge.service" \
-      > /etc/systemd/system/vibelab-egress-devbridge.service
+      -e "s|/srv/workspace/egress|$REPO_ROOT|g" \
+      "$REPO_ROOT/host/units/egress-devbridge.service" \
+      > /etc/systemd/system/egress-devbridge.service
   systemctl daemon-reload
-  systemctl enable --now vibelab-egress-devbridge.service
+  systemctl enable --now egress-devbridge.service
   say "devbridge service started"
 else
   say "systemctl not available; start the bridge manually with:"

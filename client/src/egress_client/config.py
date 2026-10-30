@@ -2,9 +2,9 @@
 
 Discovery order:
   1. explicit ``--config PATH``
-  2. ``VIBELAB_EGRESS_CONFIG``
+  2. ``EGRESS_CONFIG``
   3. host enrollment socket (per-invoking-UID default profile)
-  4. ``/etc/vibelab-egress/client.yaml``
+  4. ``/etc/egress/client.yaml``
 
 The client config carries NO secrets: tokens and proxy credentials live in
 separate files referenced by path (spec section 37).
@@ -19,9 +19,9 @@ import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_CONFIG_PATH = "/etc/vibelab-egress/client.yaml"
-DEFAULT_ENROLL_SOCKET = "/run/vibelab-egress-enroll/enroll.sock"
-ENV_CONFIG = "VIBELAB_EGRESS_CONFIG"
+DEFAULT_CONFIG_PATH = "/etc/egress/client.yaml"
+DEFAULT_ENROLL_SOCKET = "/run/egress-enroll/enroll.sock"
+ENV_CONFIG = "EGRESS_CONFIG"
 
 CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._\-]{1,64}")
 ENVIRONMENTS = ("host", "container", "vm")
@@ -159,7 +159,7 @@ def load_config(explicit_path: str | None = None) -> ClientConfig:
         path = Path(explicit_path)
     elif os.environ.get(ENV_CONFIG):
         path = Path(os.environ[ENV_CONFIG])
-    elif Path(os.environ.get("VIBELAB_EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)).exists():
+    elif Path(os.environ.get("EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)).exists():
         return _load_host_socket()
     else:
         path = Path(DEFAULT_CONFIG_PATH)
@@ -194,7 +194,7 @@ def load_config(explicit_path: str | None = None) -> ClientConfig:
 
 
 def _load_host_socket() -> ClientConfig:
-    path = os.environ.get("VIBELAB_EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)
+    path = os.environ.get("EGRESS_ENROLL_SOCKET", DEFAULT_ENROLL_SOCKET)
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(30)
@@ -203,10 +203,6 @@ def _load_host_socket() -> ClientConfig:
             raw = sock.recv(4096)
         data = json.loads(raw)
         if not data.get("ok"):
-            if data.get("error") == "migration_required":
-                raise ConfigError(
-                    "default host profile migration is required; run "
-                    "sudo scripts/install-backend-host.sh, then retry")
             raise ConfigError("host enrollment unavailable")
         cfg = ClientConfig(
             client_id=data["client_id"], control_url="http://127.0.0.1:9091",

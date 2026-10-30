@@ -17,9 +17,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "client" / "src"))
 
-from vibelab_egress_client import egressctl  # noqa: E402
-from vibelab_egress_client.api import ApiError  # noqa: E402
-from vibelab_egress_client.config import ConfigError  # noqa: E402
+from egress_client import egressctl  # noqa: E402
+from egress_client.api import ApiError  # noqa: E402
+from egress_client.config import ConfigError  # noqa: E402
 
 
 @pytest.fixture()
@@ -136,14 +136,14 @@ class TestRouteMode:
         class Stub:
             def resolve_route(self, route):
                 assert route == "@blanc:vless-49"
-                return "p-host-vibelab-blanc:vless-49"
+                return "p-host-egress-blanc:vless-49"
             def set_default(self, route):
                 seen["route"] = route
                 return {"route": route}
         code, _, _ = run_cli(monkeypatch, cfg_file, "route", "set",
                              "@blanc:vless-49", api_stub=Stub())
         assert code == 0
-        assert seen["route"] == "p-host-vibelab-blanc:vless-49"
+        assert seen["route"] == "p-host-egress-blanc:vless-49"
 
     def test_mode_set_choices(self, monkeypatch, cfg_file):
         # 'tun' is a valid choice for the CLI (the server decides support)
@@ -184,11 +184,11 @@ class TestList:
     def test_list_shows_personal_alias(self, monkeypatch, cfg_file):
         class Stub:
             def list_routes(self, **_filters):
-                return {"routes": [{"id": "p-host-vibelab-blanc:vless-49",
-                                    "provider": "p-host-vibelab-blanc",
+                return {"routes": [{"id": "p-host-egress-blanc:vless-49",
+                                    "provider": "p-host-egress-blanc",
                                     "country": "FI", "healthy": True}]}
             def list_personal(self):
-                return {"providers": [{"provider_id": "p-host-vibelab-blanc",
+                return {"providers": [{"provider_id": "p-host-egress-blanc",
                                        "alias": "blanc"}]}
         code, out, _ = run_cli(monkeypatch, cfg_file, "list", api_stub=Stub())
         assert code == 0
@@ -262,7 +262,7 @@ class TestUsage:
 
 class TestCapabilities:
     def test_local_userns_capability_uses_runtime_probe(self, monkeypatch, cfg_file):
-        from vibelab_egress_client import tun_runtime
+        from egress_client import tun_runtime
         monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "userns and tun available"})
         path = Path(cfg_file)
         path.write_text(path.read_text().replace("tun_backend: none", "tun_backend: local-userns"))
@@ -281,8 +281,8 @@ class TestCapabilities:
 
 
 def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
-    from vibelab_egress_client import personal_sources
-    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    from egress_client import personal_sources
+    monkeypatch.setenv("EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
     monkeypatch.setattr(personal_sources, "normalize", lambda name: "proxies: []\n")
     raw = tmp_path / "subscription.txt"
     raw.write_text("private-source-marker")
@@ -316,11 +316,11 @@ def test_container_source_keeps_raw_locally(monkeypatch, cfg_file, tmp_path):
 
 def test_source_url_can_be_read_from_stdin(monkeypatch, cfg_file, tmp_path):
     import io
-    from vibelab_egress_client import personal_sources
+    from egress_client import personal_sources
 
     url = "https://subscription.example/path?token=private-value"
     monkeypatch.setattr(sys, "stdin", io.StringIO(url + "\n"))
-    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    monkeypatch.setenv("EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
     monkeypatch.setattr(personal_sources, "normalize", lambda name: "proxies: []\n")
 
     class Stub:
@@ -353,8 +353,8 @@ def test_source_add_timeout_explains_unknown_outcome(monkeypatch, cfg_file, tmp_
         def upload_personal(self, name, yaml_text):
             raise TimeoutError()
 
-    from vibelab_egress_client import personal_sources
-    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    from egress_client import personal_sources
+    monkeypatch.setenv("EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
     monkeypatch.setattr(personal_sources, "normalize", lambda name: raw.read_text())
     code, out, err = run_cli(monkeypatch, cfg_file, "source", "add", "demo",
                              "--file", str(raw), api_stub=Stub())
@@ -365,8 +365,8 @@ def test_source_add_timeout_explains_unknown_outcome(monkeypatch, cfg_file, tmp_
 
 
 def test_container_add_single_uri_without_file(monkeypatch, cfg_file, tmp_path):
-    from vibelab_egress_client import personal_sources
-    monkeypatch.setenv("VIBELAB_EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
+    from egress_client import personal_sources
+    monkeypatch.setenv("EGRESS_SOURCE_DIR", str(tmp_path / "sources"))
     uploaded = []
 
     class Stub:

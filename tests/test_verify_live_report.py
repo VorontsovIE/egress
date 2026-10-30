@@ -42,7 +42,7 @@ def make_check(cid, spec, status, command, evidence):
 
 def make_report(checks):
     report = {
-        "report": "vibelab-egress live acceptance",
+        "report": "egress live acceptance",
         "generated_at": "2026-01-01T00:00:00Z",
         "host": "testhost",
         "checks": checks,
@@ -141,7 +141,7 @@ def test_secret_injection_rejected(tmp_path, monkeypatch):
     fake = tmp_path / "secrets" / "mihomo_api_secret"
     fake.parent.mkdir(parents=True, exist_ok=True)
     fake.write_text("supersecretvalue123456\n")
-    monkeypatch.setenv("VIBELAB_EGRESS_SECRETS", str(tmp_path / "secrets"))
+    monkeypatch.setenv("EGRESS_SECRETS", str(tmp_path / "secrets"))
     # leak it into a check's evidence
     for c in report["checks"]:
         if c["id"] == "a8_secrets_absent":

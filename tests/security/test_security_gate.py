@@ -504,14 +504,14 @@ class TestCompose:
             assert svc.get("privileged") is not True, f"{name}: privileged"
 
     def test_mihomo_admin_api_unpublished(self, compose):
-        mihomo = compose["services"]["vibelab-egress-mihomo"]
+        mihomo = compose["services"]["egress-mihomo"]
         for p in mihomo.get("ports", []):
             # the admin controller port 9090 must not be published
             assert "9090" not in str(p).split(":")[-1], \
                 f"mihomo admin API published: {p}"
 
     def test_image_pinned(self, compose):
-        img = compose["services"]["vibelab-egress-mihomo"]["image"]
+        img = compose["services"]["egress-mihomo"]["image"]
         assert re.search(r":v?\d+\.\d+\.\d+", img), f"mihomo image not pinned: {img}"
 
     def test_secrets_not_in_environment(self, compose):
@@ -549,7 +549,7 @@ class TestClientPackage:
 
     def test_client_uses_only_public_api(self):
         """Every endpoint the client calls must be in the documented set."""
-        api_src = (ROOT / "client" / "src" / "vibelab_egress_client" / "api.py").read_text()
+        api_src = (ROOT / "client" / "src" / "egress_client" / "api.py").read_text()
         # endpoints appear in double-quoted (f-)strings like
         # f"/v1/providers/{id}/update"; a {..} placeholder is a path
         # parameter unless its expression builds a query string (contains ?)
@@ -569,8 +569,8 @@ class TestClientPackage:
 # ===========================================================================
 class TestTunRuntimeBoundary:
     def test_runtime_uses_fd_handoff_and_nested_namespaces(self):
-        runtime = (ROOT / "client/src/vibelab_egress_client/tun_runtime.py").read_text()
-        bootstrap = (ROOT / "client/src/vibelab_egress_client/tun_bootstrap.py").read_text()
+        runtime = (ROOT / "client/src/egress_client/tun_runtime.py").read_text()
+        bootstrap = (ROOT / "client/src/egress_client/tun_bootstrap.py").read_text()
         assert "SCM_RIGHTS" in runtime
         assert "--user" in runtime and "--net" in runtime
         assert "CAP_NET_ADMIN" not in runtime and "CAP_SYS_ADMIN" not in runtime
@@ -590,9 +590,9 @@ class TestTunRuntimeBoundary:
 
     def test_no_legacy_helper_service_or_socket_in_active_client(self):
         assert not (ROOT / "host/strict-helper/egress-tun-helper.py").exists()
-        assert not (ROOT / "host/units/vibelab-egress-tun-helper.service").exists()
-        for path in (ROOT / "client/src/vibelab_egress_client/config.py",
-                     ROOT / "client/src/vibelab_egress_client/egress_run.py"):
+        assert not (ROOT / "host/units/egress-tun-helper.service").exists()
+        for path in (ROOT / "client/src/egress_client/config.py",
+                     ROOT / "client/src/egress_client/egress_run.py"):
             assert "tun-helper.sock" not in path.read_text()
 
 
@@ -641,7 +641,7 @@ class TestCliApiParity:
     def test_egress_run_uses_only_data_plane_endpoints(self, egress):
         """egress-run may only call the one-shot session endpoints + the
         default-capability endpoint (never a control mutation)."""
-        src = (ROOT / "client" / "src" / "vibelab_egress_client" /
+        src = (ROOT / "client" / "src" / "egress_client" /
                "egress_run.py").read_text()
         # it must not reference the default-set endpoint
         assert "/v1/default" not in src

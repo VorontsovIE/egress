@@ -22,8 +22,8 @@
 # Exit codes: 0 ok, 2 usage, 3 verification failed.
 set -uo pipefail
 
-ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+ROOT="${EGRESS_ROOT:-/var/lib/egress}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 DOCKER_GATEWAY="${DOCKER_GATEWAY:-172.17.0.1}"
 REPORT="$ROOT/acceptance-report.json"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -83,7 +83,7 @@ else
 fi
 # Per-service health (a single grep '"healthy"' over compose ps used to pass
 # as soon as ANY service was healthy, masking a crash-looping sibling).
-for c in vibelab-egress-mihomo vibelab-egress-egressd; do
+for c in egress-mihomo egress-egressd; do
   st="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null)"
   h="$(docker inspect --format '{{.State.Health.Status}}' "$c" 2>/dev/null)"
   rcnt="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null)"
@@ -101,10 +101,10 @@ done
 # The host bindings are the dotted quads inside the brackets; a line with
 # no host address (0.0.0.0 or :: publish) means "all interfaces" -> fail.
 PUB="$(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
-      vibelab-egress-mihomo 2>/dev/null || true)"
+      egress-mihomo 2>/dev/null || true)"
 PUB="$PUB
 $(docker inspect --format '{{range .NetworkSettings.Ports}}{{.}}{{"\n"}}{{end}}' \
-      vibelab-egress-egressd 2>/dev/null || true)"
+      egress-egressd 2>/dev/null || true)"
 BAD_BINDS=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -129,7 +129,7 @@ else
 fi
 
 # 3. docker socket not mounted
-if docker inspect vibelab-egress-mihomo vibelab-egress-egressd 2>/dev/null \
+if docker inspect egress-mihomo egress-egressd 2>/dev/null \
    | grep -q "docker.sock"; then
   fail "docker socket mounted into a service"
 else
@@ -164,7 +164,7 @@ fi
 
 # 5. secrets not in container environment
 ENV_LEAK=0
-for c in vibelab-egress-mihomo vibelab-egress-egressd; do
+for c in egress-mihomo egress-egressd; do
   ENVV="$(docker inspect --format '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' "$c" 2>/dev/null || true)"
   if [ -f "$SECRETS_DIR/mihomo_api_secret" ]; then
     S="$(cat "$SECRETS_DIR/mihomo_api_secret")"

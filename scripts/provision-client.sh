@@ -6,7 +6,7 @@
 #     client.yaml            environment-specific config (no secrets inline)
 #     client.token           API token (0600)
 #     default-proxy.auth     SOCKS default-proxy credential user:password (0600)
-#   backend secrets dir (default: /etc/vibelab-egress/secrets):
+#   backend secrets dir (default: /etc/egress/secrets):
 #     clients/<id>.token         same API token (egressd auth registry)
 #     clients/<id>.profile.json  non-secret profile metadata
 #     clients/<id>.proxy-creds   proxy credential (config generator input;
@@ -27,8 +27,8 @@ set -euo pipefail
 
 CLIENT=""
 ENVIRONMENT=""
-OUT="${VIBELAB_EGRESS_BUNDLE_ROOT:-/var/lib/vibelab-egress/client-bundles}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+OUT="${EGRESS_BUNDLE_ROOT:-/var/lib/egress/client-bundles}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 CONTROL_URL=""
 PROXY_HOST=""
 DEFAULT_PORT=1080
@@ -63,21 +63,21 @@ case "$ENVIRONMENT" in
     [ -n "$CONTROL_URL" ] || CONTROL_URL="http://127.0.0.1:9091"
     [ -n "$PROXY_HOST" ] || PROXY_HOST="127.0.0.1"
     [ -n "$TUN_BACKEND" ] || TUN_BACKEND="local-userns"
-    TOKEN_FILE="/etc/vibelab-egress/client.token"
-    AUTH_FILE="/etc/vibelab-egress/default-proxy.auth"
+    TOKEN_FILE="/etc/egress/client.token"
+    AUTH_FILE="/etc/egress/default-proxy.auth"
     ;;
   container)
     [ -n "$CONTROL_URL" ] || CONTROL_URL="http://host.docker.internal:9091"
     [ -n "$PROXY_HOST" ] || PROXY_HOST="host.docker.internal"
     [ -n "$TUN_BACKEND" ] || TUN_BACKEND="local-userns"
-    TOKEN_FILE="/run/secrets/vibelab_egress_client_token"
-    AUTH_FILE="/run/secrets/vibelab_egress_default_proxy_auth"
+    TOKEN_FILE="/run/secrets/egress_client_token"
+    AUTH_FILE="/run/secrets/egress_egress_default_proxy_auth"
     ;;
   *) die_usage "--environment must be host or container" ;;
 esac
 # Offline installer scenarios do not ship compiled binaries; they explicitly
 # provision proxy-only clients. Production provisioning remains fail-closed.
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" = 1 ] && [ -z "${VIBELAB_EGRESS_TEST_TUN:-}" ]; then
+if [ "${EGRESS_TEST_MODE:-0}" = 1 ] && [ -z "${EGRESS_TEST_TUN:-}" ]; then
   TUN_BACKEND="none"
 fi
 [ "$TUN_BACKEND" = local-userns ] || [ "$TUN_BACKEND" = none ] || die_usage "--tun-backend must be local-userns or none"
@@ -159,9 +159,9 @@ write_file "$CLIENTS_DIR/$CLIENT.token" "$API_TOKEN"
 write_file "$CLIENTS_DIR/$CLIENT.profile.json" "$PROFILE_JSON"
 write_file "$CLIENTS_DIR/$CLIENT.proxy-creds" "$PROXY_USER:$PROXY_PASS"
 chmod 700 "$SECRETS_DIR" "$CLIENTS_DIR"
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ] && id -u vibelab-egressd >/dev/null 2>&1; then
-  service_uid="$(id -u vibelab-egressd)"
-  service_gid="$(id -g vibelab-egressd)"
+if [ "${EGRESS_TEST_MODE:-0}" != 1 ] && id -u egressd >/dev/null 2>&1; then
+  service_uid="$(id -u egressd)"
+  service_gid="$(id -g egressd)"
   chown "$service_uid:$service_gid" "$CLIENTS_DIR" \
     "$CLIENTS_DIR/$CLIENT.token" \
     "$CLIENTS_DIR/$CLIENT.profile.json" \

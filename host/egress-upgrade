@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Root-owned updater for the egress client and local Compose backend."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+REPO = "VorontsovIE/egress"
+RELEASES = f"https://api.github.com/repos/{REPO}/releases"
+COMPOSE_ENV = Path("/etc/egress/compose.env")
+COMPOSE_FILE = Path("/usr/share/egress/compose.yaml")
+
+
+def read(url: str, limit=96 * 1024 * 1024) -> bytes:
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                                "User-Agent": "egress-updater"})
+    with urllib.request.urlopen(req, timeout=45) as response:
+        body = response.read(limit + 1)
+    if len(body) > limit:
+        raise RuntimeError("release asset too large")
+    return body
+
+
+def release(tag: str | None) -> dict:
+    data = json.loads(read(f"{RELEASES}/{'latest' if tag is None else 'tags/' + tag}", 2_000_000))
+    if data.get("draft") or not str(data.get("tag_name", "")).startswith("v"):
+        raise RuntimeError("no stable release found")
+    return data
+
+
+def asset(rel: dict, name: str) -> bytes:
+    for item in rel.get("assets", []):
+        if item.get("name") == name:
+            return read(item["browser_download_url"])
+    raise RuntimeError(f"release asset missing: {name}")
+
+
+def verify(name: str, body: bytes, sums: bytes) -> None:
+    match = next((line.split(None, 1)[0] for line in sums.decode().splitlines()
+                  if len(line.split(None, 1)) == 2 and line.split(None, 1)[1].lstrip("* ") == name), None)
+    if not match or hashlib.sha256(body).hexdigest() != match:
+        raise RuntimeError(f"checksum verification failed for {name}")
+
+
+def env_values() -> dict[str, str]:
+    allowed = {"EGRESS_ROOT", "EGRESS_SECRETS", "DOCKER_GATEWAY", "EGRESSD_UID", "EGRESSD_GID", "EGRESSD_IMAGE"}
+    result = {}
+    for line in COMPOSE_ENV.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in allowed and "\n" not in value:
+            result[key] = value
+    return result
+
+
+def deploy_backend(tag: str, compose_bytes: bytes) -> None:
+    env = env_values()
+    old = env.get("EGRESSD_IMAGE", "ghcr.io/vorontsovie/egress:latest")
+    new = f"ghcr.io/vorontsovie/egress:{tag}"
+    with tempfile.TemporaryDirectory(prefix="egress-upgrade-") as temp:
+        compose = Path(temp) / "compose.yaml"
+        compose.write_bytes(compose_bytes)
+        file = ["docker", "compose", "--env-file", str(COMPOSE_ENV), "-f", str(compose)]
+        run = lambda *args: subprocess.run([*file, *args], cwd=temp, check=True)
+        env["EGRESSD_IMAGE"] = new
+        os.environ.update(env)
+        try:
+            run("pull", "egress-egressd")
+            run("up", "-d", "--force-recreate", "egress-egressd")
+            for container in ("egress-egressd", "egress-mihomo"):
+                status = subprocess.run(["docker", "inspect", "--format", "{{.State.Health.Status}}", container],
+                                        check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+                if status != "healthy":
+                    raise RuntimeError(f"{container} is not healthy after update: {status or 'unknown'}")
+            lines = [line for line in COMPOSE_ENV.read_text().splitlines()
+                     if not line.startswith("EGRESSD_IMAGE=")]
+            tmp = COMPOSE_ENV.with_name(".compose.env.new")
+            tmp.write_text("\n".join([*lines, f"EGRESSD_IMAGE={new}"]) + "\n")
+            tmp.chmod(COMPOSE_ENV.stat().st_mode & 0o777)
+            os.replace(tmp, COMPOSE_ENV)
+        except Exception:
+            os.environ["EGRESSD_IMAGE"] = old
+            subprocess.run([*file, "up", "-d", "--force-recreate", "egress-egressd"],
+                           cwd=temp, check=False)
+            raise
+
+
+def install_system_client(version: str, wheel: bytes, engine: bytes) -> None:
+    root = Path("/usr/local/lib/egress")
+    versions = root / "versions"
+    target = versions / version
+    if target.exists():
+        raise RuntimeError(f"version {version} is already installed")
+    versions.mkdir(mode=0o755, parents=True, exist_ok=True)
+    target.mkdir(mode=0o755)
+    with tempfile.TemporaryDirectory(prefix=".egress-client-", dir=versions) as tmp:
+        temp = Path(tmp)
+        wheel_path = temp / "client.whl"
+        wheel_path.write_bytes(wheel)
+        engine_path = temp / "egress-tun-engine"
+        engine_path.write_bytes(engine)
+        engine_path.chmod(0o755)
+        venv_path = temp / "venv"
+        subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
+        subprocess.run([str(venv_path / "bin/python"), "-m", "pip", "install", "--no-deps", "--no-index", str(wheel_path)], check=True)
+        shutil.move(str(venv_path), target / "venv")
+        shutil.move(str(engine_path), target / "egress-tun-engine")
+    current_tmp = root / ".current-new"
+    current_tmp.unlink(missing_ok=True)
+    current_tmp.symlink_to(Path("versions") / version)
+    os.replace(current_tmp, root / "current")
+    for command, module in (("egressctl", "egressctl"), ("egress-run", "egress_run")):
+        wrapper = Path("/usr/local/bin") / command
+        body = ("#!/bin/sh\nexport EGRESS_TUN_ENGINE=/usr/local/lib/egress/current/egress-tun-engine\n"
+                f"exec /usr/local/lib/egress/current/venv/bin/python -m egress_client.{module} \"$@\"\n")
+        temp = wrapper.with_name(f".{command}.new")
+        temp.write_text(body)
+        temp.chmod(0o755)
+        os.replace(temp, wrapper)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--version")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--client-only", action="store_true")
+    scope.add_argument("--backend-only", action="store_true")
+    args = parser.parse_args()
+    if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or os.environ.get("SUDO_USER") == "root":
+        print("run this fixed updater with sudo", file=sys.stderr)
+        return 3
+    rel = release(args.version)
+    tag = rel["tag_name"]
+    sums = asset(rel, "SHA256SUMS")
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine().lower())
+    if arch is None:
+        raise RuntimeError("only Linux amd64 and arm64 are supported")
+    if not args.backend_only:
+        wheel_name = f"egress_client-{tag[1:]}-py3-none-any.whl"
+        engine_name = f"egress-tun-engine-linux-{arch}"
+        wheel, engine = asset(rel, wheel_name), asset(rel, engine_name)
+        verify(wheel_name, wheel, sums)
+        verify(engine_name, engine, sums)
+    if not args.client_only:
+        bundle_name = f"egress-{tag[1:]}.tar.gz"
+        bundle = asset(rel, bundle_name)
+        verify(bundle_name, bundle, sums)
+    if not args.backend_only:
+        install_system_client(tag[1:], wheel, engine)
+    if not args.client_only:
+        import tarfile
+        with tempfile.TemporaryDirectory(prefix="egress-deploy-") as temp:
+            bundle_path = Path(temp) / bundle_name
+            bundle_path.write_bytes(bundle)
+            with tarfile.open(bundle_path) as archive:
+                member = next((m for m in archive.getmembers() if m.name.endswith("/compose.yaml")), None)
+                if member is None or Path(member.name).is_absolute() or ".." in Path(member.name).parts:
+                    raise RuntimeError("release deployment bundle has no safe compose.yaml")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise RuntimeError("cannot read compose file from release bundle")
+                compose_bytes = stream.read(4 * 1024 * 1024 + 1)
+                if len(compose_bytes) > 4 * 1024 * 1024:
+                    raise RuntimeError("compose file too large")
+        deploy_backend(tag, compose_bytes)
+    print(f"egress updated to {tag}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"egress-upgrade: {exc}", file=sys.stderr)
+        raise SystemExit(1)

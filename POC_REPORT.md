@@ -1,4 +1,4 @@
-# PoC Report — vibelab-egress (Phase 0)
+# PoC Report — egress (Phase 0)
 
 **Result: all 22/22 checks passed.** The Mihomo routing architecture was confirmed with a real binary, unblocking production implementation phases A1–A8.
 

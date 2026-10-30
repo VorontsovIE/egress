@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "client" / "src"))
 
-from vibelab_egress_client.config import (  # noqa: E402
+from egress_client.config import (  # noqa: E402
     ENV_CONFIG,
     ClientConfig,
     ConfigError,

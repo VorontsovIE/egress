@@ -47,7 +47,7 @@ from .personal import load_metadata
 
 
 def load_mihomo_secret() -> str | None:
-    p = Path(os.environ.get("MIHOMO_SECRET_FILE", "/etc/vibelab-egress/secrets/mihomo_api_secret"))
+    p = Path(os.environ.get("MIHOMO_SECRET_FILE", "/etc/egress/secrets/mihomo_api_secret"))
     try:
         return p.read_text().strip() or None
     except OSError:
@@ -127,7 +127,7 @@ def build_egress_config() -> EgressConfig | None:
     in a degraded mode where provider updates write the file but cannot
     hot-reload mihomo (the offline/test path)."""
     secret = load_mihomo_secret()
-    clients_dir = os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/vibelab-egress/secrets/clients")
+    clients_dir = os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/egress/secrets/clients")
     clients = load_clients(clients_dir)
     if not secret or not clients:
         return None
@@ -165,7 +165,7 @@ class ConfigController:
         config reflects the current inventory (a provider file may have been
         added, removed, or its node set changed by an update)."""
         providers_dir = os.environ.get("EGRESSD_PROVIDERS_DIR", "/root/.config/mihomo/providers")
-        clients_dir = os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/vibelab-egress/secrets/clients")
+        clients_dir = os.environ.get("EGRESSD_CLIENTS_DIR", "/etc/egress/secrets/clients")
         slots_file = os.environ.get("EGRESSD_ONESHOT_SLOTS_FILE")
         slots_count = int(os.environ.get("EGRESSD_ONESHOT_SLOTS", "8"))
         self.cfg.providers = load_providers(providers_dir)

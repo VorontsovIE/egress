@@ -17,7 +17,7 @@ Fixed command stubs are prepended to `PATH` only during each scenario. The Docke
 
 The harness covers shell/Python syntax, successful installation and structured logs, deployment and health-gate failures, root enforcement, static security checks, and backend bind verification. Health polling runs without real delays while retaining the production decision logic.
 
-The suite adapts to environments where `/usr/local` and `/etc/vibelab-egress` are not writable. In that case it skips installing the client and provisions the bundle using the real provisioning script; checks requiring an installed package are reported as skipped.
+The suite adapts to environments where `/usr/local` and `/etc/egress` are not writable. In that case it skips installing the client and provisions the bundle using the real provisioning script; checks requiring an installed package are reported as skipped.
 
 ## Add scenarios
 

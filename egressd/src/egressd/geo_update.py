@@ -70,7 +70,7 @@ MIN_SIZE = 1024
 
 def http_fetch(url: str, timeout: float = 60.0) -> bytes:
     """Production fetcher: download ``url`` and return the bytes."""
-    req = urllib.request.Request(url, headers={"User-Agent": "vibelab-egress/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "egress/0.1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 

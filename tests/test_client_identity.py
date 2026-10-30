@@ -13,9 +13,9 @@ SPEC.loader.exec_module(CLIENT_IDENTITY)
 
 def test_default_id_uses_username_for_host_and_container(monkeypatch):
     monkeypatch.setattr(CLIENT_IDENTITY.pwd, "getpwuid",
-                        lambda _uid: SimpleNamespace(pw_name="vibelab"))
-    assert CLIENT_IDENTITY.default_client_id(1000, "host") == "host-vibelab"
-    assert CLIENT_IDENTITY.default_client_id(1000, "container") == "container-vibelab"
+                        lambda _uid: SimpleNamespace(pw_name="egress"))
+    assert CLIENT_IDENTITY.default_client_id(1000, "host") == "host-egress"
+    assert CLIENT_IDENTITY.default_client_id(1000, "container") == "container-egress"
 
 
 def test_default_id_falls_back_for_unavailable_or_unsafe_username(monkeypatch):

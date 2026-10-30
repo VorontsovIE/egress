@@ -23,7 +23,7 @@ set -uo pipefail
 
 CONFIG=""
 OFFLINE=0
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 EGRESSCTL="${EGRESSCTL:-egressctl}"
 
 FAILURES=0
@@ -88,8 +88,8 @@ fi
 # 6. secret file permissions from the config itself
 CFG_FILE=""
 if [ -n "$CONFIG" ]; then CFG_FILE="$CONFIG"
-elif [ -n "${VIBELAB_EGRESS_CONFIG:-}" ]; then CFG_FILE="$VIBELAB_EGRESS_CONFIG"
-else CFG_FILE="/etc/vibelab-egress/client.yaml"; fi
+elif [ -n "${EGRESS_CONFIG:-}" ]; then CFG_FILE="$EGRESS_CONFIG"
+else CFG_FILE="/etc/egress/client.yaml"; fi
 if [ -f "$CFG_FILE" ]; then
   TOKEN_FILE="$(sed -n 's/^api_token_file:[[:space:]]*//p' "$CFG_FILE" | head -1)"
   AUTH_FILE="$(sed -n 's/^default_proxy_auth_file:[[:space:]]*//p' "$CFG_FILE" | head -1)"

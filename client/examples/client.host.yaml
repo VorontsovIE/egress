@@ -6,8 +6,8 @@ control_url: http://127.0.0.1:9091
 proxy_host: 127.0.0.1
 default_proxy_port: 1080
 oneshot_proxy_port: 1081
-api_token_file: /etc/vibelab-egress/client.token
-default_proxy_auth_file: /etc/vibelab-egress/default-proxy.auth
+api_token_file: /etc/egress/client.token
+default_proxy_auth_file: /etc/egress/default-proxy.auth
 environment: host
 tun_backend: local-userns
 tun_dns_servers: 1.1.1.1,1.0.0.1

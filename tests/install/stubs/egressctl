@@ -3,7 +3,7 @@
 set -u
 case "${1:-}" in
   --help|-h)
-    echo "egressctl (stub) — manage vibelab-egress egress"
+    echo "egressctl (stub) — manage egress egress"
     exit 0
     ;;
   --json)

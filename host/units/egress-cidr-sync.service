@@ -1,22 +1,22 @@
-# Vibelab-egress: Docker network CIDR synchronization (spec section 35).
+# egress-egress: Docker network CIDR synchronization (spec section 35).
 # Runs the fixed egress-hostctl operation; no arbitrary commands.
 [Unit]
-Description=vibelab-egress Docker CIDR sync
+Description=egress Docker CIDR sync
 After=docker.service network-online.target
 Wants=docker.service
 
 [Service]
 Type=oneshot
 # Override with a drop-in if the repo lives elsewhere:
-#   Environment=VIBELAB_EGRESS_HOSTCTL=/srv/workspace/vibelab-egress/host/egress-hostctl
-Environment=VIBELAB_EGRESS_HOSTCTL=/srv/workspace/vibelab-egress/host/egress-hostctl
-ExecStart=/usr/bin/env python3 ${VIBELAB_EGRESS_HOSTCTL} sync-docker-cidrs
+#   Environment=EGRESS_HOSTCTL=/srv/workspace/egress/host/egress-hostctl
+Environment=EGRESS_HOSTCTL=/srv/workspace/egress/host/egress-hostctl
+ExecStart=/usr/bin/env python3 ${EGRESS_HOSTCTL} sync-docker-cidrs
 # The tool itself only runs `docker network ls` + `docker network inspect`
 # (fixed argv, no shell).
 User=root
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/vibelab-egress
+ReadWritePaths=/var/lib/egress
 
 [Install]
 WantedBy=multi-user.target

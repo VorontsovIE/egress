@@ -14,7 +14,7 @@ REFRESH_INTERVAL = 600
 
 
 def source_dir() -> Path:
-    return Path(os.environ.get("EGRESSD_PROVIDER_SOURCES_DIR", "/etc/vibelab-egress/secrets/providers"))
+    return Path(os.environ.get("EGRESSD_PROVIDER_SOURCES_DIR", "/etc/egress/secrets/providers"))
 
 
 def status_dir() -> Path:

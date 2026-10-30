@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall-backend-host.sh — remove the vibelab-egress backend (rollback).
+# uninstall-backend-host.sh — remove the egress backend (rollback).
 #
 # Stops and removes the compose stack, disables host units, and optionally
 # removes the persistent root, backend secrets, and host client install.
@@ -13,8 +13,8 @@
 # Exit codes: 0 ok, 2 usage, 3 environment error.
 set -euo pipefail
 
-ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+ROOT="${EGRESS_ROOT:-/var/lib/egress}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 REMOVE_DATA=0
 REMOVE_CLIENT=0
 ASSUME_YES=0
@@ -49,15 +49,15 @@ if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
   say "stopping compose stack"
   (cd "$REPO_ROOT" && docker compose down --remove-orphans 2>/dev/null) || true
   say "removing built egressd image"
-  docker rmi vibelab-egress-egressd:local 2>/dev/null || true
+  docker rmi egress-egressd:local 2>/dev/null || true
 else
   say "docker not available; skipping stack removal"
 fi
 
 # 2. host units
 if command -v systemctl >/dev/null; then
-  for u in vibelab-egress-cidr-sync.timer vibelab-egress-cidr-sync.service \
-           vibelab-egress-devbridge.service; do
+  for u in egress-cidr-sync.timer egress-cidr-sync.service \
+           egress-devbridge.service; do
     systemctl disable --now "$u" 2>/dev/null || true
     rm -f "/etc/systemd/system/$u"
   done
@@ -68,20 +68,27 @@ fi
 # 3. host client install
 if [ "$REMOVE_CLIENT" = "1" ]; then
   say "removing host client install"
-  rm -rf /etc/vibelab-egress
-  rm -rf /usr/local/lib/vibelab-egress
+  rm -f /etc/egress/client.yaml /etc/egress/client.token \
+    /etc/egress/default-proxy.auth
+  rm -rf /usr/local/lib/egress
   rm -f /usr/local/bin/egressctl /usr/local/bin/egress-run
 else
   say "host client install kept (use --remove-client to remove)"
 fi
 
-# 4. backend secrets (always removed: they are bootstrap material)
+# 4. remove runtime credentials but keep provider subscription inputs.
 if [ -d "$SECRETS_DIR" ]; then
-  if confirm "remove backend secrets at $SECRETS_DIR?"; then
-    rm -rf "$SECRETS_DIR"
-    say "backend secrets removed"
+  if [ "$REMOVE_DATA" = "1" ]; then
+    if confirm "REMOVE backend secrets and provider subscriptions at $SECRETS_DIR?"; then
+      rm -rf "$SECRETS_DIR"
+      say "backend secrets and provider subscriptions removed"
+    else
+      say "backend secrets and provider subscriptions kept"
+    fi
   else
-    say "backend secrets kept"
+    rm -f "$SECRETS_DIR/mihomo_api_secret" "$SECRETS_DIR/devbridge.token"
+    rm -rf "$SECRETS_DIR/clients"
+    say "runtime credentials removed; provider subscription inputs kept"
   fi
 fi
 

@@ -27,9 +27,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "client" / "src"))
 
-from vibelab_egress_client import egress_run  # noqa: E402
-from vibelab_egress_client.api import ApiError  # noqa: E402
-from vibelab_egress_client.config import ConfigError  # noqa: E402
+from egress_client import egress_run  # noqa: E402
+from egress_client.api import ApiError  # noqa: E402
+from egress_client.config import ConfigError  # noqa: E402
 
 
 @pytest.fixture()
@@ -144,7 +144,7 @@ class TestDirect:
         p = subprocess.run(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, {str(ROOT / 'client' / 'src')!r});"
-             "from vibelab_egress_client import egress_run;"
+             "from egress_client import egress_run;"
              f"egress_run.main(['--config', {cfg_file!r}, 'direct', '--',"
              f" 'sh', {str(script)!r}])"],
             capture_output=True, text=True)
@@ -208,7 +208,7 @@ class TestProxy:
         class Stub:
             def resolve_route(self, route):
                 assert route == "@blanc:vless-49"
-                return "p-host-vibelab-blanc:vless-49"
+                return "p-host-egress-blanc:vless-49"
             def oneshot_session(self, route):
                 calls.append(route)
                 return {"id": "job-alias", "capability": {
@@ -219,7 +219,7 @@ class TestProxy:
         code = run_egress_run(monkeypatch, cfg_file,
                               ["@blanc:vless-49", "--", "true"], api_stub=Stub())
         assert code == 0
-        assert calls == ["p-host-vibelab-blanc:vless-49"]
+        assert calls == ["p-host-egress-blanc:vless-49"]
 
     def test_oneshot_uses_client_vantage(self, monkeypatch, cfg_file):
         """The one-shot SOCKS endpoint comes from the CLIENT's own vantage
@@ -310,13 +310,13 @@ class TestProxy:
 # ---------------------------------------------------------------------------
 class TestTun:
     def test_unsupported_probe_fails_closed(self, monkeypatch, cfg_file):
-        from vibelab_egress_client import tun_runtime
+        from egress_client import tun_runtime
         monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "unsupported_in_environment", "reason": "no userns"})
         assert run_egress_run(monkeypatch, cfg_file,
                               ["--mode", "tun", "direct", "--", "true"]) == egress_run.EXIT_UNSUPPORTED
 
     def test_workload_uses_local_tun_runner(self, monkeypatch, cfg_file):
-        from vibelab_egress_client import tun_runtime
+        from egress_client import tun_runtime
         monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "ok"})
         seen = {}
         def fake_run(command, **kwargs):
@@ -330,7 +330,7 @@ class TestTun:
         assert seen["dns_servers"] == ("1.1.1.1", "1.0.0.1")
 
     def test_route_specific_socks_capability_is_closed_after_run(self, monkeypatch, cfg_file):
-        from vibelab_egress_client import tun_runtime
+        from egress_client import tun_runtime
         monkeypatch.setattr(tun_runtime, "probe", lambda: {"status": "supported", "reason": "ok"})
         seen = {}
         class Api:
@@ -360,7 +360,7 @@ class TestTun:
                               ["--mode", "tun", "direct", "--", "true"]) == egress_run.EXIT_UNSUPPORTED
 
     def test_runtime_has_no_helper_socket_protocol(self):
-        from vibelab_egress_client import tun_runtime
+        from egress_client import tun_runtime
         assert not hasattr(egress_run, "_tun_helper_call")
         assert "--net" in Path(tun_runtime.__file__).read_text()
 
@@ -406,7 +406,7 @@ class TestChildSemantics:
         p = subprocess.Popen(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, {str(ROOT / 'client' / 'src')!r});"
-             "from vibelab_egress_client import egress_run;"
+             "from egress_client import egress_run;"
              f"egress_run.main(['--config', {cfg_file!r}, 'direct', '--',"
              f" 'sh', '-c', {script!r}])"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

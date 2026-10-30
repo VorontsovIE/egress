@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# install-backend-host.sh — deploy the vibelab-egress backend on a Docker
+# install-backend-host.sh — deploy the egress backend on a Docker
 # host (spec sections 32-A, 35, 36, 37, 38).
 #
 # Steps (numbered as logged, step N/10):
 #   1. prerequisites (docker, compose v2, python3)
 #   2. persistent root: create dirs, check filesystem (findmnt/df)
-#   3. backend secrets: /etc/vibelab-egress/secrets/{mihomo_api_secret,
+#   3. backend secrets: /etc/egress/secrets/{mihomo_api_secret,
 #      devbridge.token, providers/, clients/} (0600, never printed)
 #   4. GEO data (optional — mihomo auto-updates at runtime)
 #   5. Docker CIDR sync (egress-hostctl) + systemd timer
@@ -33,12 +33,12 @@
 # Exit codes: 0 ok, 2 usage, 3 environment error, 4 verification failed.
 #
 # Test mode:
-#   VIBELAB_EGRESS_TEST_MODE=1 — only for stubbed tests (tests/install); it
+#   EGRESS_TEST_MODE=1 — only for stubbed tests (tests/install); it
 #   bypasses the root check and must not be used for production installs.
 set -Eeuo pipefail
 
-ROOT="${VIBELAB_EGRESS_ROOT:-/var/lib/vibelab-egress}"
-SECRETS_DIR="${VIBELAB_EGRESS_SECRETS:-/etc/vibelab-egress/secrets}"
+ROOT="${EGRESS_ROOT:-/var/lib/egress}"
+SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 DOCKER_GATEWAY="${DOCKER_GATEWAY:-172.17.0.1}"
 SKIP_CLIENT=0
 SKIP_FIREWALL=0
@@ -124,11 +124,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Host bootstrap operation: root is required. VIBELAB_EGRESS_TEST_MODE=1
+# Host bootstrap operation: root is required. EGRESS_TEST_MODE=1
 # bypasses ONLY this check — it is consumed by the offline stubbed test
 # suite (tests/install, see tests/install/README.md) and is not a
 # production flag.
-[ "${VIBELAB_EGRESS_TEST_MODE:-0}" = "1" ] || [ "$(id -u)" = "0" ] || \
+[ "${EGRESS_TEST_MODE:-0}" = "1" ] || [ "$(id -u)" = "0" ] || \
   die_env "must run as root (host bootstrap operation)"
 
 # Log file is created before step 2 (persistent root) so steps 2+ are
@@ -142,7 +142,7 @@ trap on_error ERR
 # ---------------------------------------------------------------------------
 # run header
 # ---------------------------------------------------------------------------
-log "=== vibelab-egress backend install ==="
+log "=== egress backend install ==="
 log "run header: hostname=$(hostname) kernel=$(uname -r) user=$(id -un)"
 log "run header: docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unavailable) compose=$(docker compose version 2>/dev/null || echo unavailable)"
 log "run header: python3=$(python3 --version 2>&1) git_rev=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -164,16 +164,16 @@ command -v python3 >/dev/null 2>&1 || die_env "python3 not found"
 docker compose version >/dev/null 2>&1 || die_env "docker compose v2 not available"
 [ -f "$REPO_ROOT/compose.yaml" ] || die_env "compose.yaml not found in $REPO_ROOT"
 log "prerequisites ok (docker, compose v2, python3, compose.yaml)"
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" = 1 ]; then
+if [ "${EGRESS_TEST_MODE:-0}" = 1 ]; then
   EGRESSD_UID=1000
   EGRESSD_GID=1000
 else
-  getent group vibelab-egressd >/dev/null || groupadd --system vibelab-egressd
-  id vibelab-egressd >/dev/null 2>&1 || \
-    useradd --system --gid vibelab-egressd --no-create-home \
-            --shell /usr/sbin/nologin vibelab-egressd
-  EGRESSD_UID="$(id -u vibelab-egressd)"
-  EGRESSD_GID="$(id -g vibelab-egressd)"
+  getent group egressd >/dev/null || groupadd --system egressd
+  id egressd >/dev/null 2>&1 || \
+    useradd --system --gid egressd --no-create-home \
+            --shell /usr/sbin/nologin egressd
+  EGRESSD_UID="$(id -u egressd)"
+  EGRESSD_GID="$(id -g egressd)"
 fi
 export EGRESSD_UID EGRESSD_GID
 
@@ -215,17 +215,18 @@ chmod 700 "$ROOT/generated"
 chown -R "$EGRESSD_UID:$EGRESSD_GID" "$ROOT/providers" 2>/dev/null || true
 chmod 700 "$ROOT/providers"
 log "persistent dirs ready (0700; egressd+generated -> service uid $EGRESSD_UID)"
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
-  install -d -o root -g root -m 0755 /etc/vibelab-egress
+if [ "${EGRESS_TEST_MODE:-0}" != 1 ]; then
+  install -d -o root -g root -m 0755 /etc/egress
   EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
   EGRESSD_VERSION="${EGRESSD_VERSION:-latest}"
-  printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nVIBELAB_EGRESS_ROOT=%s\nVIBELAB_EGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\nEGRESSD_IMAGE=ghcr.io/vorontsovie/egress:%s\n' \
+  printf 'EGRESSD_UID=%s\nEGRESSD_GID=%s\nEGRESS_ROOT=%s\nEGRESS_SECRETS=%s\nDOCKER_GATEWAY=%s\nEGRESSD_IMAGE=ghcr.io/vorontsovie/egress:%s\n' \
     "$EGRESSD_UID" "$EGRESSD_GID" "$ROOT" "$SECRETS_DIR" "$DOCKER_GATEWAY" "$EGRESSD_VERSION" \
-    > /etc/vibelab-egress/compose.env
-  chmod 0644 /etc/vibelab-egress/compose.env
+    > /etc/egress/compose.env
+  chmod 0644 /etc/egress/compose.env
 fi
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
+if [ "${EGRESS_TEST_MODE:-0}" != 1 ]; then
   install -m 0755 "$REPO_ROOT/host/egress-providerctl" /usr/local/sbin/egress-providerctl
+  install -m 0755 "$REPO_ROOT/host/egress-upgrade" /usr/sbin/egress-upgrade
 fi
 
 # Seed the GEO datasets into the mihomo home dir. Mihomo v1.19.32 treats a
@@ -282,18 +283,18 @@ log "GEO data: optional — mihomo auto-updates at runtime (no pre-download)"
 # ---------------------------------------------------------------------------
 STEP=5; STEP_NAME="Docker CIDR sync"
 log "Docker CIDR sync"
-export VIBELAB_EGRESS_ROOT="$ROOT"
+export EGRESS_ROOT="$ROOT"
 run_logged "egress-hostctl sync-docker-cidrs" \
   python3 "$HOSTCTL" sync-docker-cidrs \
   || die_env "CIDR sync failed (full log: $LOG_FILE)"
 if command -v systemctl >/dev/null; then
-  install -m 644 "$REPO_ROOT/host/units/vibelab-egress-cidr-sync.service" \
+  install -m 644 "$REPO_ROOT/host/units/egress-cidr-sync.service" \
                  /etc/systemd/system/ 2>/dev/null || true
-  install -m 644 "$REPO_ROOT/host/units/vibelab-egress-cidr-sync.timer" \
+  install -m 644 "$REPO_ROOT/host/units/egress-cidr-sync.timer" \
                  /etc/systemd/system/ 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
-  systemctl enable --now vibelab-egress-cidr-sync.timer 2>/dev/null || \
-    log "  note: could not enable cidr-sync timer (run: systemctl enable --now vibelab-egress-cidr-sync.timer)"
+  systemctl enable --now egress-cidr-sync.timer 2>/dev/null || \
+    log "  note: could not enable cidr-sync timer (run: systemctl enable --now egress-cidr-sync.timer)"
 else
   log "  note: systemctl not available; run CIDR sync manually after Docker restarts"
 fi
@@ -361,14 +362,9 @@ STEP=8; STEP_NAME="bootstrap config"
 log "generating initial mihomo config (bootstrap)"
 # A running egressd writes the same shared config. Stop it before bootstrap
 # so it cannot replace the startup config while Mihomo is being recreated.
-run_logged "docker compose stop vibelab-egress-egressd vibelab-egress-mihomo" \
-  docker compose stop vibelab-egress-egressd vibelab-egress-mihomo \
+run_logged "docker compose stop egress-egressd egress-mihomo" \
+  docker compose stop egress-egressd egress-mihomo \
   || die_env "docker compose stop failed (full log: $LOG_FILE)"
-run_logged "migrate user and personal-provider identities" \
-  python3 "$REPO_ROOT/scripts/migrate-egress-identities.py" \
-    --root "$ROOT" --secrets-dir "$SECRETS_DIR" \
-    || { docker compose up -d >/dev/null 2>&1 || true; \
-         die_env "identity migration failed (full log: $LOG_FILE)"; }
 touch "$ROOT/providers/.gitkeep"
 run_logged "python3 -m egressd.bootstrap_config" \
   env PYTHONPATH="$REPO_ROOT/egressd/src" python3 -m egressd.bootstrap_config \
@@ -390,8 +386,8 @@ run_logged "python3 -m egressd.bootstrap_config" \
 log "making backend secrets readable by the egressd user (uid $EGRESSD_UID)"
 chown -R "$EGRESSD_UID:$EGRESSD_GID" "$SECRETS_DIR" 2>/dev/null || \
   log "  note: could not chown $SECRETS_DIR to service uid (egressd may fail to read secrets)"
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ]; then
-  chmod 0755 /etc/vibelab-egress
+if [ "${EGRESS_TEST_MODE:-0}" != 1 ]; then
+  chmod 0755 /etc/egress
 fi
 
 # ---------------------------------------------------------------------------
@@ -399,15 +395,15 @@ fi
 # ---------------------------------------------------------------------------
 STEP=9; STEP_NAME="compose deploy"
 log "deploying compose stack (mihomo pinned, egressd from GHCR)"
-export VIBELAB_EGRESS_SECRETS="$SECRETS_DIR"
+export EGRESS_SECRETS="$SECRETS_DIR"
 export DOCKER_GATEWAY
 EGRESSD_VERSION="$(git -C "$REPO_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
 export EGRESSD_IMAGE="ghcr.io/vorontsovie/egress:${EGRESSD_VERSION:-latest}"
 cd "$REPO_ROOT"
-# Service key in compose.yaml is the full name (vibelab-egress-egressd);
+# Service key in compose.yaml is the full name (egress-egressd);
 # the short name is not a valid compose service reference.
-run_logged "docker compose pull vibelab-egress-egressd" \
-  docker compose pull vibelab-egress-egressd \
+run_logged "docker compose pull egress-egressd" \
+  docker compose pull egress-egressd \
   || die_env "docker compose pull failed (full log: $LOG_FILE)"
 # The generated config and client credentials are bind-mounted files. Compose
 # does not recreate a container when their contents change, so an existing
@@ -415,18 +411,18 @@ run_logged "docker compose pull vibelab-egress-egressd" \
 # Restart both services on install to load the freshly generated inputs.
 run_logged "docker compose up -d --force-recreate" docker compose up -d --force-recreate \
   || die_env "docker compose up -d --force-recreate failed (full log: $LOG_FILE)"
-if [ "${VIBELAB_EGRESS_TEST_MODE:-0}" != 1 ] && command -v systemctl >/dev/null; then
-  install -d -o root -g root -m 0755 /usr/local/libexec/vibelab-egress
+if [ "${EGRESS_TEST_MODE:-0}" != 1 ] && command -v systemctl >/dev/null; then
+  install -d -o root -g root -m 0755 /usr/local/libexec/egress
   install -o root -g root -m 0755 "$REPO_ROOT/host/egress-enroll" \
-    /usr/local/libexec/vibelab-egress/egress-enroll
+    /usr/local/libexec/egress/egress-enroll
   install -o root -g root -m 0644 "$REPO_ROOT/host/client_identity.py" \
-    /usr/local/libexec/vibelab-egress/client_identity.py
+    /usr/local/libexec/egress/client_identity.py
   install -o root -g root -m 0644 \
-    "$REPO_ROOT/host/units/vibelab-egress-enroll.service" \
-    /etc/systemd/system/vibelab-egress-enroll.service
+    "$REPO_ROOT/host/units/egress-enroll.service" \
+    /etc/systemd/system/egress-enroll.service
   systemctl daemon-reload
-  systemctl enable --now vibelab-egress-enroll.service
-  systemctl restart vibelab-egress-enroll.service
+  systemctl enable --now egress-enroll.service
+  systemctl restart egress-enroll.service
 fi
 log "waiting for services to become healthy (3 consecutive polls, 2s interval, 90s timeout)"
 # Require EVERY service to be healthy, not just any one. The old check
@@ -438,7 +434,7 @@ log "waiting for services to become healthy (3 consecutive polls, 2s interval, 9
 # 3 CONSECUTIVE all-healthy polls before proceeding; the counter resets on
 # any failure. On timeout we dump the failing containers' logs (redacted)
 # and inspect fields so the crash is visible instead of masked.
-SERVICES=(vibelab-egress-mihomo vibelab-egress-egressd)
+SERVICES=(egress-mihomo egress-egressd)
 
 # svc_field <service> <format> — one docker inspect field; empty on error.
 svc_field() {
@@ -541,9 +537,9 @@ fi
 # ---------------------------------------------------------------------------
 STEP=10; STEP_NAME="acceptance harness"
 log "running host acceptance harness"
-# The harness resolves compose.yaml from VIBELAB_EGRESS_REPO; point it at the
+# The harness resolves compose.yaml from EGRESS_REPO; point it at the
 # repo checkout on this host (its built-in default is the sandbox path).
-export VIBELAB_EGRESS_REPO="$REPO_ROOT"
+export EGRESS_REPO="$REPO_ROOT"
 if run_logged "egress-host-test (host acceptance harness)" \
      python3 "$REPO_ROOT/host/egress-host-test" --out "$ROOT/acceptance-report.json"; then
   log "acceptance: PASS"
@@ -555,5 +551,5 @@ fi
 log "backend installation complete"
 log "  persistent root : $ROOT"
 log "  secrets         : $SECRETS_DIR"
-log "  compose project : vibelab-egress (mihomo + egressd)"
+log "  compose project : egress (mihomo + egressd)"
 log "  next: provision container clients with scripts/provision-client.sh"
