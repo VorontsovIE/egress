@@ -5,6 +5,12 @@ environment. It controls a shared egress backend (Mihomo) through a narrow,
 authenticated API. Use it when a task needs a specific exit location, a
 specific provider, or a baseline comparison against `direct`.
 
+Check that both `egressctl` and `egress-run` are available with
+`command -v egressctl` and `command -v egress-run`. If either command is
+missing, use [INSTALL.md](../../INSTALL.md) to install the client. If both are
+available, continue with the identity check below; consult the installation
+guide if the client is not configured.
+
 ## Hard rules (never violate)
 
 1. **Start with identity.** Before anything else run `egressctl whoami` (and
