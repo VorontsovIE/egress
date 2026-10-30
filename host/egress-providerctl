@@ -134,18 +134,38 @@ def update(args: argparse.Namespace) -> None:
 
 def delete_source(args: argparse.Namespace) -> None:
     provider_id = check_id(args.id)
-    found = False
-    for path in (source_dir() / f"{provider_id}.json",
-                 source_dir() / f"{provider_id}.source",
-                 ROOT / "providers" / f"{provider_id}.yaml",
-                 ROOT / "providers" / f"{provider_id}.yaml.lkg",
-                 ROOT / "egressd" / "provider-status" / f"{provider_id}.json"):
-        if path.exists():
-            path.unlink()
-            found = True
-    if not found:
+    paths = (source_dir() / f"{provider_id}.json",
+             source_dir() / f"{provider_id}.source",
+             ROOT / "providers" / f"{provider_id}.yaml",
+             ROOT / "providers" / f"{provider_id}.yaml.lkg",
+             ROOT / "egressd" / "provider-status" / f"{provider_id}.json")
+    existing = [path for path in paths if path.exists() or path.is_symlink()]
+    if not existing:
         fail("provider ID not found")
-    api("POST", "/v1/reconcile")
+    # Move data out of the live paths while reconciling. If the API/reload
+    # fails, restore every file so a failed command cannot destroy a source.
+    staged = []
+    try:
+        for path in existing:
+            # Keep each backup beside its original: /etc and /var/lib may
+            # be different filesystems, where os.replace across mounts fails.
+            holder = tempfile.TemporaryDirectory(prefix=".provider-delete-", dir=path.parent)
+            backup = Path(holder.name) / path.name
+            try:
+                os.replace(path, backup)
+            except BaseException:
+                holder.cleanup()
+                raise
+            staged.append((path, backup, holder))
+        api("POST", "/v1/reconcile")
+    except BaseException:
+        for path, backup, _holder in reversed(staged):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(backup, path)
+        raise
+    finally:
+        for _path, _backup, holder in staged:
+            holder.cleanup()
     print(json.dumps({"id": provider_id, "removed": True}))
 
 

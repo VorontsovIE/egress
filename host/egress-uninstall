@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Fixed-operation root helper for egress uninstall."""
+import argparse
+import os
+import pwd
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+ETC = Path("/etc/egress")
+COMPOSE_ENV = ETC / "compose.env"
+
+
+def configured_paths() -> dict[str, str]:
+    try:
+        info = COMPOSE_ENV.lstat()
+    except FileNotFoundError:
+        return {}
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError(f"refusing untrusted backend configuration: {COMPOSE_ENV}")
+    result = {}
+    for line in COMPOSE_ENV.read_text().splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in {"EGRESS_ROOT", "EGRESS_SECRETS"}:
+            if not value.startswith("/") or "\x00" in value or ".." in Path(value).parts:
+                raise RuntimeError(f"invalid {key} in {COMPOSE_ENV}")
+            result[key] = value
+    return result
+
+
+_CONFIG = configured_paths()
+SECRETS = Path(_CONFIG.get("EGRESS_SECRETS", "/etc/egress/secrets"))
+ROOT = Path(_CONFIG.get("EGRESS_ROOT", "/var/lib/egress"))
+CLIENT_LIB = Path("/usr/local/lib/egress")
+UNITS = ("egress-cidr-sync.timer", "egress-cidr-sync.service",
+         "egress-devbridge.service", "egress-enroll.service")
+
+
+def user_homes():
+    for entry in pwd.getpwall():
+        if not entry.pw_dir.startswith("/") or entry.pw_dir == "/":
+            continue
+        yield Path(entry.pw_dir)
+
+
+def remove_user_path(home: Path, relative: str) -> None:
+    """Remove a path only when all user-controlled parent components are real dirs."""
+    if home.is_symlink() or not home.is_dir():
+        return
+    target = home
+    parts = Path(relative).parts
+    for part in parts[:-1]:
+        target = target / part
+        if target.is_symlink() or not target.is_dir():
+            return
+    target = target / parts[-1]
+    if target.is_symlink() or target.is_file():
+        target.unlink(missing_ok=True)
+    elif target.is_dir():
+        shutil.rmtree(target, ignore_errors=True)
+
+
+def run(argv: list[str], check=True):
+    return subprocess.run(argv, check=check)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="egress-uninstall")
+    p.add_argument("--client-only", action="store_true")
+    p.add_argument("--purge", action="store_true")
+    args = p.parse_args()
+    if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or os.environ.get("SUDO_USER") == "root":
+        print("run with sudo: sudo egressctl uninstall", file=sys.stderr)
+        return 3
+    if args.client_only and args.purge:
+        p.error("--purge cannot be combined with --client-only")
+    if args.purge:
+        if not sys.stdin.isatty():
+            print("--purge requires an interactive confirmation", file=sys.stderr)
+            return 3
+        answer = input("Type PURGE to delete provider subscriptions and all backend state: ")
+        if answer != "PURGE":
+            print("purge cancelled; no changes made")
+            return 1
+    if args.client_only:
+        for path in (ETC / "client.yaml", ETC / "client.token", ETC / "default-proxy.auth"):
+            path.unlink(missing_ok=True)
+        shutil.rmtree(CLIENT_LIB, ignore_errors=True)
+        for path in (Path("/usr/local/bin/egressctl"), Path("/usr/local/bin/egress-run")):
+            path.unlink(missing_ok=True)
+        print("system client removed; backend configuration, secrets, subscriptions, and state preserved")
+        return 0
+
+    compose = Path("/usr/share/egress/compose.yaml")
+    env_file = COMPOSE_ENV
+    if compose.is_file() and env_file.is_file():
+        run(["docker", "compose", "--env-file", str(env_file), "-f", str(compose), "down", "--remove-orphans"], check=False)
+    for unit in UNITS:
+        run(["systemctl", "disable", "--now", unit], check=False)
+        (Path("/etc/systemd/system") / unit).unlink(missing_ok=True)
+    run(["systemctl", "daemon-reload"], check=False)
+
+    for path in (Path("/usr/local/bin/egressctl"), Path("/usr/local/bin/egress-run"),
+                 Path("/usr/local/sbin/egress-providerctl"), Path("/usr/sbin/egress-upgrade"),
+                 Path("/usr/sbin/egress-uninstall")):
+        path.unlink(missing_ok=True)
+    libexec = Path("/usr/local/libexec/egress")
+    for name in ("egress-enroll", "client_identity.py"):
+        (libexec / name).unlink(missing_ok=True)
+    try:
+        libexec.rmdir()
+    except OSError:
+        pass
+    for home in user_homes():
+        remove_user_path(home, ".local/share/egress")
+        remove_user_path(home, ".local/libexec/egress")
+        for command in ("egressctl", "egress-run"):
+            remove_user_path(home, f".local/bin/{command}")
+    shutil.rmtree(ROOT / "client-bundles", ignore_errors=True)
+    shutil.rmtree(Path("/usr/share/egress"), ignore_errors=True)
+    shutil.rmtree(CLIENT_LIB, ignore_errors=True)
+    for path in (ETC / "client.yaml", ETC / "client.token", ETC / "default-proxy.auth",
+                 SECRETS / "mihomo_api_secret", SECRETS / "devbridge.token"):
+        path.unlink(missing_ok=True)
+    shutil.rmtree(SECRETS / "clients", ignore_errors=True)
+    compose.unlink(missing_ok=True)
+    env_file.unlink(missing_ok=True)
+
+    if args.purge:
+        shutil.rmtree(ROOT, ignore_errors=True)
+        shutil.rmtree(SECRETS / "providers", ignore_errors=True)
+        for home in user_homes():
+            remove_user_path(home, ".local/state/egress/sources")
+    else:
+        print("provider subscriptions and persistent backend state preserved; use --purge to remove them")
+    try:
+        ETC.rmdir()
+    except OSError:
+        pass
+    print("egress services and system client removed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,7 +18,7 @@ SECRETS_DIR="${EGRESS_SECRETS:-/etc/egress/secrets}"
 REMOVE_DATA=0
 REMOVE_CLIENT=0
 ASSUME_YES=0
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="${EGRESS_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 die_usage() { echo "uninstall-backend: $*" >&2; exit 2; }
 die_env()   { echo "uninstall-backend: $*" >&2; exit 3; }
@@ -49,7 +49,7 @@ if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
   say "stopping compose stack"
   (cd "$REPO_ROOT" && docker compose down --remove-orphans 2>/dev/null) || true
   say "removing built egressd image"
-  docker rmi egress-egressd:local 2>/dev/null || true
+  docker rmi egressd:local 2>/dev/null || true
 else
   say "docker not available; skipping stack removal"
 fi

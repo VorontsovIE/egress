@@ -227,6 +227,15 @@ fi
 if [ "${EGRESS_TEST_MODE:-0}" != 1 ]; then
   install -m 0755 "$REPO_ROOT/host/egress-providerctl" /usr/local/sbin/egress-providerctl
   install -m 0755 "$REPO_ROOT/host/egress-upgrade" /usr/sbin/egress-upgrade
+  install -m 0755 "$REPO_ROOT/host/egress-uninstall" /usr/sbin/egress-uninstall
+  install -d -o root -g root -m 0755 /usr/share/egress
+  install -o root -g root -m 0644 "$REPO_ROOT/compose.yaml" /usr/share/egress/compose.yaml
+  install -d -o root -g root -m 0755 /usr/share/egress/scripts
+  install -o root -g root -m 0755 "$REPO_ROOT/scripts/uninstall-backend-host.sh" \
+    /usr/share/egress/scripts/uninstall-backend-host.sh
+  for unit in "$REPO_ROOT"/host/units/egress-*; do
+    install -o root -g root -m 0644 "$unit" /usr/share/egress/"$(basename "$unit")"
+  done
 fi
 
 # Seed the GEO datasets into the mihomo home dir. Mihomo v1.19.32 treats a
