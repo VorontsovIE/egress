@@ -21,13 +21,13 @@ Update both this table and `STATUS.md` after each stage. Statuses: Pending, In p
 
 | Stage | Deliverable | Developer | Test author | Critic | Status | Commit |
 |---|---|---|---|---|---|---|
-| 1 | Remove identity/legacy migration paths; neutralize names and docs | Implement | Add regression checks | Review deletions and scope | Complete | see commit |
-| 2 | Client wheel, managed system/user installs, separated paths | Implement | Isolated wheel/install tests | Review privilege boundary | In progress | — |
-| 3 | Signed versioned wheel/engine/deployment assets and CI | Implement | Build/manifest/checksum tests | Review supply-chain flow | Pending | — |
-| 4 | Upgrade command with staging, permissions, health checks and rollback | Implement | Mock release/Docker tests | Review root execution | Pending | — |
-| 5 | Personal/managed provider removal and scoped uninstall/purge | Implement | Data-retention/destructive tests | Review deletion boundaries | Pending | — |
-| 6 | `curl | sh` full/client-only installer and sudo explanation | Implement | Bootstrap/no-TTY/signature tests | Review before escalation | Pending | — |
-| 7 | End-to-end acceptance and docs/status closure | Integrate | Run full acceptance | Final review | Pending | — |
+| 1 | Remove identity/legacy migration paths; neutralize names and docs | Implement | Add regression checks | Review deletions and scope | Complete | `a700592` |
+| 2 | Client wheel, managed system/user installs, separated paths | Implement | Isolated wheel/install tests | Review privilege boundary | Complete | `d726141` |
+| 3 | Signed versioned wheel/engine/deployment assets and CI | Implement | Build/manifest/checksum tests | Review supply-chain flow | Complete | `aa6f81a` |
+| 4 | Upgrade command with staging, permissions, health checks and rollback | Implement | Mock release/Docker tests | Review root execution | Complete | `257d044` |
+| 5 | Personal/managed provider removal and scoped uninstall/purge | Implement | Data-retention/destructive tests | Review deletion boundaries | Complete | `2f6598e` |
+| 6 | `curl | sh` full/client-only installer and sudo explanation | Implement | Bootstrap/no-TTY/signature tests | Review before escalation | Complete | `2c3b333` |
+| 7 | End-to-end acceptance and docs/status closure | Integrate | Run offline acceptance; live host pending | Final review | Review | recorded by follow-up |
 
 ## Acceptance gates
 
@@ -35,7 +35,7 @@ Update both this table and `STATUS.md` after each stage. Statuses: Pending, In p
 2. Wheel installs without checkout and includes all client runtime imports; TUN engine selection and checksum verification work on amd64/arm64.
 3. Ordinary uninstall preserves managed and personal source inputs, normalized provider data, and persistent state. Client-only uninstall never removes shared backend configuration/secrets. Purge removes these only after explicit confirmation.
 4. Signed assets are verified before sudo. Managed delete/full upgrade/uninstall use root-owned fixed entry points and fixed argv; never execute user-writable Python code as root.
-5. Final disposable Linux-host acceptance covers install, update, both provider deletion scopes, ordinary uninstall, purge, and failure recovery.
+5. Offline acceptance covers wheel packaging, both provider deletion scopes, ordinary uninstall, purge, installer sudo flow, and updater failure recovery. Final disposable Linux-host acceptance remains pending because no disposable host is provisioned in this workspace.
 
 ## Agent coordination
 
@@ -44,6 +44,6 @@ Update both this table and `STATUS.md` after each stage. Statuses: Pending, In p
 - Critic performs read-only review of each stage's interfaces, data loss risks, signatures, sudo flow, and rollback before the stage is marked Complete.
 - Root integrator resolves findings, updates the handoff and `STATUS.md`, and records the commit SHA.
 
-## Known implementation issue
+## Resolved implementation issue
 
-The existing client-removal path recursively deletes the shared config root, which also contains backend secrets and Compose settings. Replace it with narrowly scoped client paths before implementing uninstall.
+Client-only removal now deletes only client config, credentials, binaries, and the client installation root. The shared `/etc/egress` backend configuration and provider secrets remain intact.

@@ -2,19 +2,19 @@
 
 This file summarizes the current implementation state. Historical acceptance evidence is retained in `POC_REPORT.md`, `reports/`, and the archived handoff documents. Update this summary after each completed work item.
 
-## Current state — 2026-10-29
+## Current state — 2026-10-30
 
 ## Egress lifecycle work — 2026-10-30
 
-The lifecycle work is tracked in [HANDOFF-egress-lifecycle.md](HANDOFF-egress-lifecycle.md). Stage 1 is complete: removed historical identity-migration and retired-helper code, switched tracked product paths/module names to `egress`, and removed stale migration references. The offline suite passed (357 tests) with temporary egressd state paths. Stage 2 (wheel installation and isolated client/backend paths) is in progress; record each stage's checks and commit SHA here and in the handoff.
+Implementation stages 1–6 are complete and committed separately; see the stage table in [HANDOFF-egress-lifecycle.md](HANDOFF-egress-lifecycle.md). The client is built as a wheel and installed into versioned environments, the release workflow publishes attested versioned assets, `egressctl upgrade` supports client/backend scopes with rollback, provider removal is scoped, and uninstall preserves subscriptions unless `--purge` is confirmed. The `curl | bash` bootstrap supports full install and unprivileged `--client-only` install; it explains privileged actions before prompting through the controlling terminal.
 
-GitHub Actions CI/CD was added for pull request/main validation and `vX.Y.Z` releases. Releases publish a multi-architecture GHCR backend image and client source archive with Linux amd64/arm64 TUN engines and checksums. The backend installer selects the matching GHCR tag when invoked from a tagged checkout. Workflow execution on GitHub remains to be confirmed after pushing the changes.
+Final offline acceptance passed: **373 tests** with temporary egressd state paths; `docker compose config --quiet`, Python compilation, shell syntax checks, and `git diff --check` passed. Critic review found no remaining code blockers. Live host installation, a GitHub Actions tag run, and real provider-route acceptance still require external infrastructure and remain unverified.
 
 The backend, client CLI, provider management, route catalog, probes, ranking, client-local TUN path, installation, and security gate are implemented. Phases A0–A8 are complete for work that can be exercised in the development environment. Deployment-specific live acceptance still depends on a configured Linux host, Docker backend, valid client profiles, and real provider routes.
 
-Recent implementation includes:
+Earlier implementation includes:
 
-- Stable host/container client IDs derived from account names, with UID fallback; backend migration handles existing UID profiles and personal provider IDs with collision checks and rollback backups.
+- Stable host/container client IDs derived from account names, with UID fallback. Historical installation migration code was removed because deployed-system migration is out of scope.
 - Personal route shorthand (`@alias:node`) alongside canonical provider route IDs.
 - `egress-run --default` reads the client's saved route and execution mode; an explicit `--mode` overrides the saved mode.
 - Client-local TUN using a per-run user/network namespace, a pinned static packet engine, and capability drop before workload launch. TUN fails closed when local prerequisites are missing.
