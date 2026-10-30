@@ -226,13 +226,28 @@ def cmd_provider_remove(args) -> None:
         cfg = _load(args)
         data = _call(args, lambda: EgressApi(cfg).delete_personal(args.personal), None)
         if cfg.environment != "host":
-            local.remove(args.personal)
+            try:
+                local.remove(args.personal)
+            except OSError as exc:
+                raise SystemExit(
+                    f"personal provider was removed from the backend, but local source "
+                    f"could not be deleted ({exc}); remove it from the client state directory"
+                ) from None
         _emit(args, data, f"personal provider removed: {args.personal}")
         return
     if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or os.environ["SUDO_USER"] == "root":
         raise SystemExit("managed provider removal requires explicit sudo: "
                          "sudo egressctl provider remove --managed ID")
+    if not _root_owned_cli():
+        raise SystemExit("refusing managed provider removal from a user-writable egressctl install")
     helper = "/usr/local/sbin/egress-providerctl"
+    try:
+        info = os.stat(helper, follow_symlinks=False)
+    except OSError:
+        raise SystemExit("managed provider helper is not installed") from None
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or \
+            info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SystemExit("refusing untrusted managed-provider helper")
     try:
         result = subprocess.run([helper, "delete-source", "--id", args.managed],
                                 check=False, capture_output=True, text=True)
@@ -282,8 +297,12 @@ def cmd_upgrade(args) -> None:
         if not _root_owned_cli():
             raise SystemExit("refusing privileged update from a user-writable egressctl install")
         helper = Path("/usr/sbin/egress-upgrade")
-        if not helper.is_file() or helper.stat().st_uid != 0 or \
-                helper.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        try:
+            info = os.stat(helper, follow_symlinks=False)
+        except OSError:
+            info = None
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or \
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise SystemExit("trusted backend updater is not installed; reinstall egress first")
         command = [str(helper)]
     if args.version:
@@ -315,10 +334,16 @@ def cmd_uninstall(args) -> None:
         if not _root_owned_cli():
             raise SystemExit("refusing privileged uninstall from a user-writable egressctl install")
         helper = Path("/usr/sbin/egress-uninstall")
-        if not helper.is_file() or helper.stat().st_uid != 0 or \
-                helper.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        try:
+            info = os.stat(helper, follow_symlinks=False)
+        except OSError:
+            info = None
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or \
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise SystemExit("trusted uninstaller is not installed; run the egress installer first")
         command = [str(helper)]
+        if args.client_only:
+            command.append("--client-only")
     if args.purge:
         command.append("--purge")
     try:

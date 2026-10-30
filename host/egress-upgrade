@@ -7,10 +7,13 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -51,6 +54,23 @@ def verify(name: str, body: bytes, sums: bytes) -> None:
         raise RuntimeError(f"checksum verification failed for {name}")
 
 
+def verify_attestations(assets: dict[str, bytes]) -> None:
+    if shutil.which("gh") is None:
+        raise RuntimeError("GitHub CLI (gh) is required to verify release attestations")
+    with tempfile.TemporaryDirectory(prefix="egress-attestation-") as temp:
+        for name, body in assets.items():
+            path = Path(temp) / name
+            path.write_bytes(body)
+            subprocess.run(["gh", "attestation", "verify", str(path), "--repo", REPO],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+
+def verify_attestation(path: Path) -> None:
+    if shutil.which("gh") is None:
+        raise RuntimeError("GitHub CLI is required to verify signed release provenance")
+    subprocess.run(["gh", "attestation", "verify", str(path), "-R", REPO], check=True)
+
+
 def env_values() -> dict[str, str]:
     allowed = {"EGRESS_ROOT", "EGRESS_SECRETS", "DOCKER_GATEWAY", "EGRESSD_UID", "EGRESSD_GID", "EGRESSD_IMAGE"}
     result = {}
@@ -73,13 +93,30 @@ def deploy_backend(tag: str, compose_bytes: bytes) -> None:
         env["EGRESSD_IMAGE"] = new
         os.environ.update(env)
         try:
-            run("pull", "egress-egressd")
-            run("up", "-d", "--force-recreate", "egress-egressd")
-            for container in ("egress-egressd", "egress-mihomo"):
-                status = subprocess.run(["docker", "inspect", "--format", "{{.State.Health.Status}}", container],
-                                        check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
-                if status != "healthy":
-                    raise RuntimeError(f"{container} is not healthy after update: {status or 'unknown'}")
+            run("pull", "egressd")
+            run("up", "-d", "--force-recreate", "egressd")
+            deadline = time.monotonic() + 180
+            healthy_polls = 0
+            last_status = "unknown"
+            while time.monotonic() < deadline:
+                statuses = []
+                try:
+                    for container in ("egressd", "egress-mihomo"):
+                        status = subprocess.run(
+                            ["docker", "inspect", "--format", "{{.State.Health.Status}}", container],
+                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True).stdout.strip()
+                        statuses.append(status)
+                    last_status = ", ".join(statuses)
+                    healthy_polls = healthy_polls + 1 if all(s == "healthy" for s in statuses) else 0
+                    if healthy_polls >= 3:
+                        break
+                except subprocess.CalledProcessError as exc:
+                    last_status = exc.stderr.strip() or "container not inspectable"
+                    healthy_polls = 0
+                time.sleep(2)
+            else:
+                raise RuntimeError(f"services did not become healthy after update: {last_status}")
             lines = [line for line in COMPOSE_ENV.read_text().splitlines()
                      if not line.startswith("EGRESSD_IMAGE=")]
             tmp = COMPOSE_ENV.with_name(".compose.env.new")
@@ -88,7 +125,7 @@ def deploy_backend(tag: str, compose_bytes: bytes) -> None:
             os.replace(tmp, COMPOSE_ENV)
         except Exception:
             os.environ["EGRESSD_IMAGE"] = old
-            subprocess.run([*file, "up", "-d", "--force-recreate", "egress-egressd"],
+            subprocess.run([*file, "up", "-d", "--force-recreate", "egressd"],
                            cwd=temp, check=False)
             raise
 
@@ -97,22 +134,56 @@ def install_system_client(version: str, wheel: bytes, engine: bytes) -> None:
     root = Path("/usr/local/lib/egress")
     versions = root / "versions"
     target = versions / version
+    current = root / "current"
+    if current.is_symlink() and current.resolve() == target.resolve():
+        return
     if target.exists():
-        raise RuntimeError(f"version {version} is already installed")
+        if target.is_symlink():
+            raise RuntimeError(f"refusing symlinked version directory: {target}")
+        venv_python = target / "venv" / "bin" / "python"
+        engine_path = target / "egress-tun-engine"
+        info = target.lstat()
+        usable = (target.is_dir() and info.st_uid == 0 and
+                  not (info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)) and
+                  venv_python.is_file() and engine_path.is_file() and
+                  not engine_path.is_symlink())
+        if usable:
+            check = subprocess.run([str(venv_python), "-c", "import egress_client"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            usable = check.returncode == 0
+        if not usable:
+            shutil.rmtree(target)
+        else:
+            current_tmp = root / ".current-new"
+            current_tmp.unlink(missing_ok=True)
+            current_tmp.symlink_to(Path("versions") / version)
+            os.replace(current_tmp, current)
+            for command, module in (("egressctl", "egressctl"), ("egress-run", "egress_run")):
+                wrapper = Path("/usr/local/bin") / command
+                body = ("#!/bin/sh\nexport EGRESS_TUN_ENGINE=/usr/local/lib/egress/current/egress-tun-engine\n"
+                        f"exec /usr/local/lib/egress/current/venv/bin/python -m egress_client.{module} \"$@\"\n")
+                temp = wrapper.with_name(f".{command}.new")
+                temp.write_text(body)
+                temp.chmod(0o755)
+                os.replace(temp, wrapper)
+            return
     versions.mkdir(mode=0o755, parents=True, exist_ok=True)
     target.mkdir(mode=0o755)
-    with tempfile.TemporaryDirectory(prefix=".egress-client-", dir=versions) as tmp:
-        temp = Path(tmp)
-        wheel_path = temp / "client.whl"
+    try:
+        # Virtual environments embed their absolute path in console scripts.
+        wheel_path = target / "client.whl"
         wheel_path.write_bytes(wheel)
-        engine_path = temp / "egress-tun-engine"
+        verify_attestation(wheel_path)
+        engine_path = target / "egress-tun-engine"
         engine_path.write_bytes(engine)
         engine_path.chmod(0o755)
-        venv_path = temp / "venv"
+        venv_path = target / "venv"
         subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
         subprocess.run([str(venv_path / "bin/python"), "-m", "pip", "install", "--no-deps", "--no-index", str(wheel_path)], check=True)
-        shutil.move(str(venv_path), target / "venv")
-        shutil.move(str(engine_path), target / "egress-tun-engine")
+        wheel_path.unlink()
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     current_tmp = root / ".current-new"
     current_tmp.unlink(missing_ok=True)
     current_tmp.symlink_to(Path("versions") / version)
@@ -134,6 +205,8 @@ def main() -> int:
     scope.add_argument("--client-only", action="store_true")
     scope.add_argument("--backend-only", action="store_true")
     args = parser.parse_args()
+    if args.version and not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.version):
+        parser.error("--version must look like v1.2.3")
     if os.geteuid() != 0 or not os.environ.get("SUDO_USER") or os.environ.get("SUDO_USER") == "root":
         print("run this fixed updater with sudo", file=sys.stderr)
         return 3
@@ -153,24 +226,54 @@ def main() -> int:
         bundle_name = f"egress-{tag[1:]}.tar.gz"
         bundle = asset(rel, bundle_name)
         verify(bundle_name, bundle, sums)
+    attested = {"SHA256SUMS": sums}
     if not args.backend_only:
-        install_system_client(tag[1:], wheel, engine)
+        attested.update({wheel_name: wheel, engine_name: engine})
     if not args.client_only:
-        import tarfile
-        with tempfile.TemporaryDirectory(prefix="egress-deploy-") as temp:
-            bundle_path = Path(temp) / bundle_name
-            bundle_path.write_bytes(bundle)
-            with tarfile.open(bundle_path) as archive:
-                member = next((m for m in archive.getmembers() if m.name.endswith("/compose.yaml")), None)
-                if member is None or Path(member.name).is_absolute() or ".." in Path(member.name).parts:
-                    raise RuntimeError("release deployment bundle has no safe compose.yaml")
-                stream = archive.extractfile(member)
-                if stream is None:
-                    raise RuntimeError("cannot read compose file from release bundle")
-                compose_bytes = stream.read(4 * 1024 * 1024 + 1)
-                if len(compose_bytes) > 4 * 1024 * 1024:
-                    raise RuntimeError("compose file too large")
-        deploy_backend(tag, compose_bytes)
+        attested[bundle_name] = bundle
+    verify_attestations(attested)
+    current = Path("/usr/local/lib/egress/current")
+    previous_target = os.readlink(current) if current.is_symlink() else None
+    try:
+        if not args.backend_only:
+            install_system_client(tag[1:], wheel, engine)
+        if not args.client_only:
+            import tarfile
+            with tempfile.TemporaryDirectory(prefix="egress-deploy-") as temp:
+                bundle_path = Path(temp) / bundle_name
+                bundle_path.write_bytes(bundle)
+                with tarfile.open(bundle_path) as archive:
+                    member = next((m for m in archive.getmembers() if m.name.endswith("/compose.yaml")), None)
+                    if member is None or Path(member.name).is_absolute() or ".." in Path(member.name).parts:
+                        raise RuntimeError("release deployment bundle has no safe compose.yaml")
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise RuntimeError("cannot read compose file from release bundle")
+                    compose_bytes = stream.read(4 * 1024 * 1024 + 1)
+                    if len(compose_bytes) > 4 * 1024 * 1024:
+                        raise RuntimeError("compose file too large")
+            try:
+                deploy_backend(tag, compose_bytes)
+            except Exception:
+                if not args.backend_only:
+                    if previous_target is None:
+                        current.unlink(missing_ok=True)
+                    else:
+                        tmp_link = current.with_name(".current-rollback")
+                        tmp_link.unlink(missing_ok=True)
+                        tmp_link.symlink_to(previous_target)
+                        os.replace(tmp_link, current)
+                raise
+    except Exception:
+        if not args.backend_only:
+            if previous_target is None:
+                current.unlink(missing_ok=True)
+            elif current.is_symlink() and current.resolve() != (current.parent / previous_target).resolve():
+                tmp_link = current.with_name(".current-rollback")
+                tmp_link.unlink(missing_ok=True)
+                tmp_link.symlink_to(previous_target)
+                os.replace(tmp_link, current)
+        raise
     print(f"egress updated to {tag}")
     return 0
 

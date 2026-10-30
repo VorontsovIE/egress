@@ -59,6 +59,13 @@ def _verify(data: bytes, name: str, checksums: bytes) -> None:
         raise RuntimeError(f"checksum verification failed: {name}")
 
 
+def _verify_attestation(path: Path) -> None:
+    if shutil.which("gh") is None:
+        raise RuntimeError("GitHub CLI (gh) is required to verify release provenance")
+    subprocess.run(["gh", "attestation", "verify", str(path), "-R", REPO], check=True,
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+
 def _install(release: dict) -> None:
     tag = release["tag_name"]
     version = tag[1:]
@@ -72,40 +79,87 @@ def _install(release: dict) -> None:
     wheel_data, engine_data = _asset(release, wheel_name), _asset(release, engine_name)
     _verify(wheel_data, wheel_name, checksum_data)
     _verify(engine_data, engine_name, checksum_data)
+    if shutil.which("gh") is None:
+        raise RuntimeError("GitHub CLI (gh) is required to verify release attestations")
+    with tempfile.TemporaryDirectory(prefix="egress-attestation-") as attest_dir:
+        for name, data in ((wheel_name, wheel_data), (engine_name, engine_data),
+                           ("SHA256SUMS", checksum_data)):
+            path = Path(attest_dir) / name
+            path.write_bytes(data)
+            subprocess.run(["gh", "attestation", "verify", str(path), "--repo", REPO],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     home = Path.home()
     base = home / ".local" / "share" / "egress"
     versions = base / "versions"
     versions.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = versions / version
+    current = base / "current"
+    previous_target = os.readlink(current) if current.is_symlink() else None
+    if current.is_symlink() and current.resolve() == target.resolve():
+        _install_wrappers(home)
+        print(f"client and TUN engine are already at {tag}")
+        return
     if target.exists():
-        raise RuntimeError(f"version already installed: {tag}")
-    staging = Path(tempfile.mkdtemp(prefix=f".{version}-", dir=versions))
+        if target.is_symlink():
+            target.unlink()
+        else:
+            python = target / "venv" / "bin" / "python"
+            engine = target / "egress-tun-engine"
+            usable = python.is_file() and engine.is_file() and not engine.is_symlink()
+            if usable:
+                check = subprocess.run([str(python), "-c", "import egress_client"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                usable = check.returncode == 0
+            if usable:
+                current_tmp = base / ".current-new"
+                current_tmp.unlink(missing_ok=True)
+                current_tmp.symlink_to(Path("versions") / version)
+                os.replace(current_tmp, current)
+                try:
+                    _install_wrappers(home)
+                except Exception:
+                    _restore_current(current, base, previous_target)
+                    raise
+                print(f"client and TUN engine switched to existing {tag}")
+                return
+            shutil.rmtree(target)
+    target.mkdir(mode=0o700)
     try:
-        wheel_path = staging / wheel_name
+        wheel_path = target / wheel_name
         wheel_path.write_bytes(wheel_data)
-        engine_path = staging / "egress-tun-engine"
+        engine_path = target / "egress-tun-engine"
         engine_path.write_bytes(engine_data)
+        _verify_attestation(wheel_path)
+        _verify_attestation(engine_path)
         engine_path.chmod(0o755)
-        env = staging / "venv"
+        env = target / "venv"
         venv.EnvBuilder(with_pip=True, clear=True).create(env)
         subprocess.run([str(env / "bin/python"), "-m", "pip", "install",
                         "--no-deps", "--no-index", str(wheel_path)],
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        target.mkdir(mode=0o700)
-        shutil.move(str(env), target / "venv")
-        shutil.move(str(engine_path), target / "egress-tun-engine")
+        wheel_path.unlink()
         current_tmp = base / ".current-new"
         current_tmp.unlink(missing_ok=True)
         current_tmp.symlink_to(Path("versions") / version)
         os.replace(current_tmp, base / "current")
         _install_wrappers(home)
     except Exception:
+        if current.is_symlink() and current.resolve() == target.resolve():
+            _restore_current(current, base, previous_target)
         shutil.rmtree(target, ignore_errors=True)
-        shutil.rmtree(staging, ignore_errors=True)
         raise
-    shutil.rmtree(staging, ignore_errors=True)
     print(f"client and TUN engine updated to {tag}; restart your shell if PATH needs updating")
+
+
+def _restore_current(current: Path, base: Path, previous_target: str | None) -> None:
+    if previous_target is None:
+        current.unlink(missing_ok=True)
+        return
+    temp = base / ".current-rollback"
+    temp.unlink(missing_ok=True)
+    temp.symlink_to(previous_target)
+    os.replace(temp, current)
 
 
 def _install_wrappers(home: Path) -> None:

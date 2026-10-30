@@ -16,7 +16,9 @@ Use `egressctl --help` or `egressctl COMMAND --help` for live syntax. Global opt
 | `best` | Rank routes, optionally filtering by country, provider, domain, or latency |
 | `update` | Trigger provider updates; supports `--provider`, `--via`, `--if-older-than` |
 | `upgrade` | Update client/backend from a release; supports version and component selection |
-| `source list|add|refresh|remove` | Manage client-owned private sources |
+| `uninstall` | Remove the system install, or only this user's client; `--purge` removes saved state |
+| `source list|add|refresh` | Manage client-owned private sources |
+| `provider remove --personal ALIAS|--managed ID` | Remove a personal or backend-managed profile |
 | `oneshot active` | List active one-shot sessions |
 | `geo status|update` | Inspect or update GEO datasets |
 | `config show|validate` | Display masked configuration or validate config and secret files |
@@ -53,7 +55,9 @@ egressctl probe-domain DOMAIN [--all] [--country CODE] [--provider ID]
 
 `egressctl upgrade [--version vX.Y.Z] [--client-only | --backend-only]` selects the release and components. `--client-only` works without administrator rights; full/backend upgrades require explicit `sudo`. Without the required rights, the command prints the supported alternatives and exits without changing files. Privileged updates require a root-owned updater and reject user-writable Python installations.
 
-`source add NAME` requires exactly one of `--url URL`, `--file PATH`, or `--uri URI`; for URL/URI, `-` reads one line from standard input. `source refresh NAME` and `source list` manage client-owned sources. Remove a provider profile with `provider remove --personal ALIAS`; managed profiles require `sudo egressctl provider remove --managed ID`. Container-side `source add` and `source refresh` require PyYAML for local normalization; the core CLI remains standard-library-only.
+`egressctl uninstall --client-only` removes this user's installed client and leaves the backend and subscriptions intact. `sudo egressctl uninstall` removes backend services and the system client while retaining subscriptions and persistent backend state. Add `--purge` to remove those saved subscriptions and state; the command requires typing `PURGE` in an interactive terminal.
+
+`source add NAME` requires exactly one of `--url URL`, `--file PATH`, or `--uri URI`; for URL/URI, `-` reads one line from standard input. `source refresh NAME` and `source list` manage client-owned sources. Remove a profile with `egressctl provider remove --personal ALIAS`; managed profiles require an explicit `sudo egressctl provider remove --managed ID`. Container-side `source add` and `source refresh` require PyYAML for local normalization; the core CLI remains standard-library-only.
 
 `--config` overrides `EGRESS_CONFIG`; otherwise the client uses `/etc/egress/client.yaml`. Secret values are read from separate files referenced by the config. `egressctl config show` masks secrets by default; `--secrets` displays them and should be used with care.
 
