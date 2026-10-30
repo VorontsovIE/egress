@@ -41,6 +41,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +70,13 @@ jobs:
           uv build --wheel --project client --out-dir release
           cp client/tun-engine/dist/egress-tun-engine-linux-amd64 release/
           cp client/tun-engine/dist/egress-tun-engine-linux-arm64 release/
+          mkdir -p release/egress-${VERSION}/release-assets
+          cp "release/egress_client-${VERSION}-py3-none-any.whl" \
+            release/egress-${VERSION}/release-assets/
+          cp release/egress-tun-engine-linux-amd64 release/egress-tun-engine-linux-arm64 \
+            release/egress-${VERSION}/release-assets/
+          (cd release/egress-${VERSION}/release-assets && sha256sum * > SHA256SUMS)
+          cp scripts/egress-install release/egress-install
           tar -C release -czf "release/egress-${VERSION}.tar.gz" "egress-${VERSION}"
           (cd release && sha256sum "egress_client-${VERSION}-py3-none-any.whl" \
             egress-tun-engine-linux-amd64 egress-tun-engine-linux-arm64 "egress-${VERSION}.tar.gz" > SHA256SUMS)
@@ -101,5 +110,16 @@ jobs:
             release/egress_client-${{ env.VERSION }}-py3-none-any.whl
             release/egress-tun-engine-linux-amd64
             release/egress-tun-engine-linux-arm64
+            release/egress-install
+            release/egress-${{ env.VERSION }}.tar.gz
+            release/SHA256SUMS
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/egress_client-${{ env.VERSION }}-py3-none-any.whl
+            release/egress-tun-engine-linux-amd64
+            release/egress-tun-engine-linux-arm64
+            release/egress-install
             release/egress-${{ env.VERSION }}.tar.gz
             release/SHA256SUMS
