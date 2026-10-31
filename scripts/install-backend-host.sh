@@ -165,8 +165,8 @@ docker compose version >/dev/null 2>&1 || die_env "docker compose v2 not availab
 [ -f "$REPO_ROOT/compose.yaml" ] || die_env "compose.yaml not found in $REPO_ROOT"
 log "prerequisites ok (docker, compose v2, python3, compose.yaml)"
 if [ "${EGRESS_TEST_MODE:-0}" = 1 ]; then
-  EGRESSD_UID=1000
-  EGRESSD_GID=1000
+  EGRESSD_UID="${EGRESSD_UID:-$(id -u)}"
+  EGRESSD_GID="${EGRESSD_GID:-$(id -g)}"
 else
   getent group egressd >/dev/null || groupadd --system egressd
   id egressd >/dev/null 2>&1 || \

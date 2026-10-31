@@ -85,6 +85,7 @@ scenario_install() {
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
       EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
       EGRESS_CLIENT_LIB_DIR="$d/absent-client-lib" \
+      EGRESSD_UID="$(id -u)" EGRESSD_GID="$(id -g)" \
       EGRESS_TEST_MODE=1 \
       bash "$REPO/scripts/install-backend-host.sh" \
       --root "$d/root" --secrets-dir "$d/secrets" \
@@ -344,7 +345,7 @@ scenario_verify() { # <dir> [KEY=VAL...]
     env "${envs[@]+"${envs[@]}"}" PATH="$STUBS:$PATH" \
       EGRESS_HOST_CLIENT_DIR="$d/root/client-bundles/host-main" \
       EGRESS_CLIENT_LIB_DIR="$d/absent-client-lib" \
-      EGRESSD_UID=1000 EGRESSD_GID=1000 \
+      EGRESSD_UID="$(id -u)" EGRESSD_GID="$(id -g)" \
       EGRESS_ROOT="$d/root" EGRESS_SECRETS="$d/secrets" \
       bash scripts/verify-backend-host.sh \
       --root "$d/root" --secrets-dir "$d/secrets" \
