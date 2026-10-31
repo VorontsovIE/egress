@@ -400,6 +400,25 @@ echo
 echo "== offline install suite: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
   echo "failed checks:$FAILED_NAMES"
+  # Surface only failed check identifiers/details from generated harness
+  # reports. The reports may also contain environment evidence, so keep
+  # diagnostic output narrowly scoped and never dump the full JSON here.
+  for scenario in success outside-cwd verify-ok verify-public fw-subnets; do
+    report="$TMP/$scenario/root/acceptance-report.json"
+    [ -f "$report" ] || continue
+    python3 - "$report" "$scenario" <<'PY'
+import json, sys
+try:
+    report = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception as exc:
+    print(f"diagnostic {sys.argv[2]}: could not read acceptance report: {exc}")
+    raise SystemExit(0)
+for check in report.get("checks", []):
+    if check.get("status") == "fail":
+        print("diagnostic %s: %s: %s" % (
+            sys.argv[2], check.get("id"), check.get("detail", "")))
+PY
+  done
   exit 1
 fi
 exit 0

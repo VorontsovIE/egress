@@ -1,0 +1,144 @@
+{
+  "generated_at": "2026-10-31T06:31:58Z",
+  "mode": "live",
+  "checks": [
+    {
+      "id": "no_public_binds",
+      "status": "pass",
+      "detail": "all 8 published port(s) bound to local addresses",
+      "evidence": null
+    },
+    {
+      "id": "docker_socket_not_mounted",
+      "status": "pass",
+      "detail": "no service mounts /var/run/docker.sock",
+      "evidence": null
+    },
+    {
+      "id": "mihomo_admin_api_private",
+      "status": "pass",
+      "detail": "mihomo admin port 9090 not published (private compose network only)",
+      "evidence": null
+    },
+    {
+      "id": "image_versions",
+      "status": "pass",
+      "detail": "mihomo pinned to metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e",
+      "evidence": null
+    },
+    {
+      "id": "client_tokens_distinct",
+      "status": "pass",
+      "detail": "3 client tokens are pairwise distinct",
+      "evidence": null
+    },
+    {
+      "id": "no_backend_secrets_in_client_bundles",
+      "status": "pass",
+      "detail": "no backend secrets found in 2 client dir(s)",
+      "evidence": null
+    },
+    {
+      "id": "no_arbitrary_host_command",
+      "status": "pass",
+      "detail": "free-form subcommand rejected (exit 2); no shell=True/os.system/eval/exec",
+      "evidence": null
+    },
+    {
+      "id": "client_install_survives_recreate",
+      "status": "pass",
+      "detail": "client install under persistent path(s): /var/lib/egress/client-bundles, /etc/egress, /usr/local/lib/egress",
+      "evidence": null
+    },
+    {
+      "id": "docker_cidr_artifact_fresh",
+      "status": "pass",
+      "detail": "artifact age 0.1h (<= 24h)",
+      "evidence": "generated_at=2026-10-31T06:28:04Z"
+    },
+    {
+      "id": "persistent_dirs_permissions",
+      "status": "pass",
+      "detail": "5 persistent dir(s) are 0700",
+      "evidence": null
+    },
+    {
+      "id": "host_client_config_token_permissions",
+      "status": "pass",
+      "detail": "host client.yaml/token/auth present with correct perms",
+      "evidence": null
+    },
+    {
+      "id": "compose_health",
+      "status": "pass",
+      "detail": "compose ps succeeded (live)",
+      "evidence": null
+    },
+    {
+      "id": "restart_recreate",
+      "status": "skipped",
+      "detail": "recreate check requires a live stack and is not run by this harness by default (destructive); run manually per INSTALL.md",
+      "evidence": null
+    },
+    {
+      "id": "host_whoami_identity",
+      "status": "pass",
+      "detail": "host whoami = host-root",
+      "evidence": null
+    },
+    {
+      "id": "host_default_route_mode",
+      "status": "pass",
+      "detail": "route=direct mode=proxy",
+      "evidence": null
+    },
+    {
+      "id": "per_client_isolation",
+      "status": "skipped",
+      "detail": "isolation check requires a live two-client stack; run via the integration suite (tests/integration) per spec section 34",
+      "evidence": null
+    },
+    {
+      "id": "local_tun_runtime",
+      "status": "pass",
+      "detail": "per-run namespace and TUN fd handoff are present",
+      "evidence": null
+    },
+    {
+      "id": "egressd_container_healthy",
+      "status": "pass",
+      "detail": "both services running + healthy + 0 restarts",
+      "evidence": "egress-mihomo: state=running health=healthy restarts=0; egressd: state=running health=healthy restarts=0"
+    },
+    {
+      "id": "client_package_importable",
+      "status": "pass",
+      "detail": "egress_client imports from /usr/local/lib/egress/current/venv/bin/python",
+      "evidence": null
+    },
+    {
+      "id": "egressctl_on_path",
+      "status": "pass",
+      "detail": "egressctl --help rc=0",
+      "evidence": null
+    },
+    {
+      "id": "generated_config_present",
+      "status": "pass",
+      "detail": "bootstrap config present (top-level listener key: mixed-port)",
+      "evidence": "path=/var/lib/egress/generated/config.yaml"
+    },
+    {
+      "id": "secrets_readable_by_container_user",
+      "status": "pass",
+      "detail": "14 entry(ies) under /etc/egress/secrets owned by uid 997",
+      "evidence": null
+    }
+  ],
+  "summary": {
+    "passed": 20,
+    "failed": 0,
+    "skipped": 2,
+    "total": 22
+  }
+}

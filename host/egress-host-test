@@ -390,8 +390,7 @@ def check_client_tokens_distinct():
     hashes = list(tokens.values())
     if len(set(hashes)) == len(hashes):
         add("client_tokens_distinct", "pass",
-            f"{len(tokens)} client tokens are pairwise distinct",
-            "; ".join(f"{k}={v}" for k, v in tokens.items()))
+            f"{len(tokens)} client tokens are pairwise distinct")
     else:
         dup = sorted({k for k, v in tokens.items() if hashes.count(v) > 1})
         add("client_tokens_distinct", "fail",
@@ -508,8 +507,9 @@ def check_client_install_survives_recreate():
     # the client install/bundle root must be a persistent path, not a
     # container writable layer / tmpfs
     bundle_root = os.path.join(ROOT, "client-bundles")
-    persistent_prefixes = (ROOT, "/etc", "/home", "/var/lib")
-    candidates = [bundle_root, HOST_CLIENT_DIR]
+    persistent_prefixes = (ROOT, "/etc", "/home", "/var/lib",
+                           "/usr/local/lib/egress")
+    candidates = [bundle_root, HOST_CLIENT_DIR, CLIENT_LIB_DIR]
     ok = []
     for c in candidates:
         if os.path.isdir(c):
@@ -778,13 +778,17 @@ def check_client_package_importable(live):
     if os.path.isfile(wheel_python):
         command = [wheel_python, "-c", "import egress_client.egressctl"]
         import_source = wheel_python
-    else:
+    elif os.path.isdir(os.path.join(CLIENT_LIB_DIR, "egress_client")):
         # Explicit source installs place the package directly below the
         # prefix and use the host interpreter.
         code = ("import sys; sys.path.insert(0, %r); "
                 "import egress_client.egressctl" % CLIENT_LIB_DIR)
         command = ["python3", "-c", code]
         import_source = CLIENT_LIB_DIR
+    else:
+        add("client_package_importable", "fail",
+            "client package not found in wheel venv or source prefix: %s" % CLIENT_LIB_DIR)
+        return
     try:
         p = subprocess.run(command,
                            capture_output=True, text=True, timeout=30)
