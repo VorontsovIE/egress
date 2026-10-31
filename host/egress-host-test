@@ -54,7 +54,7 @@ SECRETS = os.environ.get("EGRESS_SECRETS", "/etc/egress/secrets")
 HOST_CLIENT_DIR = os.environ.get("EGRESS_HOST_CLIENT_DIR", "/etc/egress")
 MIHOMO_IMAGE_PIN = "metacubex/mihomo:v1.19.32@sha256:bac1a74de365ea59270ba134016762c6be05654d55246518de256113bd1c225e"
 MIHOMO_ADMIN_PORT = 9090
-CLIENT_LIB_DIR = "/usr/local/lib/egress"
+CLIENT_LIB_DIR = os.environ.get("EGRESS_CLIENT_LIB_DIR", "/usr/local/lib/egress")
 STACK_SERVICES = ("egress-mihomo", "egressd")
 def _service_uid() -> int:
     if os.environ.get("EGRESSD_UID"):
@@ -774,10 +774,19 @@ def check_client_package_importable(live):
             "client package prefix not installed: %s (run "
             "scripts/install-client.sh --target host)" % CLIENT_LIB_DIR)
         return
-    code = ("import sys; sys.path.insert(0, %r); "
-            "import egress_client.egressctl" % CLIENT_LIB_DIR)
+    wheel_python = os.path.join(CLIENT_LIB_DIR, "current", "venv", "bin", "python")
+    if os.path.isfile(wheel_python):
+        command = [wheel_python, "-c", "import egress_client.egressctl"]
+        import_source = wheel_python
+    else:
+        # Explicit source installs place the package directly below the
+        # prefix and use the host interpreter.
+        code = ("import sys; sys.path.insert(0, %r); "
+                "import egress_client.egressctl" % CLIENT_LIB_DIR)
+        command = ["python3", "-c", code]
+        import_source = CLIENT_LIB_DIR
     try:
-        p = subprocess.run(["python3", "-c", code],
+        p = subprocess.run(command,
                            capture_output=True, text=True, timeout=30)
     except Exception as e:
         add("client_package_importable", "fail",
@@ -785,7 +794,7 @@ def check_client_package_importable(live):
         return
     if p.returncode == 0:
         add("client_package_importable", "pass",
-            "egress_client imports from %s" % CLIENT_LIB_DIR)
+            "egress_client imports from %s" % import_source)
     else:
         add("client_package_importable", "fail",
             "installed package layout broken; re-run "
