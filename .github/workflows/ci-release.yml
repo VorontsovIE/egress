@@ -11,14 +11,15 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.3'
-      - uses: docker/setup-buildx-action@v3
+          cache-dependency-path: client/tun-engine/go.sum
+      - uses: docker/setup-buildx-action@v4
       - name: Install locked development environment
         run: uv sync --locked --project egressd --extra dev
       - name: Run offline test suites
@@ -37,22 +38,23 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: write
       attestations: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-go@v5
+      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.3'
+          cache-dependency-path: client/tun-engine/go.sum
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Validate release tag
         env:
           TAG: ${{ github.ref_name }}
