@@ -2,12 +2,10 @@
 # Offline install suite for scripts/install-backend-host.sh and the
 # host/egress-host-test harness.
 #
-# Runs WITHOUT a Docker daemon and WITHOUT root (EGRESS_TEST_MODE=1
-# + stubs in tests/install/stubs shadow docker/id/sleep/... on PATH). As
-# root the success path additionally exercises the real client install
-# (scripts/install-client.sh -> /usr/local + /etc/egress); without
-# root the client step is skipped (--skip-client) because /usr/local and
-# /etc are root-owned (see README.md, "Limitations").
+# Runs WITHOUT a Docker daemon (EGRESS_TEST_MODE=1 + stubs in
+# tests/install/stubs shadow docker/id/sleep/... on PATH). The host client
+# installer writes to system paths, so every scenario skips it; client
+# packaging and install behavior have focused tests of their own.
 #
 # Scenarios:
 #   0. syntax: bash -n all scripts/*.sh, py_compile host utilities
@@ -48,9 +46,7 @@ trap 'rm -rf "$TMP"' EXIT
 # must inspect only their temporary fixture, never the machine's live files.
 export EGRESS_HOST_CLIENT_DIR="$TMP/absent-host-client"
 
-IS_ROOT=0
-[ "$(id -u)" = "0" ] && IS_ROOT=1
-echo "# offline install suite (root=$IS_ROOT, bash stubs: $STUBS)"
+echo "# offline install suite (isolated system paths, bash stubs: $STUBS)"
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -117,14 +113,7 @@ done
 echo "== 1. success path"
 d="$TMP/success"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d"
-else
-  # non-root: the client HOST install writes /usr/local + /etc (root-only),
-  # so step 7 is skipped; the client bundle + client secrets are already
-  # provisioned by make_env, which is exactly the state step 7 would leave.
-  scenario_install "$d" --skip-client
-fi
+scenario_install "$d" --skip-client
 rc=$?
 check "success: install rc=0" $rc "$(tail -1 "$d/install.err" 2>/dev/null)"
 logf="$(log_of "$d")"
@@ -179,11 +168,7 @@ check "outside-cwd: install rc=0" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
 echo "== 2. fail A (compose up rc 1)"
 d="$TMP/fail-up"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d" STUB_DOCKER_UP_RC=1
-else
-  scenario_install "$d" STUB_DOCKER_UP_RC=1 --skip-client
-fi
+scenario_install "$d" STUB_DOCKER_UP_RC=1 --skip-client
 rc=$?
 [ "$rc" -eq 3 ]
 check "fail-up: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
@@ -209,11 +194,7 @@ chmod 600 "$d/secrets/mihomo_api_secret"
   echo "egressd stub log: starting"
   echo "egressd stub log: token offline-test-mihomo-secret-value leaked"
 } > "$d/container-logs.txt"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d" STUB_DOCKER_HEALTH=never STUB_DOCKER_LOGS="$d/container-logs.txt"
-else
-  scenario_install "$d" STUB_DOCKER_HEALTH=never STUB_DOCKER_LOGS="$d/container-logs.txt" --skip-client
-fi
+scenario_install "$d" STUB_DOCKER_HEALTH=never STUB_DOCKER_LOGS="$d/container-logs.txt" --skip-client
 rc=$?
 [ "$rc" -eq 3 ]
 check "fail-never: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
@@ -238,11 +219,7 @@ check "fail-never: [REDACTED] marker present in log" $?
 echo "== 4. fail C (restarting, stale healthy)"
 d="$TMP/fail-restarting"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d" STUB_DOCKER_HEALTH=restarting
-else
-  scenario_install "$d" STUB_DOCKER_HEALTH=restarting --skip-client
-fi
+scenario_install "$d" STUB_DOCKER_HEALTH=restarting --skip-client
 rc=$?
 [ "$rc" -eq 3 ]
 check "fail-restarting: rc=3 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"
@@ -375,11 +352,7 @@ scenario_verify() { # <dir> [KEY=VAL...]
 # 7a. safe binds (127.0.0.1 + gateway) -> rc 0, allowlist PASS line
 d="$TMP/verify-ok"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d"
-else
-  scenario_install "$d" --skip-client
-fi
+scenario_install "$d" --skip-client
 scenario_verify "$d"
 rc=$?
 [ "$rc" -eq 0 ]
@@ -393,11 +366,7 @@ check "verify-ok: verify log file exists" $?
 # 7b. public bind (0.0.0.0) -> rc 3, FAIL line names the mapping
 d="$TMP/verify-public"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  scenario_install "$d"
-else
-  scenario_install "$d" --skip-client
-fi
+scenario_install "$d" --skip-client
 scenario_verify "$d" STUB_DOCKER_BINDS=public
 rc=$?
 [ "$rc" -eq 3 ]
@@ -412,11 +381,7 @@ check "verify-public: 0.0.0.0 binding reported" $?
 #     artifact are allowed for 9091/1080:1081 (spec 36)
 d="$TMP/fw-subnets"
 make_env "$d"
-if [ "$IS_ROOT" = "1" ]; then
-  SCENARIO_WITH_FIREWALL=1 scenario_install "$d"
-else
-  SCENARIO_WITH_FIREWALL=1 scenario_install "$d" --skip-client
-fi
+SCENARIO_WITH_FIREWALL=1 scenario_install "$d" --skip-client
 rc=$?
 [ "$rc" -eq 0 ]
 check "fw-subnets: install rc=0 (got $rc)" $? "$(tail -1 "$d/install.err" 2>/dev/null)"

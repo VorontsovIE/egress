@@ -35,7 +35,7 @@ Update both this table and `STATUS.md` after each stage. Statuses: Pending, In p
 2. Wheel installs without checkout and includes all client runtime imports; TUN engine selection and checksum verification work on amd64/arm64.
 3. Ordinary uninstall preserves managed and personal source inputs, normalized provider data, and persistent state. Client-only uninstall never removes shared backend configuration/secrets. Purge removes these only after explicit confirmation.
 4. Signed assets are verified before sudo. Managed delete/full upgrade/uninstall use root-owned fixed entry points and fixed argv; never execute user-writable Python code as root.
-5. Offline acceptance covers wheel packaging, both provider deletion scopes, ordinary uninstall, purge, installer sudo flow, and updater failure recovery. Final disposable Linux-host acceptance remains pending because no disposable host is provisioned in this workspace.
+5. Offline acceptance covers wheel packaging, both provider deletion scopes, ordinary uninstall, purge, installer sudo flow, and updater failure recovery. On 2026-10-31, the local offline suite passed (373 tests) and the isolated installation harness passed (76 checks). GitHub CI's first run found a root-runner test isolation defect; the harness fix is locally verified and its GitHub rerun is pending. A disposable Ubuntu 24.04 QEMU/KVM host is provisioned from a cloud image whose signed checksum verified; live host acceptance is in progress. Real provider-route acceptance still requires configured provider credentials.
 
 ## Agent coordination
 

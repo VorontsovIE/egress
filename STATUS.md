@@ -2,13 +2,13 @@
 
 This file summarizes the current implementation state. Historical acceptance evidence is retained in `POC_REPORT.md`, `reports/`, and the archived handoff documents. Update this summary after each completed work item.
 
-## Current state — 2026-10-30
+## Current state — 2026-10-31
 
-## Egress lifecycle work — 2026-10-30
+## Egress lifecycle work — 2026-10-31
 
 Implementation stages 1–6 are complete and committed separately; see the stage table in [HANDOFF-egress-lifecycle.md](HANDOFF-egress-lifecycle.md). The client is built as a wheel and installed into versioned environments, the release workflow publishes attested versioned assets, `egressctl upgrade` supports client/backend scopes with rollback, provider removal is scoped, and uninstall preserves subscriptions unless `--purge` is confirmed. The `curl | bash` bootstrap supports full install and unprivileged `--client-only` install; it explains privileged actions before prompting through the controlling terminal.
 
-Final offline acceptance passed: **373 tests** with temporary egressd state paths; `docker compose config --quiet`, Python compilation, shell syntax checks, and `git diff --check` passed. Critic review found no remaining code blockers. Live host installation, a GitHub Actions tag run, and real provider-route acceptance still require external infrastructure and remain unverified.
+Final offline acceptance passed locally: **373 tests** with temporary egressd state paths; installation harness **76 passed**; `docker compose config --quiet`, Python compilation, shell syntax checks, and `git diff --check` passed. The first GitHub Actions run exposed that the installation harness attempted to install into `/usr/local` and `/etc/egress` when the runner was root; scenarios now always skip that system-path operation and use focused client packaging tests. Local checks pass with the isolation fix; the rerun on GitHub is pending. A disposable Ubuntu VM is now being provisioned for live host acceptance. Real provider-route acceptance remains unverified.
 
 The backend, client CLI, provider management, route catalog, probes, ranking, client-local TUN path, installation, and security gate are implemented. Phases A0–A8 are complete for work that can be exercised in the development environment. Deployment-specific live acceptance still depends on a configured Linux host, Docker backend, valid client profiles, and real provider routes.
 
